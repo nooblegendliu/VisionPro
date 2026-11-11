@@ -24,6 +24,11 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# Keep the core and tests on the same MSVC runtime; callers may override it.
+if(NOT DEFINED CMAKE_MSVC_RUNTIME_LIBRARY)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+endif()
+
 # ------------------------------------------------------------------
 # 2. 工程目录
 # ------------------------------------------------------------------
@@ -69,7 +74,19 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 
 # ------------------------------------------------------------------
-# 4. 将现有项目文档加入工程文件视图
+# 4. 核心库与无 GUI 测试
+# ------------------------------------------------------------------
+add_subdirectory(source/core)
+add_subdirectory(source/workflow)
+
+include(CTest)
+if(BUILD_TESTING)
+    add_subdirectory(tests/core)
+    add_subdirectory(tests/workflow)
+endif()
+
+# ------------------------------------------------------------------
+# 5. 将现有项目文档加入工程文件视图
 # ------------------------------------------------------------------
 set(VISIONPRO_PROJECT_DOCUMENTS
     "${PROJECT_SOURCE_DIR}/README.md"
@@ -88,7 +105,7 @@ add_custom_target(
 )
 
 # ------------------------------------------------------------------
-# 5. 当前阶段状态显示
+# 6. 当前阶段状态显示
 # ------------------------------------------------------------------
 message(STATUS "========== VisionPro Configuration ==========")
 message(STATUS "Project version : ${PROJECT_VERSION}")
@@ -100,5 +117,7 @@ message(STATUS "Source directory: ${PROJECT_SOURCE_DIR}")
 message(STATUS "Build directory : ${PROJECT_BINARY_DIR}")
 message(STATUS "Qt              : Not configured")
 message(STATUS "OpenCV          : Not configured")
-message(STATUS "Business code   : Not configured")
+message(STATUS "Core library    : visionpro_core")
+message(STATUS "Workflow library: visionpro_workflow")
+message(STATUS "Tests           : ${BUILD_TESTING}")
 message(STATUS "=============================================")

@@ -1,0 +1,53 @@
+add_executable(visionpro_model_tests model_tests.cpp)
+target_link_libraries(visionpro_model_tests PRIVATE visionpro_workflow visionpro_build_options)
+foreach(test_group IN ITEMS model_graph model_bindings model_structure)
+    add_test(NAME workflow.${test_group} COMMAND visionpro_model_tests ${test_group})
+endforeach()
+
+add_executable(visionpro_validation_tests validation_tests.cpp)
+target_link_libraries(visionpro_validation_tests PRIVATE visionpro_workflow visionpro_build_options)
+foreach(test_group IN ITEMS validation_graph validation_bindings validation_groups validation_schema)
+    add_test(NAME workflow.${test_group} COMMAND visionpro_validation_tests ${test_group})
+endforeach()
+
+add_executable(visionpro_validation_domain_tests validation_domain_tests.cpp)
+target_link_libraries(visionpro_validation_domain_tests PRIVATE visionpro_workflow visionpro_build_options)
+add_test(NAME workflow.validation_domains COMMAND visionpro_validation_domain_tests validation_domains)
+
+add_executable(visionpro_result_store_tests result_store_tests.cpp)
+target_link_libraries(visionpro_result_store_tests PRIVATE visionpro_workflow visionpro_build_options)
+add_test(NAME workflow.result_store COMMAND visionpro_result_store_tests result_store)
+
+add_executable(visionpro_resolver_tests resolver_tests.cpp)
+target_link_libraries(visionpro_resolver_tests PRIVATE visionpro_workflow visionpro_build_options)
+foreach(test_group IN ITEMS resolver_values resolver_availability resolver_isolation resolver_domains)
+    add_test(NAME workflow.${test_group} COMMAND visionpro_resolver_tests ${test_group})
+endforeach()
+
+add_executable(visionpro_snapshot_tests snapshot_tests.cpp)
+target_link_libraries(visionpro_snapshot_tests PRIVATE visionpro_workflow visionpro_build_options)
+add_test(NAME workflow.snapshots COMMAND visionpro_snapshot_tests snapshots)
+
+add_executable(visionpro_copy_tests copy_tests.cpp)
+target_link_libraries(visionpro_copy_tests PRIVATE visionpro_workflow visionpro_build_options)
+foreach(test_group IN ITEMS copy_subgraph copy_solution copy_boundaries)
+    add_test(NAME workflow.${test_group} COMMAND visionpro_copy_tests ${test_group})
+endforeach()
+
+add_executable(visionpro_run_tests run_tests.cpp)
+target_link_libraries(visionpro_run_tests PRIVATE visionpro_workflow visionpro_build_options)
+foreach(test_group IN ITEMS run_inputs run_isolation result_models)
+    add_test(NAME workflow.${test_group} COMMAND visionpro_run_tests ${test_group})
+endforeach()
+
+add_executable(visionpro_run_handle_tests run_handle_tests.cpp)
+target_link_libraries(visionpro_run_handle_tests PRIVATE visionpro_workflow visionpro_build_options)
+add_test(NAME workflow.run_handles COMMAND visionpro_run_handle_tests)
+
+add_executable(visionpro_composition_tests composition_tests.cpp)
+target_link_libraries(visionpro_composition_tests PRIVATE visionpro_workflow visionpro_build_options)
+add_test(NAME workflow.composition COMMAND visionpro_composition_tests composition)
+
+add_executable(visionpro_workflow_tool_execution_tests tool_execution_tests.cpp)
+target_link_libraries(visionpro_workflow_tool_execution_tests PRIVATE visionpro_workflow visionpro_build_options)
+add_test(NAME workflow.tool_execution COMMAND visionpro_workflow_tool_execution_tests tool_execution)

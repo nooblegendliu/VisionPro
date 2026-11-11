@@ -3,21 +3,25 @@
 ## 1. 当前阶段
 
 C01–C10 已整理为当前设计基线，权威契约见 [data-model.md](data-model.md)。
-S1 状态：**文档审查通过，相关能力尚未实现**，2026-10-27 的逐项结果见 [§8.1](#81-s1-文档审查记录)。
-当前已有初始 CMake 骨架，包含编译选项接口目标和文档目标；尚无核心业务源码、可运行应用或自动化测试结果。
+S1 的 2026-10-27 文档审查结果见 [§8.1](#81-s1-文档审查记录)。
+S2.1–S2.4 已于 2026-10-30 完成：已有 `visionpro_core`、`visionpro_workflow`、核心领域类型、
+方案/关系模型、配置快照、类型化请求、结果记录及复制重映射。Debug/Release 结果见
+[§8.4](#84-s21-实现与验证记录)、[§8.5](#85-s22-实现与验证记录)、[§8.6](#86-s23-实现与验证记录)、
+[§8.7](#87-s24-实现与验证记录)。尚无执行器或可运行应用。
 S2 核心模型与绑定验证的实施规划已于 2026-10-28 确定，按 [§5](#5-第二阶段实施与验证) 的七个子阶段推进；
-当前各子阶段均未开始代码实现或执行验收，下一项工作为 S2.1。
+S2.5 静态校验已完成并通过 Debug/Release 验证，记录见 [§8.8](#88-s25-实现与验证记录)；
+S2.6 结果访问与绑定解析已完成并通过 Debug/Release 验证，记录见 [§8.9](#89-s26-实现与验证记录)；
+S2.7 运行契约与组合验证已完成，Debug/Release 各 48/48 项 CTest 通过；S2 整体验收通过，证据与 S3 交接见 [§8.10](#810-s27-与-s2-整体验收记录)。
 SDK 指南已用于补充契约与用例，未运行厂商 Demo、链接 SDK 或验证设备行为。
 
-设计阶段不要求建立完整应用。
-进入基础库实现阶段后，再补充经过验证的构建和测试命令。
+当前不要求建立完整应用；S2.4–S2.6 已验证命令保留在 §3.4–§3.6，S2.7 当前命令见 §3.7。
 
 开发顺序以 [requirements.md](requirements.md) 为准：
 
 | 阶段 | 主要交付与验证方式 |
 |---|---|
-| 1. 基础模型与契约设计 | 文档审查通过，相关能力尚未实现；审查记录见 §8.1–§8.3 |
-| 2. 核心模型与绑定验证 | 按 §5 建立核心库，以人工构造结果验证类型、引用和取值；实施规划已确定，尚未实现 |
+| 1. 基础模型与契约设计 | 文档审查通过；历史审查记录见 §8.1–§8.3 |
+| 2. 核心模型与绑定验证 | S2.1–S2.7 完成；14 项必需子范围和 Debug/Release 验证通过，整体记录见 §8.10 |
 | 3. 无 GUI 执行与配置往返验证 | 模拟工具验证控制图、运行请求、结果快照、回调/退出及保存加载 |
 | 4. 无 GUI 视觉闭环 | 使用少量真实 OpenCV 工具及固定图像验证结果 |
 | 5. 基础可视化界面 | 复用核心服务，验证界面方案与无 GUI 执行一致 |
@@ -42,9 +46,25 @@ S2 首个验证组合采用 Windows x64、MSVC 和 CMake，首批使用轻量测
 不能只依赖会被禁用的 assert；类型隔离可同时用编译期断言验证。
 后续如需引入测试框架，按实际测试需求选择并锁定版本和获取方式，不扩展自制通用测试框架。
 
-2026-10-27 的只读环境检查发现 CMake/CTest 4.4.0、Visual Studio 2026 及 MSVC 14.51.36231 的 x64 编译器。
-该检查只确认工具存在，未执行项目配置、编译或测试。根 CMake 当前声明最低版本 3.25，
-也不代表已在该最低版本完成验证。S2.1 须记录实际成功的工具链、构建配置和命令。
+2026-10-30 的 S2.1–S2.4 实测环境：
+
+| 项目 | 已验证配置 |
+|---|---|
+| 操作系统/架构 | Windows 10.0.26300，x64 |
+| CMake / CTest | 4.4.0 / 4.4.0 |
+| Visual Studio / MSBuild | Visual Studio Professional 2026 18.7.3 / MSBuild 18.7.8 |
+| 生成器 | `Visual Studio 18 2026`，`-A x64` |
+| MSVC | 编译器 19.51.36248.0，工具集目录 14.51.36231 |
+| Windows SDK | 10.0.26100.0 |
+| 语言/运行库 | C++20；Debug `/MDd`，Release `/MD`；库与测试一致 |
+| 测试依赖 | CTest + 仓库内轻量测试程序，无第三方测试框架 |
+
+安装 Visual Studio 的 C++ 工具和 Windows SDK，并将 CMake/CTest 加入 PATH；
+使用上述 VS 生成器时无须预先把 `cl.exe` 加入普通终端 PATH。
+根 CMake 仍声明最低版本 3.25，此次未在该最低版本验证，也不承诺它支持本次使用的 VS 2026 生成器。
+UUID 使用 Windows SDK 的 `bcrypt` 库和系统 `BCryptGenRandom`，API 依据见
+[Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/api/bcrypt/nf-bcrypt-bcryptgenrandom)。
+当前非 Windows 配置会明确失败；添加对应随机源后端后才能验证其他平台。
 
 Qt、OpenCV 的具体版本和获取方式在相应模块接入前确定；流程编辑器选型在界面实现前完成。
 首个核心构建不以 GUI 或 OpenCV 为前提；图像模型需要时可按 architecture §3 受控使用 OpenCV，
@@ -74,9 +94,202 @@ Qt、OpenCV 的具体版本和获取方式在相应模块接入前确定；流�
 - 不提交本机绝对路径、生成文件和构建缓存。
 - 环境稳定后再建立共享 CMake presets。
 
-现有 [CMakeLists.txt](../CMakeLists.txt) 定义了 `visionpro_build_options` 编译选项接口目标和
-`visionpro_project_files` 文档目标，尚未接入 Qt、OpenCV、核心业务库、应用或测试目标。
-业务 target、preset 和构建/测试命令在实际建立并验证后补充；S1 收尾未运行 CMake 配置或编译。
+现有 [CMakeLists.txt](../CMakeLists.txt) 保留 `visionpro_build_options` 和 `visionpro_project_files`，
+提供 `visionpro_core` 与公开依赖它的 `visionpro_workflow` 静态库，别名分别为 `visionpro::core`、`visionpro::workflow`。
+八个核心测试程序覆盖基础、身份、值系统、元数据、图像、几何、资源/状态和领域值集成；
+八个 workflow 测试程序覆盖模型、快照、复制、请求/结果、S2.5 静态校验，以及 S2.6 结果存储和运行绑定解析。
+`BUILD_TESTING` 默认开启；关闭时不创建测试程序。当前没有 GUI 或应用目标，无需 Qt/OpenCV。
+共享配置没有本机绝对路径；本地构建使用已被 Git 忽略的 `out/build/`。
+
+### 3.1 S2.1 构建与测试命令
+
+在仓库根目录的 PowerShell 中运行。Debug 与 Release 使用独立目录，
+VS 为多配置生成器，选择配置使用 `--config` / `-C`，不依赖 `CMAKE_BUILD_TYPE`。
+本节保留 S2.1 当时执行的命令和结果；当前源码请使用 §3.7，测试总数已扩充。
+
+```powershell
+cmake -S . -B out/build/s21-debug -G "Visual Studio 18 2026" -A x64 -DBUILD_TESTING=ON
+cmake --build out/build/s21-debug --config Debug
+ctest --test-dir out/build/s21-debug -C Debug --output-on-failure --no-tests=error
+
+cmake -S . -B out/build/s21-release -G "Visual Studio 18 2026" -A x64 -DBUILD_TESTING=ON
+cmake --build out/build/s21-release --config Release
+ctest --test-dir out/build/s21-release -C Release --output-on-failure --no-tests=error
+```
+
+每条命令应返回 0；任一失败先处理再继续。S2.1 当时 CTest 结果为每种配置 6/6 通过，
+其中 `core.failure_exit` 使用 `WILL_FAIL` 验证故意失败确实返回非零，不能删除该检查使测试变绿。
+下列直接调用预期打印一次 `FAIL`，并分别得到退出码 **1**：
+
+```powershell
+& ./out/build/s21-debug/tests/core/Debug/visionpro_core_tests.exe --force-failure
+$LASTEXITCODE
+& ./out/build/s21-release/tests/core/Release/visionpro_core_tests.exe --force-failure
+$LASTEXITCODE
+```
+
+测试输出保存在各构建目录的 `Testing/Temporary/LastTest.log`；
+需要完整检查输出时可在 CTest 命令上增加 `-V`。
+
+只构建核心库的入口也已验证：
+
+```powershell
+cmake -S . -B out/build/s21-core-only -G "Visual Studio 18 2026" -A x64 -DBUILD_TESTING=OFF
+cmake --build out/build/s21-core-only --config Release
+```
+
+### 3.2 S2.2 构建与测试命令
+
+本节为 S2.2 历史记录；当前源码请使用 §3.7。
+同样在仓库根目录 PowerShell 执行，继续使用 §2 的工具链，两个独立目录覆盖 Debug/Release：
+
+```powershell
+cmake -S . -B out/build/s22-debug -G "Visual Studio 18 2026" -A x64 -DBUILD_TESTING=ON
+cmake --build out/build/s22-debug --config Debug
+ctest --test-dir out/build/s22-debug -C Debug --output-on-failure --no-tests=error
+
+cmake -S . -B out/build/s22-release -G "Visual Studio 18 2026" -A x64 -DBUILD_TESTING=ON
+cmake --build out/build/s22-release --config Release
+ctest --test-dir out/build/s22-release -C Release --output-on-failure --no-tests=error
+```
+
+每条命令应返回 0，每种配置为 **14/14 通过**，包含 S2.1 的 6 项及 S2.2 新增 8 项。
+每项失败均通过进程退出码传给 CTest；测试不依赖 Release 下禁用的 `assert`。
+以下故意失败入口也在本次构建上重验，两种配置的 `$LASTEXITCODE` 均应为 **1**：
+
+```powershell
+& ./out/build/s22-debug/tests/core/Debug/visionpro_core_tests.exe --force-failure
+$LASTEXITCODE
+& ./out/build/s22-release/tests/core/Release/visionpro_core_tests.exe --force-failure
+$LASTEXITCODE
+```
+
+测试日志分别保存在 `out/build/s22-debug/Testing/Temporary/LastTest.log` 和
+`out/build/s22-release/Testing/Temporary/LastTest.log`，构建目录与日志均不提交。
+
+### 3.3 S2.3 构建与测试命令
+
+本节为 S2.3 历史记录；当前源码请使用 §3.7。
+在仓库根目录的 PowerShell 中执行，沿用 §2 工具链和独立构建目录：
+
+```powershell
+cmake -S . -B out/build/s23-debug -G "Visual Studio 18 2026" -A x64 -DBUILD_TESTING=ON
+cmake --build out/build/s23-debug --config Debug
+ctest --test-dir out/build/s23-debug -C Debug --output-on-failure --no-tests=error
+
+cmake -S . -B out/build/s23-release -G "Visual Studio 18 2026" -A x64 -DBUILD_TESTING=ON
+cmake --build out/build/s23-release --config Release
+ctest --test-dir out/build/s23-release -C Release --output-on-failure --no-tests=error
+```
+
+每条命令应返回 0，每种配置为 **24/24 通过**，包括原有 14 项与 S2.3 新增 10 项。
+测试使用固定内存图像、结构化配置与运行记录，不访问设备或外部资源，也不启动 GUI。
+预期失败入口在两种配置中均须实际返回 **1**：
+
+```powershell
+& ./out/build/s23-debug/tests/core/Debug/visionpro_core_tests.exe --force-failure
+$LASTEXITCODE
+& ./out/build/s23-release/tests/core/Release/visionpro_core_tests.exe --force-failure
+$LASTEXITCODE
+```
+
+CTest 日志分别位于 `out/build/s23-debug/Testing/Temporary/LastTest.log` 与
+`out/build/s23-release/Testing/Temporary/LastTest.log`；本次构建输出另保留在两个目录的 `build.log`。
+这些本地产物均被 Git 忽略。验收内容和具体检查数见 §8.6。
+
+### 3.4 S2.4 构建与测试命令
+
+本节为 S2.4 历史记录；当前源码请使用 §3.7。
+在仓库根目录 PowerShell 中运行；沿用 §2 工具链，两个源码外目录分别验证 Debug/Release：
+
+```powershell
+cmake -S . -B out/build/s24-debug -G "Visual Studio 18 2026" -A x64 -DBUILD_TESTING=ON
+cmake --build out/build/s24-debug --config Debug
+ctest --test-dir out/build/s24-debug -C Debug --output-on-failure --no-tests=error
+
+cmake -S . -B out/build/s24-release -G "Visual Studio 18 2026" -A x64 -DBUILD_TESTING=ON
+cmake --build out/build/s24-release --config Release
+ctest --test-dir out/build/s24-release -C Release --output-on-failure --no-tests=error
+```
+
+上述命令均应返回 0，每种配置为 **34/34 通过**：已有 24 项核心测试与新增 10 项 workflow 测试。
+预期失败入口单独调用也须返回 **1**，验证 Release 不因禁用 assert 而跳过断言：
+
+```powershell
+& ./out/build/s24-debug/tests/core/Debug/visionpro_core_tests.exe --force-failure
+$LASTEXITCODE
+& ./out/build/s24-release/tests/core/Release/visionpro_core_tests.exe --force-failure
+$LASTEXITCODE
+```
+
+CTest 完整输出位于两个构建目录的 `Testing/Temporary/LastTest.log`，本次构建输出保存在对应 `build.log`。
+构建目录与日志均被 Git 忽略；不需要 Qt、OpenCV、厂商 SDK 或外部设备。
+实际结果、固定夹具与覆盖边界见 §8.7。
+
+### 3.5 S2.5 构建与测试命令
+
+在仓库根目录 PowerShell 中运行，沿用 §2 工具链与无 GUI 目标：
+
+```powershell
+cmake -S . -B out/build/s25-debug -G "Visual Studio 18 2026" -A x64 -DBUILD_TESTING=ON
+cmake --build out/build/s25-debug --config Debug --parallel 1
+ctest --test-dir out/build/s25-debug -C Debug --output-on-failure --no-tests=error
+
+cmake -S . -B out/build/s25-release -G "Visual Studio 18 2026" -A x64 -DBUILD_TESTING=ON
+cmake --build out/build/s25-release --config Release --parallel 1
+ctest --test-dir out/build/s25-release -C Release --output-on-failure --no-tests=error
+```
+
+每条命令应返回 0；实际构建和测试结果集中记录在 §8.8，不能仅凭命令列表认定验证通过。
+S2.5 新增 `workflow.validation_graph`、`workflow.validation_bindings`、`workflow.validation_groups`、
+`workflow.validation_schema` 和 `workflow.validation_domains`，并保留全部前阶段回归及 `core.failure_exit`。
+这些测试使用内存模型，不启动 GUI、不访问设备、不执行算法或读取外部资源文件。
+
+本机首轮 `--parallel 4` 构建停在 MSBuild 工程检查步骤，已终止；改为 `--parallel 1` 后开始正常编译。
+这只是本次构建执行方式，不修改共享编译器、依赖或运行库配置。
+CTest 详细输出分别位于两个构建目录的 `Testing/Temporary/LastTest.log`，构建输出保留在对应 `build.log`；
+这些日志和构建目录均被 Git 忽略。
+
+### 3.6 S2.6 构建与测试命令
+
+在仓库根目录 PowerShell 中运行，沿用 §2 工具链、无 GUI 目标和已验证的串行 MSBuild 方式：
+
+```powershell
+cmake -S . -B out/build/s26-debug -G "Visual Studio 18 2026" -A x64 -DBUILD_TESTING=ON
+cmake --build out/build/s26-debug --config Debug --parallel 1
+ctest --test-dir out/build/s26-debug -C Debug --output-on-failure --no-tests=error
+
+cmake -S . -B out/build/s26-release -G "Visual Studio 18 2026" -A x64 -DBUILD_TESTING=ON
+cmake --build out/build/s26-release --config Release --parallel 1
+ctest --test-dir out/build/s26-release -C Release --output-on-failure --no-tests=error
+```
+
+以上配置、构建与 CTest 命令均已返回 0，Debug/Release 各 44/44 项通过，实际结果见 §8.9。
+S2.6 注册 `workflow.result_store` 及 `workflow.resolver_values`、`workflow.resolver_availability`、
+`workflow.resolver_isolation`、`workflow.resolver_domains`，保留此前 39 项 CTest，合计 44 项。
+测试使用人工终态记录、显式作用域/公开输入、内存资源目录和只读全局快照；
+不启动工具、读取外部文件、执行队列消费或连接设备。
+CTest 详细输出位于对应构建目录的 `Testing/Temporary/LastTest.log`；构建目录及日志均被 Git 忽略。
+
+### 3.7 S2.7 构建与测试命令
+
+在仓库根目录 PowerShell 中运行，沿用 §2 工具链和串行 MSBuild。公共结构增加字段时使用完整重建，避免混用旧对象文件：
+
+```powershell
+cmake -S . -B out/build/s27-debug -G "Visual Studio 18 2026" -A x64 -DBUILD_TESTING=ON
+cmake --build out/build/s27-debug --config Debug --parallel 1 --clean-first
+ctest --test-dir out/build/s27-debug -C Debug --output-on-failure --no-tests=error
+
+cmake -S . -B out/build/s27-release -G "Visual Studio 18 2026" -A x64 -DBUILD_TESTING=ON
+cmake --build out/build/s27-release --config Release --parallel 1 --clean-first
+ctest --test-dir out/build/s27-release -C Release --output-on-failure --no-tests=error
+```
+
+S2.7 保留全部既有测试，并补运行接口替身、所有权/错误边界和 S2 组合验收。
+新增 `core.tool_execution`、`workflow.run_handles`、`workflow.composition` 和 `workflow.tool_execution`，
+共 48 项 CTest；两种配置的实际结果记录在 §8.10。
+CTest 证据保存在各构建目录的 `Testing/Temporary/LastTest.log`；构建日志一并保留，不能以编译成功代替行为验证。
+模拟调用不得记为真实算法、调度器或设备验证。
 
 ## 4. 第一阶段验证
 
@@ -120,7 +333,8 @@ S2 将设计基线落实为能够无 GUI 构建和测试的 core/workflow 库：
 检查模型和绑定，再从人工结果中解析当前调用所需的数据。
 阶段范围与通过标准以 [requirements.md §4](requirements.md#4-第二阶段核心模型与绑定验证) 为准；
 与调度、算法及数据服务的分工见 [architecture.md §2.1](architecture.md#21-s2-在整体架构中的位置)。
-以下是已确定的实施计划，尚无 S2 实现或测试通过记录。
+以下计划保持原范围；S2.1–S2.5 已通过，证据见 §8.4–§8.8。
+S2.6 已完成并通过 Debug/Release 验证，结果见 §8.9；S2.7 及 S2 整体验收已通过，记录见 §8.10。
 
 ### 5.1 子阶段与依赖顺序
 
@@ -186,7 +400,7 @@ RunHandle、实例工厂和操作句柄使用具体可编译接口及必要测�
 ### 5.4 验收覆盖与退出条件
 
 下表将 [requirements.md §9](requirements.md#9-验收场景与阶段矩阵c10) 中带 S2 范围的 14 个场景
-映射到实施子阶段，只列本阶段的验证内容。表中是测试计划，不表示已经通过；
+映射到实施子阶段，只列本阶段的验证内容。表中是完整测试计划，已通过的子范围以 §8 的验收记录为准；
 完整场景及后续执行范围仍以 requirements 的矩阵为准。
 
 | 场景 | 主要测试落点 | S2 必须验证的内容 |
@@ -385,7 +599,7 @@ S2 结束前须同时满足：
 ### 8.2 S1 场景定义逐项审查
 
 本表记录 [requirements.md](requirements.md) §9 中全部 A01–A33 的定义审查结果，覆盖 C01–C10。
-检查的是模型可表达性、正常/边界条件、可观察结果和阶段归属；**全部场景的执行验证仍未进行**。
+检查的是模型可表达性、正常/边界条件、可观察结果和阶段归属；**截至此次 S1 审查，全部场景的执行验证均未进行**。
 执行验证阶段及完整通过条件以 requirements §9 为准，本表不改变或替代该矩阵。
 
 | 场景 / 契约 | 文档审查结果及依据 | 结论 |
@@ -436,3 +650,382 @@ S1 无遗留阻断项；后续细化继续以 [data-model.md](data-model.md) §1
 S2 开始时确定适用的工具链、依赖与测试框架，将具体 C++ 类型/接口及绑定校验转为可构建、可测试的核心库。
 调度和配置往返、真实算法、GUI、完整循环/共享服务及设备接入仍分别按 S3–S6 推进；
 已有 CMake 骨架及本次文档审查均不构成这些阶段的执行验收证据。
+
+### 8.4 S2.1 实现与验证记录
+
+本节为 S2.1 结束时的历史记录；后续 S2.2 的实现与验证见 §8.5。
+
+- 日期：2026-10-30。
+- 结论：**S2.1 完成，Debug/Release 构建与首批行为测试通过**；S2.2–S2.7 未开始，S2 整体验收未完成。
+- 代码基线：`12f5d1f` 加本次 S2.1 工作区改动，本次未创建 Git 提交；实现与测试随包含本记录的提交一起追溯。
+- 实现入口：[核心构建](../source/core/CMakeLists.txt)、[身份类型](../include/visionpro/core/id.hpp)、
+  [身份创建](../include/visionpro/core/id_factory.hpp)、[诊断](../include/visionpro/core/diagnostic.hpp)、
+  [错误返回](../include/visionpro/core/result.hpp)。
+- 测试入口：[core_tests.cpp](../tests/core/core_tests.cpp)、[CTest 注册](../tests/core/CMakeLists.txt)。
+  固定输入保存在该测试文件，包括 `00112233-4455-4677-8899-aabbccddeeff`、大小写/边界变体及非法文本；
+  每种配置另从本机 Windows 系统随机源生成三类身份各 256 个样本。
+- 工具/Schema、方案/快照、Session/Run/Scope/Invocation/Attempt、Frame/Correlation、控制图、绑定、ROI、设备：本子阶段不适用。
+- 环境和复现命令见 §2、§3.1；构建不需要 Qt、OpenCV 或厂商运行库。
+
+| 范围 / 测试入口 | 期望与验证内容 | Debug 实际结果 | Release 实际结果 |
+|---|---|---|---|
+| 工程底座 | 配置、编译实际静态库及测试程序，核心与测试使用一致运行库 | 成功，退出码 0 | 成功，退出码 0 |
+| A03 / C02：编译期身份隔离 | 三类身份不可交叉构造、赋值、比较；不可默认/裸字节/字符串构造 | 静态断言通过 | 静态断言通过 |
+| A03 / C02：`core.parse_valid` | 大小写归一、固定文本字节顺序、所有合法 variant、有效边界及非 NUL 结尾视图 | 111 检查，0 失败 | 111 检查，0 失败 |
+| A03 / C02：`core.parse_invalid` | 长度、全部字符位置、分隔符、NUL/非 ASCII、nil、错误 version/variant，以及诊断优先级 | 1320 检查，0 失败 | 1320 检查，0 失败 |
+| A03 / C02：`core.generate` | 768 个样本均为规范 UUIDv4，可往返且本次样本不重复 | 3841 检查，0 失败 | 3841 检查，0 失败 |
+| A03 / C02：`core.value_semantics` | 身份比较、排序、复制、移动、独立持有输入值 | 42 检查，0 失败 | 42 检查，0 失败 |
+| 最小诊断：`core.diagnostics` | 分类、名称、严重程度、结构化位置及文本按值持有；成功值 0 与错误分开；未知码明确回退 | 30 检查，0 失败 | 30 检查，0 失败 |
+| 测试可靠性：`core.failure_exit` | 同一检查路径故意失败，进程必须返回非零；CTest 按 `WILL_FAIL` 判为通过 | 直接运行退出码 1；预期失败测试通过 | 直接运行退出码 1；预期失败测试通过 |
+
+两种配置各 6/6 项 CTest 通过，其中 5 个正常行为组各执行合计 5344 次检查，
+另有 1 次故意失败检查。Release 生成配置含 `NDEBUG`，运行检查没有使用 `assert`；
+因此不会随 Release 优化配置被禁用。日志位于
+`out/build/s21-debug/Testing/Temporary/LastTest.log` 和
+`out/build/s21-release/Testing/Temporary/LastTest.log`，属于本机构建产物，不提交。
+另以 `BUILD_TESTING=OFF` 完成独立 Release 核心库构建，确认没有生成测试目标；
+该附加验证的临时构建目录在收尾时清理，正常 Debug/Release 目录保留以便查看结果和复用。
+
+验证边界：样本无重复不证明全局无碰撞，方案级重复身份检查仍在 S2.5；
+系统随机源失败已实现为 `IdGenerationFailed`，本次未通过故障注入执行该系统失败路径。
+诊断对象的对应错误分类已测试，不等同于系统故障路径已覆盖。
+本次未验证非 Windows 后端、CMake 最低声明版本、节点改名/复制、Schema/运行身份或任何节点执行行为。
+这些后续事项不属于 S2.1 的退出条件；A03 仅强类型身份子范围通过，其余范围按原计划推进。
+
+### 8.5 S2.2 实现与验证记录
+
+本节为 S2.2 结束时的历史记录；后续 S2.3 的实现与验证见 §8.6。
+
+- 日期：2026-10-30。
+- 结论：**S2.2 完成，Debug/Release 各 14/14 项 CTest 通过**，包含 S2.1 回归及预期失败检查。
+  S2.3–S2.7 尚未开始，整个 S2 尚未通过验收。
+- 代码基线：`12f5d1f` 加本会话 S2.1 和 S2.2 工作区改动，未创建 Git 提交，保留前一阶段成果。
+- 公共接口：[UUID 身份](../include/visionpro/core/id.hpp)、[Schema 身份](../include/visionpro/core/schema_id.hpp)、
+  [运行身份](../include/visionpro/core/runtime_id.hpp)、[计数工厂](../include/visionpro/core/runtime_id_factory.hpp)、
+  [值与类型](../include/visionpro/core/value.hpp)、[工具元数据](../include/visionpro/core/tool_descriptor.hpp)、
+  [结构化诊断](../include/visionpro/core/diagnostic.hpp)。
+- 测试与固定夹具：[identity_tests.cpp](../tests/core/identity_tests.cpp)、
+  [value_tests.cpp](../tests/core/value_tests.cpp)、[metadata_tests.cpp](../tests/core/metadata_tests.cpp)。
+  包括固定 UUID/token、0 与 `uint64_t` 最大值、UTF-8 正反例、整数/浮点边界、嵌套 Schema、
+  工具配置版本 7 / Schema 版本 2 的元数据夹具，无外部文件或设备。
+- 环境沿用 §2，实际命令见 §3.2；无新增第三方依赖，不要求 Qt、OpenCV 或厂商运行库。
+- 会话/运行/作用域等仅作固定内存身份夹具，不代表实际运行；方案/快照、工具执行、图像、ROI、
+  队列、设备及厂商后端版本在本子阶段不适用。
+
+| 场景子范围 / 测试入口 | 期望与验证内容 | Debug 实际结果 | Release 实际结果 |
+|---|---|---|---|
+| A03/A04 身份：`core.identities` | UUID/Schema/运行类别不混用；27 类身份编译期隔离，token/关联键边界，计数下界/耗尽，组合键各维度不同 | 1111 检查，0 失败 | 1111 检查，0 失败 |
+| A05 值：`core.values` | 配置值/运行值隔离；标量边界、空 List、None、缺失、错误分别表达；不可变持有和复制/移动有效 | 116 检查，0 失败 | 116 检查，0 失败 |
+| A05/A32 类型：`core.schema` | Record/Enum 身份、版本、字段/成员及嵌套结构；未知/重复/缺失/错类型拒绝，诊断保留字段或索引 | 161 检查，0 失败 | 161 检查，0 失败 |
+| A32 编码：`core.utf8` | UTF-8 标量边界、中文/emoji/NUL 与有界视图；过长编码、代理项、超范围、孤立延续、截断拒绝 | 270 检查，0 失败 | 270 检查，0 失败 |
+| A06 元数据：`core.metadata` | 输入/参数/数据输出/控制出口分开；重复声明、未知枚举、订阅/结构参数与必填/默认规则可校验 | 24 检查，0 失败 | 24 检查，0 失败 |
+| A06 约束：`core.constraints` | 数值范围、枚举集合、容量及非法约束声明；None/缺值/默认/来源错误的行为不同 | 40 检查，0 失败 | 40 检查，0 失败 |
+| A06 转换：`core.conversions` | 精确匹配、Optional 包装、显式数值转换许可；单来源/集合/多来源区别 | 19 检查，0 失败 | 19 检查，0 失败 |
+| A32 兼容：`core.compatibility` | Schema 版本区间、所需能力、完整性、同身份版本的嵌套定义一致性；失败不删除字段 | 20 检查，0 失败 | 20 检查，0 失败 |
+| S2.1 回归与测试可靠性 | 原 5 个行为组与 `core.failure_exit`；正常检查不依赖 assert，故意失败进程退出码 1 | 6/6 通过，正常 5344 检查；故意失败退出 1 | 6/6 通过，正常 5344 检查；故意失败退出 1 |
+
+每种配置的新增 8 组共 1761 次检查；加上 S2.1 回归，每种配置共 7105 次正常检查，
+另有 1 次预期失败检查。结果可从 §3.2 的 `LastTest.log` 复核，Debug/Release 构建目录保留供后续使用。
+初次编译的类型隔离断言发现 `FrameId` 聚合允许仅给来源并默认序号，已改为必须显式提供两个参数；
+原断言未放宽，最终两种配置均通过。嵌套类型相等比较使用明确的递归调用，最终构建不再报告相应 MSVC 比较警告。
+
+验证边界与后续衔接：
+
+- A04 此次只验证身份表达和键区分，当前无结果存储或执行上下文，不能据此声称跨轮/迭代取值已验证。
+- 当前值系统支持标量、二进制和复合结构；图像、几何、资源引用与状态模型在 S2.3 加入。
+- `validate_binding` 只校验一个目标的来源种类和类型/转换许可；图结构、作用域、引用和依赖环检查在 S2.5，
+  实际转换、聚合和运行取值在 S2.6。`resolve_*_value` 的空输入只表示未配置，不能代表 Pending/本轮无输出。
+- 工具元数据仍是可编辑定义；快照和运行请求分离在 S2.4，完整执行接口在 S2.7 收敛。
+- `FrameId` 的唯一域、关联键有效期、序列的所属域和并发分配仍由后续运行/适配层负责；无厂商 API 或真实设备验证。
+- 当前只支持 Windows UUID 后端；系统随机源失败路径仍未故障注入。此次不改变其他阶段的验收范围。
+
+### 8.6 S2.3 实现与验证记录
+
+本节为 S2.3 结束时的历史记录；后续 S2.4 的实现与验证见 §8.7。
+
+- 日期：2026-10-30。
+- 结论：**S2.3 完成，Debug/Release 各 24/24 项 CTest 通过**，包含 S2.1–S2.2 回归与预期失败检查。
+  下一项为 S2.4；S2.4–S2.7 尚未开始，整个 S2 尚未通过验收。
+- 代码基线：`12f5d1f` 加本会话 S2.1–S2.3 工作区改动；保留已有改动，未创建 Git 提交。
+- 公共接口：[image.hpp](../include/visionpro/core/image.hpp)、[coordinate.hpp](../include/visionpro/core/coordinate.hpp)、
+  [geometry.hpp](../include/visionpro/core/geometry.hpp)、[resource_reference.hpp](../include/visionpro/core/resource_reference.hpp)、
+  [resource.hpp](../include/visionpro/core/resource.hpp)、[state.hpp](../include/visionpro/core/state.hpp)，
+  同步扩充值、工具元数据、运行期 `MessageId` 和诊断接口。
+- 新增测试：[image_tests.cpp](../tests/core/image_tests.cpp)、[geometry_tests.cpp](../tests/core/geometry_tests.cpp)、
+  [resource_state_tests.cpp](../tests/core/resource_state_tests.cpp)、[domain_value_tests.cpp](../tests/core/domain_value_tests.cpp)。
+  夹具包括带填充行的小图、嵌套裁剪、固定坐标/矩阵/区域、掩膜、资源目录及会话/运行/调用状态记录，
+  不读取实际图像文件、不连接设备、不使用厂商运行库。
+- 环境沿用 §2，实际命令见 §3.3；核心和测试仍无 Qt/OpenCV 或新第三方依赖。
+  最终 Debug/Release 构建均返回 0，构建日志无编译警告。
+
+| 场景子范围 / 测试入口 | 验证内容 | Debug 实际结果 | Release 实际结果 |
+|---|---|---|---|
+| A09：`core.image_layout` | 深度/通道、行步长、末行长度、短缓冲、零尺寸、乘加溢出及未知格式 | 136 检查，0 失败 | 136 检查，0 失败 |
+| A09：`core.image_ownership` | 外部复制、只读共享、裁剪保活、根坐标累计、独立导出与克隆 | 53 检查，0 失败 | 53 检查，0 失败 |
+| A10：`core.geometry` | 坐标轴/手性/单位、点线圆位姿、相似/仿射/投影、显式求逆、源有效域、数值边界和标定后端拒绝 | 70 检查，0 失败 | 70 检查，0 失败 |
+| A10：`core.regions` | 多形状、自交/退化、继承/修正/排除、边界/空域、坐标目录和工具能力 | 81 检查，0 失败 | 81 检查，0 失败 |
+| A26：`core.masks` | 配置引用/运行像素分离、单通道/阈值、尺寸/坐标匹配、显式映射/采样、所有权 | 40 检查，0 失败 | 40 检查，0 失败 |
+| 资源模型：`core.resources` | 托管/外部/序列/设备/输出定义、路径基准/逃逸、目录身份/类别/版本引用 | 51 检查，0 失败 | 51 检查，0 失败 |
+| A08：`core.shared_definitions` | 全局定义/当前值、完整队列消息、容量/收发策略、身份和精确类型 | 20 检查，0 失败 | 20 检查，0 失败 |
+| A01：`core.state_models` | 三类状态域、节点/会话/运行隔离、代次溢出、初始化值/错误一致性和策略声明 | 23 检查，0 失败 | 23 检查，0 失败 |
+| A05/A09/A26：`core.domain_values` | 两值域编译期隔离、嵌套 Image/Mask 保活、类型诊断、ROI/容器/Schema 保留可写别名回归 | 167 检查，0 失败 | 167 检查，0 失败 |
+| A06/A32：`core.domain_metadata` | 工具状态/资源/图像/区域能力声明、重复/非法声明、状态嵌套 Schema 冲突 | 53 检查，0 失败 | 53 检查，0 失败 |
+| S2.1–S2.2 回归与测试可靠性 | 原有行为与 `core.failure_exit`；故意失败入口直接调用也返回 1 | 14/14 通过，正常 7105 检查；故意失败退出 1 | 14/14 通过，正常 7105 检查；故意失败退出 1 |
+
+每种配置新增 694 次检查，总计 **7799 次正常检查，0 失败**，另有 1 次预期失败检查。
+编译期断言同时验证配置域不能持运行图像/掩膜及跨值域容器；检查数不包括这些编译期断言。
+完整行为输出保存在 §3.3 的 `LastTest.log`，构建目录与日志保留供复核。
+
+本次检查与修复：
+
+- 拒绝数值溢出后的坐标轴，Similarity 使用相对尺度和归一化正交检查，防止微小尺度下的剪切/不等尺度误通过。
+- Windows 绝对路径不接受 `/foo`、`\foo`、`C:foo` 或伪装为 UNC 的设备命名空间。
+- 发现并修复 move 容器发布后仍可被原元素指针修改的问题：Schema、Binary、List、Record 和 ROI 工厂
+  从独立容器发布不可变数据，已封装子值及只读像素继续共享；两值域和运行图像嵌套均有回归。
+- 清理几何 visitor 的不可达返回结构；保留所有测试断言，未通过抑制警告或放宽校验取得通过。
+
+验证边界与后续衔接：
+
+- A01/A08 只覆盖定义和运行记录；未执行 Init、状态迁移/重置、共享写入、FIFO 消费或并发汇合。
+- A09 验证内存所有权，不代表已验证设备租约、取消中的后台操作或 OpenCV 转换。
+- A10/A26 覆盖静态形状/坐标/能力与矩阵映射；未计算真实交集、排除后空域、像素成员、栅格化或重采样，
+  受控标定也无执行后端。对应算法/设备验收继续归 S4/S6。
+- 资源路径和目录检查不访问文件或校验实际摘要；命名根解析、文件加载、内容锁定、设备与输出服务尚未实现。
+- S2.4 接入方案/节点/关系/快照/请求及复制重映射，S2.5 校验图结构与绑定，S2.6 解析运行值，S2.7 收敛接口。
+  当前结果不能标记整项 A01/A08/A09/A10/A26 或整个 S2 验收完成。
+
+### 8.7 S2.4 实现与验证记录
+
+本节为 S2.4 结束时的历史记录；S2.5 的后续实现与验证见 §8.8。
+
+- 日期：2026-10-30。
+- 结论：**S2.4 完成，Debug/Release 各 34/34 项 CTest 通过**；新增 workflow 模型、快照、复制和请求/结果测试。
+  下一项为 S2.5；S2.5–S2.7 尚未开始，整个 S2 尚未通过验收。
+- 代码基线：`12f5d1f` 加本会话 S2.1–S2.4 工作区改动；未覆盖前阶段成果，未创建 Git 提交。
+- 新增 `visionpro_workflow` 静态库，公开依赖 `visionpro_core`，继续使用标准 C++20，不增加 GUI 或第三方依赖。
+- 公共接口：[binding.hpp](../include/visionpro/workflow/binding.hpp)、[model.hpp](../include/visionpro/workflow/model.hpp)、
+  [snapshot.hpp](../include/visionpro/workflow/snapshot.hpp)、[copy.hpp](../include/visionpro/workflow/copy.hpp)、
+  [run.hpp](../include/visionpro/workflow/run.hpp)。core 复用校验入口补充公开输入/输出描述校验，以及 1701–1708 错误码和控制线诊断位置。
+- 测试与夹具：[model_tests.cpp](../tests/workflow/model_tests.cpp)、[snapshot_tests.cpp](../tests/workflow/snapshot_tests.cpp)、
+  [copy_tests.cpp](../tests/workflow/copy_tests.cpp)、[run_tests.cpp](../tests/workflow/run_tests.cpp)。
+  夹具包括五路测量/条件/汇合、嵌套 Group、两个流程的方案、嵌套资源/ROI 引用、固定内存图像、独立请求和人工终态结果。
+  快照夹具使用方案格式版本 2/修订 12、工具配置版本 7/Schema 版本 2；固定 UUID/token、Session/Snapshot/Run/Scope/Invocation/Attempt
+  及关联身份的具体取值见对应测试工厂。身份只是内存夹具，未发生真实节点调用。
+- 环境沿用 §2，实际命令见 §3.4；Debug/Release 配置与构建均返回 0，构建日志无编译警告。
+  未加载实际资源文件、连接设备、执行图像算法或调用厂商 SDK。
+
+| 场景子范围 / 测试入口 | 验证内容 | Debug 实际结果 | Release 实际结果 |
+|---|---|---|---|
+| A01/A13/A24：`workflow.model_graph` | 同类型配置独立、五路分叉/多前驱汇合、嵌套 Group、直接/递归枚举、公开数据与控制映射、改名/布局不改引用 | 21 检查，0 失败 | 21 检查，0 失败 |
+| A06：`workflow.model_bindings` | 输入/参数目标、五类来源、系统字段/固定选择器、源基数、转换及缺失策略的形状检查 | 40 检查，0 失败 | 40 检查，0 失败 |
+| A03/A24：`workflow.model_structure` | 方案内身份唯一性、包含缺父/多父/环、入口层级、公开导出目标、布局和非法局部定义 | 89 检查，0 失败 | 89 检查，0 失败 |
+| A01/A09：`workflow.snapshots` | 配置与工具元数据深复制、保留可写别名隔离、源释放保活、只读 API、快照身份和缺工具草稿边界 | 25 检查，0 失败 | 25 检查，0 失败 |
+| A03/A24：`workflow.copy_subgraph` | Group 后代闭包、内部引用/包含/数据及控制导出重映射、外部来源报告、跨选区控制线略过 | 24 检查，0 失败 | 24 检查，0 失败 |
+| A03：`workflow.copy_solution` | 新方案及各持久身份、两个 Workflow、资源/变量/队列/布局、复合值内 ROI/Mask/标定引用和公开默认值重映射 | 25 检查，0 失败 | 25 检查，0 失败 |
+| A03：`workflow.copy_boundaries` | 明确 Preserve/Reject、外部父及外部或错误归属的引用、非法选择/结构、失败不修改输入 | 15 检查，0 失败 | 15 检查，0 失败 |
+| A23/A24：`workflow.run_inputs` | Workflow/Node/Group 目标、禁用祖先、精确工具版本、必需 Optional、未知/重复/错类型、范围与默认值物化 | 56 检查，0 失败 | 56 检查，0 失败 |
+| A01/A09/A23：`workflow.run_isolation` | 多请求输入隔离、无旧输入回退、保留别名隔离、快照固定和图像缓冲保活 | 15 检查，0 失败 | 15 检查，0 失败 |
+| A04：`workflow.result_models` | 运行/快照/调用/尝试身份、输出地址、NG 成功、三类输出可用性、失败输出拒绝、终态记录隔离 | 67 检查，0 失败 | 67 检查，0 失败 |
+| S2.1–S2.3 回归与测试可靠性 | 原 24 项；故意失败入口也直接调用，验证退出码传递 | 24/24 通过，正常 7799 检查；故意失败退出 1 | 24/24 通过，正常 7799 检查；故意失败退出 1 |
+
+每种配置新增 **377 次检查**，总计 **8176 次正常检查，0 失败**，另有 1 次预期失败检查；
+编译期断言验证只读接口及配置/运行类型边界，不计入上述运行检查数。
+Debug/Release 日志及构建目录保留供复核；完整输出路径见 §3.4。
+实现审查补齐了 Group/Workflow 的控制出口导出及复制/快照回归，测试标准未放宽；两种配置均一次构建和全量测试通过。
+
+验证边界与后续衔接：
+
+- 本阶段的五路图、汇合、条件出口和 Group 是模型夹具，没有控制到达/关闭传播或实际调度。
+  绑定来源/选择器类型、公开边界、控制/数据联合依赖环及执行范围检查归 S2.5。
+- ConfigSnapshot 只固定配置及工具元数据，不锁定外部文件内容，也不授予资源/状态访问权；
+  缺工具或未完成映射的局部合法草稿可捕获，不能因此认定可执行。
+- RunRequest 是独立的不可变准备结果，必需输入每次重新提供；当前无 RunHandle、Busy、原子受理或执行身份分配。
+  独立目标状态策略只是声明，互斥与隔离实例的运行验证归 S3。
+- NodeResult 是人工终态记录；未实现结果存储、工具完整输出核对、当前上下文解析、一次提交或取消竞争。
+  S2.6 接入当前运行取值，S2.7 收敛运行接口，S3 验证提交和生命周期。
+- 复制只产生内存配置，完整方案复制不会自动复制资源文件；Preserve 报告的外部依赖仍须后续显式解析和校验。
+  不据此声称方案 JSON 往返、设备复制或完整 Group 执行已验收。
+
+### 8.8 S2.5 实现与验证记录
+
+- 日期：2026-11-09。
+- 结论：**S2.5 完成，Debug/Release 各 39/39 项 CTest 通过**；新增 5 项静态校验测试，保留全部 34 项前阶段回归。
+  S2.6–S2.7 尚未实现，整个 S2 尚未通过验收。
+- 公共入口：[validation.hpp](../include/visionpro/workflow/validation.hpp) 的 `validate_solution` 与 `system_field_type`；
+  实现位于 `source/workflow/validation.cpp`，内部领域值递归检查位于 `validation_values.cpp`。
+- 测试：[validation_tests.cpp](../tests/workflow/validation_tests.cpp) 覆盖图、绑定、Group 与 Schema，
+  [validation_domain_tests.cpp](../tests/workflow/validation_domain_tests.cpp) 覆盖 ROI 继承、嵌套资源与坐标/能力检查。
+- 环境与 §2 相同：Windows x64、MSVC 19.51.36248.0、Windows SDK 10.0.26100.0、CMake/CTest 4.4.0。
+  §3.5 两种配置的配置、最终构建和全量测试均返回 0，最终构建日志无编译警告。
+  本地日志保留在 `out/build/s25-debug/`、`out/build/s25-release/` 下的 `build.log` 与 `Testing/Temporary/LastTest.log`，均被 Git 忽略。
+- 本次在已有 S2.1–S2.4 未提交工作区基础上补充实现；没有覆盖前阶段成果或创建 Git 提交。
+- 验证边界：静态类型、引用、控制可达性与依赖索引；没有结果解析、实际调度、资源加载、设备访问或算法运行。
+  S2.6 负责运行结果/公开输入取值、实际 List 长度和可用性，S2.7 负责接口收敛，S3 负责运行与提交。
+
+| 场景子范围 / 测试入口 | 实际验证内容 | Debug | Release |
+|---|---|---|---|
+| A03/A13：`workflow.validation_graph` | 五路分叉/汇合、非相邻/兄弟依赖、普通回边、自环、直接/间接逆序、纯数据/混合环、显式入口及范围外前驱/来源、诊断与索引 | 56 检查，0 失败 | 56 检查，0 失败 |
+| A06/A07：`workflow.validation_bindings` | 字段/固定索引、目标/来源、基数、转换、Optional/缺失、默认值、静态长度约束、单位、公开输入/全局/资源及系统字段 | 112 检查，0 失败 | 112 检查，0 失败 |
+| A24：`workflow.validation_groups` | 两层嵌套 Group、逐层数据/控制映射、映射完整性、作用域穿透与来源可达性 | 43 检查，0 失败 | 43 检查，0 失败 |
+| A03/A32：`workflow.validation_schema` | 工具注册/版本、完整 Schema、显式能力支持、跨工具/公开接口/队列的类型冲突、同版本端口结构与改名 | 41 检查，0 失败 | 41 检查，0 失败 |
+| A10/A26：`workflow.validation_domains` | ROI 来源/排除项的隐藏依赖、权限/禁用/结构参数、嵌套值路径、坐标/能力、掩膜/标定资源、资源槽、状态初值/设备配置 | 110 检查，0 失败 | 110 检查，0 失败 |
+| 既有 34 项 CTest | S2.1–S2.4 回归，含 `core.failure_exit` 预期失败入口 | 全部通过 | 全部通过 |
+
+每种配置新增 **362 次正常检查**，总计 **8538 次正常检查，0 失败**，另有 1 次预期失败检查。
+测试使用固定 UUID/token、内存 Schema/图/ROI/资源目录，不读取真实资源、运行算法或连接设备。
+最终 `git diff --check` 无空白错误；本次构建目录保留作验证依据，没有其他临时文件。
+
+实现与验证中修复了默认几何值坐标检查、隐藏 ROI 的来源权限/Disabled 处理、队列 Schema 一致性、
+状态/设备配置递归引用和确定超长的多来源集合漏检，并加入成对回归。
+首轮并行 MSBuild 停在工程检查步骤后终止，改用 `--parallel 1` 完成构建；
+编译中发现的局部标识重定义及测试坐标 ID 类别错误也已修复，未删除测试或放宽断言。
+
+### 8.9 S2.6 实现与验证记录
+
+- 日期：2026-11-09。
+- 结论：**S2.6 完成，Debug/Release 各 44/44 项 CTest 通过**。
+  新增 5 项结果访问/解析测试，全部前阶段回归通过；S2.7 尚未开始，整个 S2 尚未通过验收。
+- 公共入口：[result_store.hpp](../include/visionpro/workflow/result_store.hpp) 的 `ResultStore`，
+  [resolver.hpp](../include/visionpro/workflow/resolver.hpp) 的 `BindingResolver`、`ResolutionContext` 和四态解析结果。
+  运行值物化/约束与领域检查由 workflow 内部 `runtime_values` 复用，RunRequest 保持原输入规则。
+- 测试：[result_store_tests.cpp](../tests/workflow/result_store_tests.cpp) 与
+  [resolver_tests.cpp](../tests/workflow/resolver_tests.cpp)；新增 5 项 CTest，合计 44 项。
+- 环境与 §2 相同：Windows x64、MSVC 19.51.36248.0、Windows SDK 10.0.26100.0、CMake/CTest 4.4.0。
+  §3.6 两种配置的配置、最终构建和全量测试均返回 0，最终构建日志没有编译警告。
+  日志保留在 `out/build/s26-debug/`、`out/build/s26-release/` 的 `build.log` 与 `Testing/Temporary/LastTest.log`，均被 Git 忽略。
+- 本次在已有 S2.1–S2.5 未提交工作区上继续实现，没有覆盖前阶段成果或创建 Git 提交。
+
+| 场景子范围 / 测试入口 | 验证内容 | Debug | Release |
+|---|---|---|---|
+| A04/A09：`workflow.result_store` | 完整输出 Schema、精确会话/运行/快照/调用身份、重复调用拒绝、退役运行与持有值保活 | 81 检查，0 失败 | 81 检查，0 失败 |
+| A05/A06：`workflow.resolver_values` | 常量/默认值、参数、本轮字段/固定索引、显式转换、多来源顺序和运行约束 | 35 检查，0 失败 | 35 检查，0 失败 |
+| A04/A07：`workflow.resolver_availability` | Pending、正常缺失、失败/取消/超时、系统字段、Optional 不吞错、原始原因及四态优先级 | 52 检查，0 失败 | 52 检查，0 失败 |
+| A04：`workflow.resolver_isolation` | 会话/运行/作用域/调用隔离、显式同宿主外层可见性、禁止兄弟域读取、退役与上下文检查 | 35 检查，0 失败 | 35 检查，0 失败 |
+| A08/A09/A10/A23/A24/A26：`workflow.resolver_domains` | 公开输入及 Group 作用域隔离、资源/全局快照、图像保活与格式、嵌套 ROI 完整冻结、坐标与组合能力 | 48 检查，0 失败 | 48 检查，0 失败 |
+| 既有 39 项 CTest | S2.1–S2.5 回归，含 `core.failure_exit` 预期失败入口 | 全部通过 | 全部通过 |
+
+每种配置新增 **251 次正常检查**，总计 **8789 次正常检查，0 失败**，另有 1 次预期失败检查。
+夹具使用固定 UUID/token、人工终态、运行作用域、内存图像/ROI 和资源/全局快照；没有真实工具调用或设备访问。
+审查补齐了所有绑定的运行身份/退役前置校验、继承 ROI 跨边界组合能力，以及空图像格式列表拒绝规则，
+对应正反例和既有 RunRequest 回归均通过。最终 `git diff --check` 无空白错误；构建日志保留作验收依据。
+
+本阶段明确区分人工记录、运行取值和实际执行：
+
+- ResultStore 为单线程人工终态记录容器；不验证真实调用资格，不承担 S3 的提交/取消竞争或迟到回调处理。
+  重复 InvocationKey 即使换 Attempt 仍拒绝；精确查询不回退历史，退役后拒绝新记录，已持有的值和图像继续有效。
+- 当前没有允许缺失的输出元数据，Succeeded 必须提供全部声明输出的 Available 值；Optional None 和空 List 均为合法值。
+  运行来源和公开输入中的 ROI 必须完整，不可携带尚未解析的继承引用。
+- Resolver 不阻塞、启动或补跑来源，不读取最新结果。多来源结果按 Failure > Unavailable > Pending > Resolved 判定，
+  正常缺失仅按显式策略转为 None 或省略集合项，其余值保持配置顺序和来源记录。
+- 公开输入属于具体运行作用域；外层结果仅允许明确声明的同静态宿主祖先，不允许跨 Group 或其他迭代隐式读取。
+  这些用例不代表完整循环或 Group 调度已经实现。
+- 全局数据来自显式只读快照，不以定义初值代替缺失当前值；资源只返回目录中可核对的类型化引用，不进行 I/O。
+- ROI 保留原符号表达式，并按来源索引/嵌套路径冻结完整源 Region、调用身份及其 exclusions/transform。
+  本阶段不求几何变换、布尔区域、栅格化、真实像素成员或标定结果。
+- 没有共享写入、队列消费、状态 Init、设备调度、真实算法、GUI 或方案文件读写；这些继续由后续阶段接入。
+
+### 8.10 S2.7 与 S2 整体验收记录
+
+- 日期：2026-11-09。
+- 当前状态：**S2.7 完成，S2 整体验收通过**。既有 S2.1–S2.6 全部回归、新增运行接口、
+  所有权/错误边界与组合验证均在 Debug/Release 通过；14 项必需 S2 子范围证据见下表。
+- 范围：收敛 RunHandle、实例工厂、InvocationOperation 及其与快照/固定输入的边界；
+  使用可控测试替身验证契约，不建设调度器、真实设备适配或完整共享服务。
+- 版本和环境：基准 HEAD `12f5d1f` 上的当前未提交工作区，已有 S2.1–S2.6 修改保留；工具链沿用 §2。
+  C++20、Windows x64、MSVC 19.51.36248.0、CMake/CTest 4.4.0；Debug `/MDd`、Release `/MD`。
+  新接口为 core/workflow 各自的 `tool_execution.hpp` 和 workflow `run_handle.hpp`；
+  测试为 core `tool_execution_tests.cpp`、workflow `run_handle_tests.cpp`、`tool_execution_tests.cpp`、`composition_tests.cpp`。
+  日志位于 `out/build/s27-debug`、`out/build/s27-release` 的 `build.log` 和 `Testing/Temporary/LastTest.log`。
+- 新增 CTest：`core.tool_execution`、`workflow.run_handles`、`workflow.tool_execution`、`workflow.composition`；
+  共 48 项，保留 S2.6 的全部 44 项。
+
+| 本轮验证 | Debug | Release |
+|---|---|---|
+| §3.7 配置与全量重建退出码、编译警告 | 0；0 警告 | 0；0 警告 |
+| 既有 44 项 CTest 回归 | 44/44 通过 | 44/44 通过 |
+| `core.tool_execution` 实例与操作契约 | 91 检查，0 失败 | 91 检查，0 失败 |
+| `workflow.run_handles` 已受理句柄契约 | 60 检查，0 失败 | 60 检查，0 失败 |
+| `workflow.tool_execution` 固定调用与结果投影 | 38 检查，0 失败 | 38 检查，0 失败 |
+| `workflow.composition` 固定内存组合验收 | 27 检查，0 失败 | 27 检查，0 失败 |
+| 全量 CTest、正常检查及预期失败入口 | 48/48；9,005 正常检查，0 失败；1 项预期失败符合预期 | 48/48；9,005 正常检查，0 失败；1 项预期失败符合预期 |
+
+本轮每配置新增 216 个正常检查。两次 CTest 均退出 0；编译使用 `/W4`，不依赖 `assert` 维持 Release 检查。
+`git diff --check` 无空白错误；core 没有反向包含 workflow，两个库与测试均不依赖 Qt/OpenCV 或窗口初始化。
+审查中补齐部分启动异常仍返回可等待句柄、清理后发布物理退出、工厂重复发行拒绝、逐处 ROI 冻结覆盖、
+无目标工具的上下文检查及资源目录版本固定，均有对应回归。
+
+#### 8.10.1 十四项 S2 子范围证据矩阵
+
+下列 CTest 名称已与 `tests/core/CMakeLists.txt`、`tests/workflow/CMakeLists.txt` 核对。
+“已有证据”引用 §8.4–§8.9 的 Debug/Release 实测结果；本轮全量回归已再次通过上述全部入口。
+这里只验收 development §5.4/requirements §4 的 S2 子范围，不将各场景的 S3–S6 运行义务提前记为完成。
+
+| 场景 | S2 子范围与现有精确 CTest 入口 | 已有证据与后续边界 |
+|---|---|---|
+| A01 | `core.state_models`、`workflow.model_graph`、`workflow.snapshots`：同类型配置独立，状态域/代次与快照分离 | §8.6–§8.7；S2.7 补实例/操作所有权替身，真实状态 Init/重置归 S3 |
+| A03 | `core.identities`、`workflow.copy_subgraph`、`workflow.copy_solution`、`workflow.copy_boundaries`、`workflow.validation_graph`、`workflow.validation_bindings`、`workflow.validation_schema`：身份、改名、复制及悬空引用 | §8.5、§8.7–§8.8；保存加载身份往返归 S3 |
+| A04 | `core.identities`、`workflow.result_models`、`workflow.result_store`、`workflow.resolver_isolation`：Session/Run/Scope/Invocation/Attempt、Frame/Correlation 及精确结果读取 | §8.5、§8.7、§8.9；循环、重试和真实业务关联协调仍属后续阶段 |
+| A05 | `core.values`、`core.schema`、`core.domain_values`、`workflow.resolver_values`、`workflow.resolver_availability`：Record/List/Optional、合法空值、等待、未产生与失败 | §8.5–§8.6、§8.9；不引入任意类型载荷 |
+| A06 | `core.metadata`、`core.constraints`、`core.conversions`、`workflow.validation_bindings`、`workflow.resolver_values`：非相邻引用、字段/固定索引、来源/必填/默认/转换 | §8.5、§8.8–§8.9；动态索引和通用表达式不属于 S2 |
+| A07 | `workflow.validation_bindings`、`workflow.resolver_values`、`workflow.resolver_availability`：越界/类型错/来源失败分离，默认与 Optional 不吞错 | §8.8–§8.9；格式化工具的局部容错归 S6 |
+| A08 | `core.shared_definitions`、`workflow.resolver_domains`：定义/运行值/消息分离，全局只读版本追溯，预览不消费或写入 | §8.6、§8.9；真实全局/队列服务归 S6 |
+| A09 | `core.image_ownership`、`core.domain_values`、`workflow.run_isolation`、`workflow.result_store`、`workflow.resolver_domains`：共享只读、独立图像、裁剪视图及退役后的持有值保活 | §8.6–§8.7、§8.9；取消中的后台操作寿命由 S3 验证 |
+| A10 | `core.geometry`、`core.regions`、`workflow.validation_domains`、`workflow.resolver_domains`：多形状、坐标/方向、继承/修正/排除与符号来源冻结 | §8.6、§8.8–§8.9；实际几何/像素计算归 S4/S6 |
+| A13 | `workflow.model_graph`、`workflow.validation_graph`：合法兄弟依赖、逆序及控制/数据联合环 | §8.7–§8.8；就绪调度和执行次序归 S3 |
+| A23 | `workflow.run_inputs`、`workflow.run_isolation`、`workflow.resolver_domains`：必需类型化输入、请求/作用域隔离、图像只读持有 | §8.7、§8.9；真实 Busy/原子受理和重试重新注入仍未验收 |
+| A24 | `workflow.model_structure`、`workflow.copy_subgraph`、`workflow.validation_groups`、`workflow.resolver_domains`：层级、稳定公开映射和禁止 Group 穿透 | §8.7–§8.9；完整 Group 执行、独立宿主服务和导入复用归后续阶段 |
+| A26 | `core.masks`、`core.domain_values`、`workflow.validation_domains`、`workflow.resolver_domains`：掩膜所有权、格式/尺寸/坐标、映射和组合能力 | §8.6、§8.8–§8.9；实际重采样、像素成员判定归 S4 |
+| A32 | `core.schema`、`core.utf8`、`core.compatibility`、`workflow.validation_schema`：字段/编码、版本/能力及不完整 Schema 拒绝，失败不删声明 | §8.5、§8.8；厂商枚举、字符串/二进制适配及运行库验证归 S3/S6 |
+
+阶段正文另要求的五路分叉、多前驱汇合、基本条件出口及非法回边，由
+`workflow.model_graph`、`workflow.validation_graph` 覆盖；资源目录与引用的成功/失败由
+`core.resources`、`workflow.validation_domains`、`workflow.resolver_domains` 覆盖。
+`core.failure_exit` 验证测试失败能向 CTest 传递，不能把预期失败算入正常检查通过数。
+
+#### 8.10.2 固定组合夹具与证据边界
+
+现有 `resolver_tests.cpp` 的 Harness 已串联配置构造、ConfigSnapshot 捕获、
+BindingResolver 工厂内静态校验、人工结果插入与解析，正反例按 §8.9 记录。
+S2.7 的 `workflow.composition` 已注册，夹具代码为
+[composition_tests.cpp](../tests/workflow/composition_tests.cpp)，Debug/Release 各 27 个检查通过。
+它使用固定 UUID、Session/Snapshot/Run 标识，根 Scope 为 0，节点 A–D 分别使用 Invocation 1–4、Attempt 0；
+`composition.measurement` v1 Record 含 Float64 `radius` 字段。
+公开 `seed` 输入为 2×2 UInt8 Mono 图像，像素为 `[3, 17, 29, 251]`；
+人工变换保留 `camera` 到 `measurement` 坐标系、Pixel 单位和平移 `(4.5, -2.0)`。
+组合验收按 §5.3 核对以下关系，操作/工厂替身另由运行接口测试负责：
+
+| 固定场景 | 要核对的证据 |
+|---|---|
+| A 图像→B 位置变换→C 测量记录→D 判断输入 | 控制顺序与独立数据绑定并存；C 可非相邻读取 A 图像，D 从 C 的 Record 字段取得半径，追溯具体调用 |
+| 本轮人工半径 12.4 / 新一轮 Pending / 本轮失败 | 值、Pending 和来源失败分开；新轮不读取旧轮 12.4，原始失败诊断保留；默认值/Optional 不吞错由既有 `workflow.resolver_availability` 补充 |
+| 编辑原方案和工具默认值、释放人工结果索引 | 已捕获 C 非相邻绑定及 D 默认阈值 13.0 不随编辑变为其他来源或 1.0；已持有的图像在仓库/请求/快照退出后仍保持原像素 |
+| `workflow.run_handles`、`core.tool_execution` 与 `workflow.tool_execution` | 固定请求、Busy/拒绝与接受分开；同类型实例隔离、空/错误/重复发行实例拒绝；部分启动错误仍可等待清理；完成、取消请求和物理退出分开；全就绪才固定租约和调用，完成载荷经校验后回到精确结果查询 |
+
+这些是内存模型、人工终态和可控接口替身证据；即使替身方法被调用，也不代表 WorkflowEngine、
+控制到达/关闭传播、真实异步回调竞争、OpenCV 检测或设备通信已经实现。
+核心接口不反向依赖 workflow，工具输入使用类型化、固定值；运行对象不回写 Node 或普通方案配置。
+公共契约与代码已核对，全部必需项和两种配置验证通过，**S2 按既定模型与绑定范围通过整体验收**。
+实际状态服务暂未接入，含状态的 core 调用返回 MissingCapability；实例寿命/重试能力是给 S3 的声明，
+没有实例池、自动重试、生产 Busy 准入或执行器。S3 后续验收不得用上述人工结果和受控替身代替。
+
+#### 8.10.3 S3 交接清单
+
+以下均为后续待实现/验证项。复用入口说明 S2 已提供什么，验收方式说明 S3 还必须证明什么，
+不因已有接口或替身测试而提前记为完成。
+
+| S3 工作 | 复用的 S2 接口/资产 | 待实现与验收方式 |
+|---|---|---|
+| 运行装配、准入和单次句柄 | ConfigSnapshot、RunRequest、校验/解析接口；S2.7 收敛后的 RunHandle/工厂契约 | 每流程一个在途运行与 Busy；两个不同输入请求交错时拒绝方不污染已受理运行；实际退出前不复用实例/独占资源 |
+| 顺序、分叉、汇合与基本分支 | Workflow/Group 控制模型、ValidationIndex、五路图夹具 | 模拟五路均执行且逻辑/发送各一次；改变完成次序、重复到达、部分/零选及嵌套关闭；AllActivated 不永久等待未选路径 |
+| 数据就绪与错误策略 | BindingResolver 四态、SourceTrace、精确作用域/调用选择 | 合法兄弟依赖只细化就绪顺序；Pending 不忙等或补跑；来源失败阻止下游读取历史，NG 不误判为技术失败，默认 FailFast 有明确终态 |
+| 提交、取消及回调竞争 | NodeResult、输出完整性校验、ResultStore 寻址/重复拒绝规则；操作接口 | 用可控假后端覆盖取消先/后于提交、重复完成、旧 Attempt/旧代次迟到；只接受一次结果和控制推进，不能只依赖单线程仓库去保证竞争原子性 |
+| 物理退出、保活与关闭 | 只读 ImageHandle/DataValue、固定输入和操作所有权契约 | 完成与退出分离，取消后仍持有输入/实例/租约；关闭停止受理，回调注销确认静默后才释放；等待超时不得伪装为已清理 |
+| 实例与状态域 | NodeStateDefinition/NodeState、状态键/代次、同类型隔离夹具 | 实例重建不丢会话累计；Init 按域一次、显式重置、配置换代与在途旧代次共存；创建/调用失败不改配置 |
+| 单节点隔离调用 | NodeTarget、固定公开输入、DebugStatePolicy、公开边界校验 | 仅调用目标，不补跑来源或激活外部后继；输入缺失明确失败，隔离调试不污染活动状态；暂不支持的 Group 能力明确拒绝 |
+| 结果获取与显示通知边界 | 不可变 NodeResult、精确身份、系统字段投影和保留规则 | 假后端下轮覆盖不改已持有结果；关闭可选显示通知不阻断必要完成；慢观察者不阻塞运行，完整诊断与原码保留 |
+| 方案往返与失败保护 | Solution/Workflow、稳定 ID、类型化资源/变量/队列定义、复制重映射 | 无 GUI 加载/执行/保存同一方案；损坏/缺工具/缺资源及未知内容可诊断；加载失败保留有效配置，禁止有损覆盖 |
+| 保存提交与资源清理 | 格式/工具版本、路径基准、资源修订声明 | 临时资源/清单写入故障不破坏旧方案；清理失败与提交失败分离；交错保存者验证修订比较与提交的完整协议 |
+| 可复现无 GUI 运行入口 | core/workflow 库、固定内存夹具及 §3 构建步骤 | 无窗口初始化即可装配模拟工具并运行；输出追溯快照、运行、实际来源、顺序和诊断；Debug/Release 重复验证 |
+
+S4 再接真实视觉算法与几何像素计算；完整循环、多流程协调、连续/外部触发、真实共享读写/队列服务、
+设备及 SDK 按原阶段推进。S3 不以线程安全替代工件配对，也不提前建设动态插件或通用重试框架。

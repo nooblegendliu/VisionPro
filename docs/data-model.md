@@ -5,7 +5,12 @@
 本文将 C01–C10 修订稿作为当前设计基线，定义目标能力、领域不变量及工具可配置策略。
 SDK 指南补充的应用调用、一次性输入、Group、输出有效性及回调契约沿用该编号；
 依据与版本边界见 [requirements.md](requirements.md) §2.1，不要求接入厂商 SDK 才能实现这些能力。
-它不代表已实现接口或已通过运行验收；C++ 签名、依赖版本及性能预算在实现阶段确定。
+本文以目标契约为主，已落地接口单独标注；其余 C++ 签名、依赖版本及性能预算在对应实现阶段确定。
+S2.1–S2.4 的身份、值系统、工具元数据和诊断接口见 §3、§4.2–§4.3、§9，
+图像、几何、资源与状态的实现边界见 §6.1、§7.1、§10.1.1、§11–§13。
+S2.4 的方案/关系/快照见 §2.5–§2.6，复制见 §3.3，请求与结果见 §4.4、§8.2.1。
+S2.5 静态校验与派生依赖接口见 §5.6，已通过 Debug/Release 验证。
+阶段验证记录集中在 development.md §8.4–§8.8。
 
 目标能力不得因首个执行器、算法适配器或存储后端的范围而缩减。
 各阶段的范围和验收由 [requirements.md](requirements.md) 定义，
@@ -49,7 +54,7 @@ UUID、配置快照、控制到达协议和结果提交机制是本项目的设�
 | GlobalVariableEntry | 当前值、版本与更新来源 | 方案会话 |
 | DataQueueDefinition | 标识、消息类型、容量与策略 | 方案配置 |
 | QueueMessage | 序号、关联标识、生产来源与完整记录 | 入队至消费或按策略移除 |
-| NodeState | 节点、状态代次、作用域、重置策略与内部状态 | 调用、流程运行或方案会话 |
+| NodeState | 节点、状态代次、作用域、初始化与内部状态；重置策略在状态定义中 | 调用、流程运行或方案会话 |
 | ResourceRef | 资源标识、类别与定位方式 | 方案配置 |
 
 工具类型标识与节点标识分别管理。
@@ -146,6 +151,80 @@ InvocationOperation 是一次执行尝试的受控操作，拥有配置快照、
 有特殊退出时序的厂商 DisposeResource 等调用在受控 shutdown 阶段完成，
 不依赖窗口或静态对象的析构顺序，也不让 UI 控件决定核心会话是否存活。
 
+### 2.5 S2.4 方案、关系与编辑模型
+
+[model.hpp](../include/visionpro/workflow/model.hpp) 属于独立的 `visionpro_workflow` 库，依赖 core，无 GUI 依赖。
+`Solution` 保存正的格式版本与配置修订、流程、资源/变量/队列定义、坐标目录和独立布局；
+`Node` 只保存身份、显示名、启用/汇合策略、工具类型与配置版本（或 Group 定义）、绑定和资源槽引用。
+节点没有当前值、执行实例或结果容器。同类型节点的配置可独立编辑，改名与布局变化不会改写结构化引用。
+
+`Workflow` 明确入口，并分别持有节点、`ControlLink`、`Containment`、公开 Schema 和导出映射。
+控制线的空出口表示成功后的无条件连接，命名出口表示显式选择；多前驱/多后继不限制为单链。
+`Containment` 只表达 Group 父子关系，节点最多一个 Group 父，不能形成包含环。
+`children` 枚举当前层，`descendants` 按节点编辑顺序作深度优先枚举；编辑顺序不是调度顺序。
+纯显示位置属于 `WorkflowLayout`，不会成为控制、数据或包含关系。
+
+Group 复用 `NodeId` 表示可调用的容器，区别于 ROI 的 `RegionId`。
+父级在 Group 节点的 Binding 中配置公开输入，子节点用 `ScopedInputReference` 读取该 Group 输入；
+不另存一份可独立修改的输入映射。数据导出使用 `OutputMapping`，控制导出使用独立的
+`ControlOutputMapping`（内部节点及其可选命名出口 → 公开控制出口）。Workflow 也持有这两类导出。
+两者的实际类型、来源边界与控制可达性由 §5.6 的 Validator 检查，不能靠枚举公开端口认定可执行。
+
+`validate_model_shape` 检查本地定义、方案内身份唯一性、包含树、当前层入口、公开目标唯一性、
+资源/变量/队列/坐标定义及布局。`validate_public_interface` 复用 core 的输入/输出描述校验。
+草稿可没有入口、没有完整导出或缺少工具注册；此局部入口不检查控制/数据引用是否存在、端口兼容或联合依赖环，
+这些由 S2.5 的 `validate_solution` 统一负责。局部通过不等于方案可执行。
+
+### 2.6 S2.4 配置快照
+
+[snapshot.hpp](../include/visionpro/workflow/snapshot.hpp) 的 `ConfigSnapshot::capture` 从 const 配置及工具描述目录
+复制可变容器、名称、绑定、布局和声明，内部共享 const 所有权；即使传入右值，也不接管调用者可能仍持别名的容器。
+已封装的不可变 ConfigValue/Schema 可以安全共享。快照只暴露只读引用，使用借用引用期间须持有快照。
+`SnapshotIdentity` 包含会话和快照计数，配置修订、方案格式版本、工具配置版本与它分别保存。
+工具目录不允许重复类型，且每个 ToolDescriptor 必须局部合法。
+
+捕获不会加载资源文件或锁定实际内容，只固定资源身份、版本/摘要及读取策略等配置声明；
+未注册工具也可保留在局部合法的配置草稿中。它不是 ExecutionPlan，不证明图、工具或运行资源可执行，
+也不提供多线程编辑与受理之间的原子切换；S2.5 可对其只读内容静态校验，加载及受理由 S3 接入。
+
+### 2.7 S2.7 工具实例、固定调用与操作
+
+[core/tool_execution.hpp](../include/visionpro/core/tool_execution.hpp) 不依赖 workflow。
+`ToolExecutionConfiguration` 复制并只读持有 Session/Snapshot/Workflow/Node、ToolDescriptor、
+已固定的 SnapshotBuild 参数及资源槽；它是工具所需的配置投影，不复制一套可编辑 Node。
+`ToolExecutionPolicy` 以有限枚举声明同步/异步、实例寿命、可重入性、副作用、取消和重试能力。
+默认值为同步、按调用创建、串行、无副作用、不支持取消和不重试；声明能力不表示相应运行服务已实现。
+同一实例固定到创建时的配置投影，不能用另一个节点或另一个配置对象的调用上下文启动。
+
+`ToolInstanceFactory` 经 `create_tool_instance` 返回独立的 shared owning 实例或定位到节点的诊断。
+空实例、配置不匹配和重复发行同一实例被拒绝；未预期异常转为 ExecutionBoundaryFailure。
+实例与配置互不回写。当前静态工具目录仍由调用方显式提供，生产注册表和工厂装配由 S3 实现。
+
+`InvocationContext` 复制并只读持有一次调用的 Session/Snapshot/Invocation/Attempt 身份、完整输入/参数、
+已冻结的 ROI 来源和具名资源租约。缺值不能到这里再使用默认值，SnapshotBuild 参数也不能被替换。
+`ResolvedRegionInput` 保留目标、原继承引用、完整源 RegionDefinition、生产调用及 Attempt、source_index/path；
+含可写容器的源区域会复制，DataValue 和图像可共享只读存储。本层不执行几何计算。
+`ResourceLease` 由具体适配器拥有，接口只暴露结构化资源引用；没有裸设备指针、任意服务字典或资源 I/O。
+租约必须与固定资源槽的身份、类别和版本完全相符；真实状态服务尚未接入，stateful 调用明确返回 MissingCapability。
+
+`InvocationOperation::start` 是显式工具调用入口，先检查固定配置、状态能力及实例可重入约束。
+同步工具返回 ToolCompletion，返回时本次调用已经实际退出。异步工具先登记非空 InvocationControl，
+再开始后台访问，并独立保留 InvocationCompletion token；登记后启动失败仍交回可查询、可取消和可等待的操作。
+`complete` 只接收匹配身份与输出 Schema 的一次终态，`mark_exited` 独立确认后台访问结束并释放操作持有的访问权。
+逻辑完成不释放输入、图像、实例或资源租约；完成载荷复制后保持独立，重复/迟到完成不覆盖已有结果。
+条件变量等待区分 LogicalCompletion 与 PhysicalExit；wait_for 的 TimedOut 只指等待期限，不创建工具超时结果。
+取消只表达协作请求。工具完成并不意味着 workflow 已接受结果，S3 仍需仲裁取消、超时、Attempt 和控制推进资格。
+完整服务不得只依赖本操作的互斥保护来保证全流程提交或关闭的正确性。
+
+[workflow/tool_execution.hpp](../include/visionpro/workflow/tool_execution.hpp) 提供层间投影。
+`PreparedTool::create` 持有完整 ConfigSnapshot 与经过静态校验的 BindingResolver，
+固定常量/default 及声明转换、聚合得到的 SnapshotBuild 参数；需要运行来源才能固定的参数明确拒绝。
+`prepare` 先校验完整 ResolutionContext（包括无输入/参数的工具），再逐输入和参数调用 Resolver，
+保留每个目标的值、来源和诊断，以 Failure > Unavailable > Pending > Prepared 的优先级汇总。
+只有全部值就绪且租约匹配，才产生持有快照与 core InvocationContext 的 PreparedInvocation；此步骤不创建实例或启动工具。
+`checked_node_result` 将匹配的 ToolCompletion 映射为 NodeResult，并复用 ResultStore 检查快照中的完整输出契约；
+它不会插入真实仓库，也不会把工具完成误作引擎提交。
+
 ## 3. 标识与引用（C02）
 
 不同类别使用强类型包装，不能无约束地互换。
@@ -181,6 +260,68 @@ IndexSource 支持固定整数和显式整数绑定；动态索引参与类型�
 配置引用不保存运行标识；解析器结合运行上下文定位具体调用，见 §8.2。
 引用存在不表示可读取，还须检查类型、作用域、控制激活与结果可用性。
 系统状态和诊断与算法输出分开；失败来源可供显式错误处理查询状态，不伪造有效算法数据。
+
+### 3.1 S2.1 已实现的身份接口
+
+公共类型见 [id.hpp](../include/visionpro/core/id.hpp)，创建入口见
+[id_factory.hpp](../include/visionpro/core/id_factory.hpp)。
+`SolutionId`、`WorkflowId`、`NodeId` 是互不转换的值类型，支持同类比较、复制和移动；
+不能默认构造，也不接受裸字符串或字节数组构造。缺少身份以 `std::optional<Id>` 表达。
+`IdFactory::parse<Id>(text)` 和 `IdFactory::generate<Id>()` 返回 `Result<Id>`。
+
+内部保存按文本顺序排列的 16 字节，不采用 Windows GUID 的本机内存布局。
+解析严格接受 36 字符的 `8-4-4-4-12` 十六进制文本，可包含大小写字母，
+只接受 version 4、variant `10`；拒绝空白、括号、URN 前缀、尾随内容、nil 和其他版本/variant。
+检查顺序为文本格式、version、variant；`to_string()` 始终产生小写规范文本。
+UUIDv4 位布局依据 [RFC 9562 §5.4](https://www.rfc-editor.org/rfc/rfc9562.html#section-5.4)。
+生成采用 Windows 系统随机源，失败返回诊断，不退化为时间戳、计数器或固定种子。
+随机生成不替代方案级重复身份校验；S2.4 的局部模型检查已验证唯一性，S2.5 的组合校验继续复用。
+
+S2.2 扩充的身份见下一节；S2.4 的改名保持引用与复制重映射见 §3.3，删除后的悬空引用由 S2.5 校验。
+
+### 3.2 S2.2 身份类别与有效范围
+
+`ResourceId`、`VariableId`、`QueueId`、`ControlLinkId`、`RegionId` 复用 UUIDv4 值类型和工厂。
+`SolutionSessionId` 也是独立 UUIDv4 类型，但不属于 `PersistentId`；`UuidIdentity` 包含两类，
+不能将会话身份保存为方案持久身份。会话创建和实际身份分配由后续运行服务装配。
+
+[schema_id.hpp](../include/visionpro/core/schema_id.hpp) 提供 `SchemaId`、`ToolTypeId`、
+`InputId`、`OutputId`、`ParameterId`、`FieldId`、`ControlOutputId`、`EnumMemberId`、
+`CapabilityId`、`CorrelationDomainId`、`CoordinateSystemId`。
+它们是互不转换、区分大小写的稳定 token，使用
+`SchemaIdFactory::parse<Id>` 创建，接受 1–128 字节的 `[A-Za-z_][A-Za-z0-9_.-]*`。
+这些 token 在所属注册表/Schema/来源域内解释，不代表全局 UUID；中文显示名称独立保存为 UTF-8。
+
+[runtime_id.hpp](../include/visionpro/core/runtime_id.hpp) 定义五类互不转换的 `uint64_t` 计数身份：
+`ConfigSnapshotId`、`WorkflowRunId`、`InvocationId` 从 1 开始；`ExecutionScopeId` 的 0 为根，
+`AttemptId` 的 0 为首次尝试。`RuntimeIdFactory::from_value` 检查有效下界，`next` 检查溢出。
+`IdSequence<Id>` 不可复制、移动或重置，最大值只发出一次，耗尽后持续报告 `IdentityExhausted`。
+序列由所属会话/流程/调用持有，不是线程安全的全局分配器；所有者和并发分配在 S3 接入。
+显式指定下一身份的构造入口用于已知域的恢复与边界夹具，调用方不得在同一域重建序列复用旧值。
+
+`InvocationKey` 按 §8.2 组合运行、节点、作用域和逻辑调用，`SessionInvocationKey` 再加入会话。
+`AttemptId` 独立于逻辑调用键，重试不会生成另一种含义重复的调用身份。
+`FrameId` 必须显式给出 `ResourceId` 来源与序号（允许 0），只在来源声明的寿命内唯一；
+跨会话或设备重连时，后续运行层须补充上下文或保持同一来源域内序号不复用，不能直接当全局帧身份。
+`CorrelationId` 由 `RuntimeIdFactory::correlation` 创建，包含来源域和 1–256 字节的有效 UTF-8 业务键，
+禁止空键和嵌入 NUL；唯一范围与有效期仍由业务关联策略声明。
+这些接口只验证身份表达与边界，不表示已实现结果存储、跨轮隔离或跨流程业务配对。
+
+### 3.3 S2.4 复制与身份重映射
+
+[copy.hpp](../include/visionpro/workflow/copy.hpp) 提供纯内存 `clone_subgraph` 和 `clone_solution`，
+返回副本、分类的旧新身份映射及处理报告，不修改输入，不执行节点或操作文件。
+子图复制用于同一 Workflow 内插入，选中 Group 自动包含全部后代；内部节点、控制线和 ROI 分配新身份。
+绑定、公开输入引用、数据/控制导出、包含关系以及 ConfigValue 的 Record/List/Optional 内资源和几何引用递归重映射。
+Group 的公开输入默认值及允许值集合也按相同规则处理。
+
+调用者必须显式选择 `ExternalReferencePolicy::Preserve` 或 `Reject`。
+保留的外部来源有类型化报告；选区外的包含父仅在 Preserve 下保留。
+跨选区控制线报告并略过，不因复制自动接入外部执行链；流程入口、公开导出及布局不会被子图复制隐式追加。
+整方案复制为 Solution、Workflow、Node、ControlLink、Resource、Variable、Queue 和 ROI 生成新身份，
+同时重映射布局、引用及资源定义。工具/端口/Schema/坐标 token 不随实例复制变化。
+资源路径、摘要和文件内容不因配置复制而自动搬运；需要独立资源副本时由后续持久化流程完成。
+复制所需结构或外部引用策略失败时只返回诊断，不向原方案写入部分副本。
 
 ## 4. 参数、端口与值（C03）
 
@@ -241,6 +382,112 @@ RunRequest 至少包含目标身份、配置修订/快照选择、类型化输�
 不允许临时改变工具类型、输出 Schema 或控制结构。默认使用原绑定，不能因同名输入自动覆盖。
 第三阶段先验证单流程类型化请求和模拟数据；Group 调度及完整调试界面按后续阶段实现。
 
+### 4.2 S2.2 值系统与工具元数据实现
+
+[value.hpp](../include/visionpro/core/value.hpp) 提供不可变 `DataType`、互不转换的 `ConfigValue` 和
+`DataValue`。S2.2 加入 Bool、Int64、有限 Float64、UTF-8 String、原始 Binary、Enum、
+Record、List 和 Optional；S2.3 的领域载荷见 §4.3。
+值拥有其 Schema 和载荷，复制共享只读内容；工厂独立复制调用者的可变容器，即使传入右值也不接管可能仍有可写别名的分配。
+调用方修改原字符串、字段、顶点或元素容器不改变已创建值；已封装的不可变子值和图像缓冲可安全共享。
+没有默认无类型值，也不能通过任意 JSON、指针或 `std::any` 注入载荷。
+
+Enum/Record Schema 使用独立 `SchemaId` 和非零版本。Enum 必须声明非空且唯一的 `EnumMemberId`；
+Record 可以为空，但字段身份不能重复。类型相等同时比较类别、Schema 身份、版本及完整嵌套结构，
+字段/成员的传入顺序和 Enum 显示名不影响类型相等。记录按字段身份规范排序，显示顺序不属于业务类型。
+Record 值必须准确提供全部声明字段，未知、重复、缺失或类型错误均返回诊断；
+Optional 字段也不能省略，合法无值必须显式提供 `None`。List 的每个元素须符合声明类型，
+空 List 仍保留元素类型。Schema 工厂只接受已构造的子类型，形成有限的无环结构。
+
+`ConfigValue::none(T)` 是 `Optional<T>` 的有效值，`some(value)` 显式包装；
+未配置以外层 `std::optional<ConfigValue>` 的空状态表达，失败以 `Result<ConfigValue>` 的诊断分支表达。
+0、false、空 List、None、未配置和失败均不相互替代。S2.6 通过 §5.7 的解析结果区分 Pending、正常不可用和来源失败。
+当前 Float64 工厂拒绝 NaN/Infinity；String 严格校验 UTF-8 Unicode 标量值，保留合法 U+0000，
+Binary 按字节持有且不推断编码。需要非有限数值或其他编码时，须显式扩展类型/适配契约。
+
+[tool_descriptor.hpp](../include/visionpro/core/tool_descriptor.hpp) 提供参数、输入、数据输出及控制出口的
+独立定义。输入/参数声明类型、必填性、默认值、范围、允许值集合、容量、允许来源、基数及取值时机；
+数据输出与控制出口使用不同标识类别。端口的单位与坐标系是显式元数据；S2.3 校验几何自身及显式变换，
+绑定两端的坐标语义由 S2.5/S2.6 校验，资源在 S2.6 中仅作目录引用解析，不由类型相等隐含转换。
+配置版本 `config_version` 与工具 Schema 的身份/版本分别保存；S2.7 的执行能力和运行工厂接口见 §2.7。
+
+`validate_descriptor` 检查重复身份、无效声明、默认值和约束，也拒绝同一描述内相同 Schema 身份/版本的冲突定义。
+必填目标不能声明回退默认值，非必填目标必须声明合法默认值；值类型为 Optional 不改变这个规则。
+整数和浮点范围分别比较，浮点界限必须有限；长度约束对 String/Binary 计字节，对 List 计元素，不截断。
+约束可作用于 Optional 的实际载荷，None 不参与数值/长度比较；允许值集合可以显式排除 None。
+
+`resolve_parameter_value` / `resolve_input_value` 仅处理已提供的配置值和默认值，
+其 `nullopt` **只表示未配置来源**，不能由 Pending、本轮缺结果或来源运行失败代替。
+已有诊断原样返回，类型错误和约束错误也不使用默认值回退。
+绑定声明区分单来源、多来源和集合来源；多来源校验每个来源对 List 元素类型的兼容性，集合来源校验整个 List。
+非订阅参数只允许常量，结构参数还必须在快照构建时固定。
+精确类型匹配、`T → Optional<T>` 包装和显式 `Int64 → Float64` 是不同转换策略；
+数值转换必须被目标明确允许且由调用方显式选择，不注册为普遍无损转换。
+这些 core 接口只校验转换及多来源声明；S2.6 的 Resolver 执行已声明的转换、集合聚合、取值和来源追溯。
+
+`validate_schema_support` 校验 Schema 身份、支持版本区间、所需能力及完整性声明。
+适配器已知枚举不完整时必须设置 `complete=false` 并返回错误；此检查不会猜测厂商未声明的字段，
+也不会删除现有定义。外部枚举与静态 Schema 的核对、实际字符串/二进制转换仍须在适配阶段验证。
+
+### 4.3 S2.3 领域值与能力声明
+
+两个值域均可持有经过校验的 `Point2D`、`Line2D`、`Circle2D`、`Pose2D`、`Transform2D`、
+`RegionDefinition`（类型名 `Region2D`）及 `ResourceReference`。几何、ROI 和资源工厂先返回局部校验结果，
+再建立不可变载荷；修改调用者的多边形顶点或排除集合不改变已建立值。
+`ImageFrame` 和运行期 `RasterMask` 只存在于 `DataValue` 的载荷分支，配置域没有对应工厂或取值接口，
+也不能通过 Record/List/Optional 嵌入运行值。`None<Image>`、空 `List<Image>` 可作为无像素的类型化初值；
+它们不会隐式加载图像，`ResourceReference` 也不自动转换为 Image。
+
+`ToolDescriptor` 新增可选的 `NodeStateDefinition`、资源槽 `ResourceRequirement`、
+`RegionCapabilities` 和明确的 `PixelFormat` 列表。`validate_descriptor` 检查这些声明及重复项，
+状态 Schema 参与同一工具的嵌套 Schema 一致性检查；资源槽不携带具体节点的资源实例。
+`validate_image_support` 按完整格式匹配，空格式列表表示未声明图像支持，RGB 不等于 BGR。
+`validate_region(region, capabilities)` 检查形状、边界、继承、修正和掩膜组合能力；
+这些声明不启动算法、不加载资源，继承来源解析后的实际形状仍需后续校验。
+
+### 4.4 S2.4 类型化单次请求
+
+[run.hpp](../include/visionpro/workflow/run.hpp) 的 `RunRequest::create` 固定一个 ConfigSnapshot、
+Workflow 或独立 Node/Group 目标、按 InputId 提供的 DataValue、触发来源及可选 CorrelationId。
+普通节点使用快照中配置版本精确匹配的工具输入 Schema，Group/Workflow 使用各自公开输入 Schema。
+目标或其所属流程/Group 被禁用时拒绝；临时启用须显式生成另一份配置快照。
+独立目标默认声明 Isolated 调试状态，也可显式声明 Active；这不等于已获得活动状态的访问权或互斥许可。
+
+请求校验未知/重复/必需输入、精确类型、数值范围、允许值和长度。
+必需 Optional 输入仍须显式提交；未提交的非必需输入只使用本快照声明的默认值。
+默认值作纯 ConfigValue → DataValue 物化，保留复合类型和 None，不加载资源或自动转换像素。
+`FixedRunInput` 记录 Provided/Default 来源，输入容器独立持有、图像只读共享；每个新请求重新检查输入，
+失败请求不会改写已有请求或从上一轮补图像。参数动态覆盖不在此接口中隐式开放。
+
+此工厂只准备不可变请求，不产生 WorkflowRunId，也不负责 Busy 准入、调度或重试。
+S2.7 的 RunHandle 是独立的已受理句柄契约，见下一节；真实受理服务仍归 S3。
+工作流入口/依赖及工具能力的运行校验仍须后续计划和执行服务完成。
+
+### 4.5 S2.7 已受理运行句柄
+
+[run_handle.hpp](../include/visionpro/workflow/run_handle.hpp) 定义 `RunSubmission` 三个互斥分支：
+`RunHandle` 表示受理成功，`RunBusy` 指明占用中的运行身份，`RunRejected` 保存拒绝诊断。
+`RunSubmitter` 是 S3 准入服务的接口；S2 没有生产准入实现，不在准备 RunRequest 时分配运行标识或占用槽位。
+服务必须原子配对已准备的快照与输入；Busy/拒绝不得更改当前输入，也不得把被拒请求留下作为下一轮输入。
+
+`RunControl` 在构造时持有 const RunRequest 和由其快照、目标及新 WorkflowRunId 组成的 RunIdentity。
+`RunHandle::from_accepted` 只包装非空后端，不执行受理；只供已保留身份和请求的后端调用。
+句柄复制共享拥有后端，移动后原句柄仍有效，与其他不可变模型一致。
+销毁客户端句柄不隐式取消、不阻塞等待；后端必须独立保留活动操作直至实际退出。
+
+`inspect` 返回逻辑状态、独立的 `quiescent` 和诊断。Pending 表示已受理但尚未开始；
+Succeeded、Failed、Cancelled、TimedOut 是逻辑终态，Skipped 不是整轮运行终态。
+`wait(Completion/Quiescence, steady_clock deadline)` 返回 Satisfied 或 DeadlineExpired 及同次进度快照；
+等待期限到达不制造 TimedOut 运行，更不表示已释放内存或资源。
+`cancel` 只返回 Requested、AlreadyRequested 或 AlreadyCompleted；实际取消与结果提交的竞争由 S3 仲裁。
+后端等待应使用条件/事件通知，并提供线程安全的查询、等待和取消；当前可控替身只验证接口语义。
+
+`lookup(InvocationKey)` 不查询最近结果：校验当前 Run、目标 Workflow/Node（Group 包含其子节点），
+并核对返回记录的 Session/Snapshot/Run/Invocation；已有 NodeResult 仍经过 ResultStore 的输出契约检查。
+未记录的精确调用返回空 optional；这不推断来源已关闭或永远不会产生结果。
+返回的不可变记录可独立保活。边界保留后端预期诊断，将不预期异常转为 ExecutionBoundaryFailure；
+非法状态、矛盾等待结果和空后端返回 InvalidRunHandle。
+这不替代后端对单调状态迁移、重复/迟到完成与提交资格的同步保护。
+
 ## 5. 数据绑定与控制关系（C04、C06）
 
 Binding 统一表达输入和可订阅参数：
@@ -280,6 +527,14 @@ Binding 统一表达输入和可订阅参数：
 后者的批量一致性必须声明，不能声称多值属于同一工件。参数预览不消费消息或修改状态。
 表达式、格式化、多来源组合及动态索引属于目标能力，先由显式工具提供，
 不要求每个参数内嵌通用表达式引擎。
+
+S2.4 的 [binding.hpp](../include/visionpro/workflow/binding.hpp) 已实现上述配置表示：
+`BindingTarget` 区分 InputId/ParameterId，来源区分常量、OutputReference、ScopedInputReference、ResourceReference 和 GlobalReference。
+结果引用区分 OutputId 与 SystemField，选择器当前实现 FieldSelection 与固定 ElementSelection，运行身份不进入配置。
+源列表保留顺序，基数与显式转换策略独立；`AvailabilityPolicy` 仅可声明接受 NotSelected/Disabled 缺失，
+没有把 Pending、来源错误或任意失败转换成 None 的策略。
+`validate_binding_shape` 只检查源数量、已知枚举及引用本身的基本形式，不访问结果、加载资源或消费消息。
+来源/目标能力、选择器类型、作用域与图依赖由 S2.5 校验，接口见 §5.6；S2.6 取值与可用性接口见 §5.7。
 
 ### 5.1 可用性、等待与错误（C04）
 
@@ -391,6 +646,118 @@ Group 被禁用不等于结果可复用，也不自动把输入旁路成输出�
 第二阶段表达边界/层级及校验；第三阶段验证单节点隔离调用与输入规则；
 完整 Group、独立子图及方案级多流程协调在第六阶段实现，UI 操作复用同一应用服务。
 
+### 5.6 S2.5 静态校验与派生依赖
+
+[validation.hpp](../include/visionpro/workflow/validation.hpp) 提供
+`validate_solution(solution, tools, support = {}) -> Result<ValidationIndex>`。
+它先复用 `validate_model_shape`，随后检查完整方案中所有配置节点，包括禁用节点与未连接草稿。
+调用方也可传入 `snapshot.solution()`、`snapshot.tools()`；校验不改变编辑配置或快照。
+失败返回首个 `Diagnostic`，保留方案/流程/节点、绑定输入或参数、输出或控制线，以及字段/索引路径。
+错误后重新调用可继续定位修复后的下一项问题，不以日志字符串作为错误接口。
+
+静态范围包括：
+
+- 工具类型存在、配置版本精确匹配、Schema 完整性和同身份同版本的类型一致性；公开接口、全局变量及队列消息类型纳入同一检查。同版本工具/公开端口 Schema 的输入、参数、输出类型及控制出口身份必须一致，显示名称不参与比较。
+- 控制边端点与命名出口、普通控制环、直接/间接逆序，以及纯数据和控制/数据联合依赖环；不因校验而重排控制线。
+- 每个 Workflow/Group 的显式入口可达集合；范围外前驱连入可达节点、可达消费者绑定范围外生产者均拒绝。未连接的零入度节点不会自动参与。
+- 输入/参数目标、必填性、默认值、来源许可、基数与声明转换；常量及可确定的集合长度执行静态约束检查，运行值约束继续在解析时校验。
+- Record 字段与 List 固定索引逐步推导类型；不隐式解包 Optional，不猜测运行时 List 长度。静态合法的索引仍可能在 S2.6 报越界。
+- 输出引用只能访问同 Workflow、同直接作用域的节点公开输出；公开输入来自当前直接宿主。嵌套 Group 必须逐层映射，不穿透内部或读取兄弟 Group 的内部节点。
+- Workflow/Group 的每个公开数据/控制输出都有完整映射，来源位于内部直接作用域且控制可达；数据导出精确匹配类型和明确声明的坐标/单位。
+
+`AvailabilityPolicy` 只允许 Optional 或显式多来源集合接受声明的正常缺失；禁用生产者需要显式接受 Disabled。
+必填 Optional 没有绑定仍报错，默认值只用于未配置目标；配置错误不会回退到默认值。
+快照构建期目标只接受固定常量，不能通过嵌套 ROI 继承取得运行输出。
+
+静态引用检查递归进入 Record/List/Optional 的配置值及采用的默认值。
+ROI source/exclusions 中的 `InheritedRegion` 需要目标允许 `RunOutput`，检查来源 Region2D 类型、坐标/单位、
+作用域与启用/缺失策略，并纳入同一依赖环检查；不能用常量包装绕过订阅权限。
+几何坐标目录、ROI 能力、Mask 和 Transform 的资源引用、节点资源槽，以及全局/状态/设备配置中的资源引用也按静态定义校验。
+文件内容、实际图像尺寸、继承后真实形状和运行结果有效性仍由后续解析/算法适配检查。
+没有调用上下文的初值不能引用运行 ROI；校验不会读取资源文件或执行共享读写。
+
+通过时 `ValidationIndex.scopes` 按 Workflow 和可选 GroupId 保存独立 `ScopeDependencies`：
+`reachable` 是显式入口可达节点，`control_links` 是该直接作用域的控制线，`data` 是绑定派生依赖。
+每个 `DataDependency` 保留生产者、消费者、绑定目标、来源索引及是否来自 ROI 继承。
+索引只持有身份与值，不借用可变模型指针；它不是持久化配置、调度顺序或运行就绪证明。
+编辑模型变更后须重新校验，动态分支选择、Pending、失败和实际资源等待仍归运行阶段处理。
+
+`support` 为空表示仅验证工具元数据；非空时，对使用的工具校验声明的 Schema 版本范围和能力。
+该结果不代表厂商运行库、设备或执行后端已经运行验证。
+S2.5 没有新增任意外层结果读取或循环语义；后续能力须显式声明边界，不能通过普通引用绕过当前作用域规则。
+
+`system_field_type` 发布固定的系统结果绑定投影，由 S2.6 Resolver 复用：
+
+| SystemField | 静态类型 |
+|---|---|
+| ExecutionStatus | `visionpro.execution_status` v1 Enum：Pending、Running、Succeeded、Failed、Skipped、Cancelled、TimedOut |
+| Judgement | `visionpro.judgement` v1 Enum：NotEvaluated、OK、NG |
+| Elapsed | Int64，单位约定为纳秒 |
+| Diagnostics | List of `visionpro.diagnostic` v1 Record：code(Int64)、severity(`visionpro.severity` v1 Enum：Info/Warning/Error)、message(String) |
+
+Diagnostics 是可绑定投影，完整位置和其他诊断信息仍保留在 NodeResult 的 `Diagnostic` 记录中。
+系统字段只有类型映射，没有读取旧结果或运行中轮询的权限。
+
+### 5.7 S2.6 当前调用绑定解析
+
+[resolver.hpp](../include/visionpro/workflow/resolver.hpp) 提供
+`BindingResolver::create(snapshot) -> Result<BindingResolver>` 与
+`resolve(context, target, results) -> BindingResolution`。
+工厂先完成 S2.5 静态校验并持有不可变快照；解析输入/参数目标时使用同一快照和派生依赖索引。
+当前实现已通过 Debug/Release 验证，实际记录见 development §8.9，不代表已有调度器或真实工具调用。
+
+`ResolutionContext` 显式携带 RunIdentity、消费者 InvocationKey、运行作用域表、外层可见性、
+来源调用选择及只读全局值快照。每个 `SourceSelection` 指定一个来源 NodeId 和运行作用域，
+状态为尚无调用身份的 `AwaitingSource`、精确 InvocationId，或 NotSelected/Disabled。
+没有来源选择是上下文错误；明确等待或指定调用尚无终态记录才返回 Pending。
+未调用来源不伪造 NodeResult；普通引用不查询历史，不按 NodeId 或时间戳选择最新结果。
+
+四类结果保持不同类型：
+
+| BindingResolution 分支 | 含义 |
+|---|---|
+| ResolvedBinding | 当前已确定的 DataValue、各来源追溯和冻结的 ROI 来源 |
+| PendingBinding | 当前来源未完成；只返回等待事实，不阻塞或补跑来源 |
+| UnavailableBinding | 来源已确定不可用，包含原因、InputUnavailable 诊断和追溯 |
+| BindingFailure | 来源失败、身份/上下文、选择器、类型或约束错误；保留原因诊断和追溯 |
+
+多来源全部检查后，结果优先级为 **Failure > Unavailable > Pending > Resolved**，
+防止来源顺序将已知错误隐藏为等待。Failed、Cancelled、TimedOut 分别返回来源错误，
+失败输出的 Invalid 诊断进入原因列表，Optional 和默认值均不吞掉这些错误。
+系统字段可读取已存终态的状态、判定、耗时和诊断；来源仍等待时也不读取上一轮系统字段。
+
+正常缺失仅在 Binding 明确接受对应 NotSelected/Disabled 时处理：
+单来源 Optional 产生类型化 None，多来源集合省略对应来源并保持其余配置顺序，追溯记录接受的缺失原因。
+合法 Available(None)、空 List、0 和 false 保持原值；没有 Binding 才采用已声明默认值。
+Record 字段和固定 List 索引逐步访问，不隐式解包 Optional；实际越界返回 IndexOutOfRange。
+Exact、WrapOptional 和显式 Int64→Float64 按声明执行；结果继续检查类型、范围、允许值集合和长度，
+并检查真实几何坐标/单位、嵌套资源、ROI/掩膜能力和工具图像格式。
+有具体工具时，其空 image_formats 表示未声明图像支持；来源结果和消费者均检查。
+公开作用域输入尚无具体工具，仅作值与领域检查，消费时再检查工具能力。
+
+`ResolutionScope` 的根为 0，父链必须有效无环；静态宿主是 Workflow 或 Group，公开输入属于具体运行作用域。
+每个作用域重新检查必需输入、重复/未知输入、类型和约束；默认值只来自该公开接口，不能复用其他作用域输入。
+`visible_outer_scopes` 只允许当前作用域的同静态宿主祖先，来源仍须明确选择其中的精确调用。
+兄弟域、非祖先的其他迭代、其他 Workflow 和 Group 内部结果不因声明可见而变得可读。
+Group 输入从当前宿主公开接口取值，Group 输出继续通过公开输出；没有循环调度或隐式边界穿透。
+
+`GlobalReference` 只读 `context.globals` 中调用方提供的快照，检查变量、类型、来源会话和请求版本，
+记录实际 revision/update_origin；未提供当前值报 GlobalUnavailable，不从定义初值补齐。
+该容器不证明调用方进行了多变量原子读取，也不证明值属于同一工件。
+资源来源仅校验目录身份、类别和版本，返回 DataValue 中的类型化 ResourceReference，
+可固定目录已声明的版本并追溯；不读取文件、建立租约、连接设备、推进图像序列或把资源隐式变成 Image。
+
+配置值与所用默认值中的 Record/List/Optional、ROI source/exclusions 会递归解析继承来源。
+`ResolvedBinding.value` 保留原符号表达式，`regions` 的每个 `ResolvedRegionReference` 保存
+完整来源 RegionDefinition、精确 ResultIdentity、来源索引和嵌套路径，包含来源自身的 exclusions/transform。
+这些数据独立持有，不把来源简化成一个几何 primitive，也不丢掉外层修正或排除关系。
+解析器验证实际来源坐标、形状及几何/掩膜组合能力；变换求值、区域布尔运算、栅格化和像素计算仍归算法层。
+来源运行值与调用方提供的公开作用域输入必须已经完整，不允许再携带未解析 InheritedRegion；
+只有待解析的配置表达式可保留这种引用并附带冻结来源。
+
+解析不修改配置、ResultStore、全局快照或队列，不负责状态 Init、共享写入、设备调度、取消与实际执行。
+来源追溯分别记录常量/默认值、精确结果调用与 Attempt、作用域公开输入、全局版本和资源引用。
+
 ## 6. 图像（C05）
 
 图像对象需要明确：
@@ -424,6 +791,22 @@ ROI/裁剪视图若共享原图内存，必须持有父缓冲所有权，且明�
 外部适配须联合校验格式、尺寸、步长、缓冲长度及整数乘法溢出，不能由 Width × Height 猜测任意格式长度。
 SDK 结构只有指针/长度而未约定所有权时，按借用处理；在已确认的有效期内复制到本项目所有权，
 或使用文档与测试均验证的租约。结构浅拷贝不延长像素/数组寿命，也不能猜测 SDK 指针的释放函数。
+
+### 6.1 S2.3 图像实现
+
+[image.hpp](../include/visionpro/core/image.hpp) 提供 `ImageLayout`、`PixelFormat`、`ImageHandle` 和 `ImageFrame`。
+当前存储为标准 C++ 只读共享字节缓冲，无 OpenCV 依赖；支持 UInt8/UInt16/Float32/Float64 深度，
+Mono/RGB/BGR/RGBA/BGRA 通道顺序，行内交错、本机字节序。其他编码由适配器显式转换。
+`copy` 在外部借用有效时复制，校验非零尺寸、行步长、最小缓冲长度及乘加溢出；
+最小长度为 `(height - 1) * row_stride + width * bytes_per_pixel`，末行不要求额外填充。
+
+`crop(PixelRect, coordinateFrame)` 使用半开整数窗口，保留父缓冲所有权及步长，
+记录到根图的坐标身份与累计像素平移。平移后的视图不能复用原坐标身份；嵌套裁剪不会复制像素。
+`row` 只返回有效像素的只读借用 span，使用期间必须持有图像句柄。
+`copy_pixels` 返回独立紧排字节，`clone` 返回独立只读图像并保留坐标映射；
+修改导出的字节不会影响其他输入。句柄相等比较存储与视图身份，不进行逐像素比较。
+帧身份和采集时间由 `ImageFrame` 可选持有，不由内存地址或时间接近推断业务关联。
+当前无零拷贝租约、写入接口、设备适配或取消中的后台操作；这些生命周期另在后续阶段验证。
 
 ## 7. 几何、ROI 与坐标（C05）
 
@@ -469,6 +852,30 @@ RasterMask 保留只读像素所有权、掩膜坐标系、目标图像映射及
 重采样方式须声明，不能默认缩放掩膜或由图像帧号相近推断对齐。
 几何区域与掩膜互斥、组合或先栅格化由工具能力明确；厂商某工具的互斥规则不成为全局区域模型限制。
 第四阶段用固定图像验证掩膜及不匹配边界，后续再扩充复杂组合。
+
+### 7.1 S2.3 几何与区域实现
+
+[coordinate.hpp](../include/visionpro/core/coordinate.hpp) 与 [geometry.hpp](../include/visionpro/core/geometry.hpp)
+定义空间单位、坐标帧、点/线/圆/位姿、变换和区域。当前空间单位为 Pixel、Millimetre、Dimensionless；
+未知或非空间单位、非有限数、退化线/圆和非法坐标轴均诊断。
+坐标轴分量以向右 +X、向上 +Y 的参考基表示，因此图像轴为 `(1,0)`、`(0,-1)`，手性为 LeftHanded。
+
+矩阵使用行主序 3×3 系数并作用于齐次列向量。相似、仿射、投影矩阵检查有限性和可逆性，
+`map_point` 校验源坐标、单位、有效域和投影分母；`validate_transform_chain` 检查连接身份与单位，
+不替代逐点有效域检查。`inverse_transform` 支持无界矩阵变换；有界变换不猜测逆域。
+标定映射只接受固定版本资源与源有效域，尚无标定后端，实际映射或求逆明确返回不支持。
+
+`RegionDefinition` 表达全图、显式空域、轴对齐/旋转矩形、圆、环、扇环、多边形和配置掩膜，
+区分本地 `RegionPrimitive` 与结构化 `InheritedRegion`，持有源与排除项各自的位置修正和局部方向，以及区域的边界/空域策略。
+多边形检查有限坐标、非零面积、重复相邻顶点和自交；工具不支持形状时拒绝，不取外接矩形。
+`MaskConfig` 保存资源引用与格式/映射声明，不持像素；`RasterMask` 持只读图像。
+两者均显式声明目标尺寸/坐标、非零或阈值规则和重采样策略。
+直接掩膜必须尺寸/坐标一致；变换掩膜必须声明连接正确的像素坐标变换及采样方式。
+`validate_raster_mask(mask, image)` 可核对实际目标图像，`validate_region_frames` 可核对坐标目录。
+
+本阶段只验证模型及上述矩阵数值行为，未计算区域交集、排除后成员、真实越界或掩膜像素成员，
+也未执行几何栅格化、重采样、校正局部方向或算法适配。空域策略覆盖显式空域，
+由实际裁剪/排除计算出的空域及浮点几何到像素的规则仍在 S4/S6 验证。
 
 ## 8. 运行与结果（C02、C08）
 
@@ -562,6 +969,39 @@ CorrelationId 必须由业务触发源或已定义的关联策略产生，并明
 不能只凭内部 NodeId 取得最后一次输出。
 界面可显示历史结果，但需标注来源，历史索引不能成为执行器的取值依据。
 
+### 8.2.1 S2.4 结果身份与独立记录
+
+`RunIdentity` 组合 SnapshotIdentity、WorkflowId、WorkflowRunId，`ResultIdentity` 再包含 InvocationKey 和 AttemptId；
+`OutputAddress` 使用 SessionInvocationKey 和 OutputId，重试编号留在追溯身份中，不改写逻辑调用地址。
+`NodeResult::create` 从独立的 `NodeResultData` 复制不可变记录，校验运行身份与调用键一致、非负耗时、
+执行状态/判定、输出类型/可用性、控制选择唯一性及诊断。Succeeded+NG 是合法成功；
+Failed 必须带错误诊断，失败/取消/超时不能携带 Available 算法输出或正常控制选择。
+Available(None)、Available(空 List)、NotProduced(reason) 与 Invalid(diagnostic) 保持不同分支。
+Pending/Running/Skipped 不创建终态调用结果，未调用节点需由后续执行跟踪记录表达。
+
+该对象本身没有提交资格或已发布含义，不核对工具声明的全部输出，也不验证某调用是否真实存在。
+S2.6 的 ResultStore 补充完整输出校验和精确结果访问；取消竞争、真实调用与一次提交服务继续归 S3。
+
+### 8.2.2 S2.6 会话内结果访问
+
+[result_store.hpp](../include/visionpro/workflow/result_store.hpp) 的 `ResultStore(session)` 是
+**单线程、会话内的人工终态记录容器**，不是执行受理、重试仲裁或并发提交服务。
+`insert(snapshot, result)` 要求仓库会话、结果 RunIdentity、SnapshotIdentity 和 InvocationKey 一致；
+同一 WorkflowRunId 首次固定其 Workflow/快照，不能改用于其他流程或配置。
+仓库按完整 InvocationKey 存储，重复逻辑调用返回 DuplicateResult，即使 AttemptId 不同也不覆盖旧记录。
+
+插入检查节点和工具版本、声明输出身份/精确类型、控制出口，以及运行值中的资源、坐标和能力。
+当前 OutputDescriptor 尚无允许缺失的输出元数据，因此 Succeeded 必须对每个声明输出提供 Available；
+Optional None 与空 List 都是 Available 值，缺槽或 NotProduced 均不能冒充成功完整结果。
+失败/取消/超时保留其终态与诊断，不能带 Available 算法输出。运行输出中的 ROI 必须完整，
+不得包含未解析 InheritedRegion，以免结果读取引入第二层隐式运行依赖。
+
+`lookup(run, invocation)` 只按精确身份返回持有所有权的 NodeResult 或明确的“当前无记录”，
+身份冲突与已退役运行分别报错，不提供 latest 查询，也不从旧作用域补值。
+`release_run(run)` 移除该运行索引并记住其退役身份，迟到记录不能重新占用这个 RunId；
+即使从未插入结果，也可显式退役。已返回的记录、值和图像仍保持自身只读所有权，释放索引不会使其悬空。
+这里验证的是人工记录重复/隔离/保活规则，不代表 S3 的提交资格、回调静默、取消竞争或真实设备寿命已验证。
+
 ### 8.3 结果提交、取消与副作用
 
 工具先构造私有暂存结果，引擎校验输出类型、调用身份及提交资格后，
@@ -646,6 +1086,39 @@ UI 在 GUI 线程消费不可变通知，不依据“画面已刷新”判断算
 
 结构错误、参数错误、资源错误和运行错误应可区分。
 日志文字不能作为程序判断错误类别的唯一依据。
+
+S2.1–S2.5 的 [diagnostic.hpp](../include/visionpro/core/diagnostic.hpp) 提供
+`Diagnostic`、`DiagnosticLocation`、`Severity`、`ErrorCode` 和 `ErrorCategory`。
+诊断拥有说明文本和可选的方案/流程/节点身份，不借用调用者的字符串或配置对象；
+S2.2 增加工具、Schema、输入、输出、参数身份及字段/元素索引路径，不使用名称字符串替代对象位置。
+错误分类由错误码派生，不受可读说明影响：
+
+| 错误码 | 稳定数值 | 分类 | 含义 |
+|---|---|---|---|
+| InvalidIdFormat | 1001 | Structure | 长度、分隔符或十六进制字符非法 |
+| InvalidIdVersion | 1002 | Structure | 非 UUIDv4，包括 nil |
+| InvalidIdVariant | 1003 | Structure | variant 不是 `10` |
+| IdGenerationFailed | 2001 | Resource | 系统随机源失败 |
+
+新增错误码不重编号现有码；未知枚举值报告 `Unknown` 分类和 `UnknownErrorCode` 名称。
+S2.2 增加稳定的身份/Schema/值/元数据错误码：1004–1007 为 token/运行/关联身份错误，
+1101–1108 为 Schema、UTF-8、类型、字段和 Enum 错误，1201–1209 为元数据及兼容性错误。
+计数耗尽归 `Runtime`，值/约束/来源与转换错误归 `Parameter`，定义及兼容性错误归 `Structure`；
+完整映射以公共头文件及 `error_category` 为准，原有 S2.1 错误码数值保持不变。
+S2.3 增加图像 1301–1304、几何/坐标/掩膜 1401–1407、资源/路径 1501–1505 和
+状态/队列/全局变量 1601–1603 错误码；诊断位置增加资源、变量、队列与区域的强类型身份。
+S2.4 增加 1701–1708 的模型、重复身份、包含、绑定、快照、请求、结果及外部复制引用错误，
+位置补充 ControlLinkId。局部诊断可以保留方案/流程/节点和具体输入、输出或参数位置。
+S2.5 增加 1709–1716：UnknownTool、InvalidControlLink、InvalidSelector、ScopeViolation、
+ControlCycle、DependencyCycle、ControlOrderConflict、IncompleteExecutionScope，均归 Structure。
+S2.6 增加 1801–1811：结果身份不匹配、重复/退役结果、无效解析上下文、来源失败/取消/超时、
+输入不可用、运行索引越界和全局快照缺失/版本不符，均归 Runtime；Pending 是解析结果分支，不是伪造的错误值。
+[result.hpp](../include/visionpro/core/result.hpp) 将 `Result<T>` 定义为
+`std::variant<T, Diagnostic>`；调用方通过 `std::get_if` 或 `std::holds_alternative` 检查分支，
+预期失败不返回伪造的有效 ID，也不要求解析日志。解析尚未取得身份时，诊断位置为空，
+调用方可补充已知的外层对象位置。内存分配失败等非预期异常不在值类型内部吞掉，
+工作线程与 UI 回调的异常转换仍按 §2 的边界在后续阶段实现。
+
 适配诊断还保留 provider、API/模块名、错误域、原始数值码及描述、后端版本和关联身份。
 SDK 调用错误、算法状态、输出有效性、资源连接和业务判定分别归类；
 字符串参数接口和名称查找只在适配边界解析/映射，不放宽核心类型、编码和稳定身份要求。
@@ -680,6 +1153,21 @@ SDK 调用错误、算法状态、输出有效性、资源连接和业务判定�
 用户可以选择保存引用或将所选文件嵌入/托管。
 便携导出必须列明仍存在的外部依赖，不能宣称包含未收集的目录、设备或外部文件。
 设备连接归资源服务；实例归还租约不误关共享连接。
+
+### 10.1.1 S2.3 资源定义实现
+
+[resource_reference.hpp](../include/visionpro/core/resource_reference.hpp) 定义身份、类别及可选固定版本引用；
+[resource.hpp](../include/visionpro/core/resource.hpp) 定义托管文件、外部文件、目录/显式序列、设备配置和输出策略。
+`ResourcePath` 明确方案目录、命名根或绝对基准；Windows 绝对路径须为盘符根路径或完整 UNC，
+不接受依赖当前盘符/工作目录的路径。托管路径必须相对方案目录且不能用父级跳转或含糊分量逃逸。
+托管文件要求正版本和 SHA-256 摘要；锁定外部文件要求摘要，模板/标定不能按调用动态读取。
+序列声明排序、推进、重复、缺失、触发及初始游标；设备只持 adapter 标识与类型化 Record 配置；
+输出声明命名、覆盖及容量。`validate_resource_reference(ref, catalog)` 检查目录身份唯一性、类别与版本，
+不按名称补配或静默改版本。
+
+当前路径检查为词法校验，不访问文件、不解析符号链接、不验证实际摘要，也不连接设备或创建输出。
+目录序列的真实文件集合、命名根存在性、句柄租约和加载后内容锁定由后续 infrastructure 负责。
+方案保存/加载及 JSON 编码尚未实现，结构可持久化不等于已有序列化入口。
 
 ### 10.2 格式与加载
 
@@ -747,6 +1235,10 @@ updateOrigin 用于追溯流程调用或外部更新来源，不代替业务关�
 多变量一致读取须显式请求服务快照，不把各次独立读取误称为原子快照。
 第二/三阶段先校验定义，第六阶段实现服务及批量一致性；写入始终为显式操作。
 
+S2.3 的 [state.hpp](../include/visionpro/core/state.hpp) 已分离 `GlobalVariableDefinition` 的 `ConfigValue` 初值
+与 `GlobalVariableEntry` 的 `DataValue` 当前值，检查名称、身份唯一性、初值/当前值的精确类型。
+更新来源区分会话内调用与明确的外部来源；版本 0 表示初始化。当前没有共享变量服务或写入接口。
+
 ## 12. 数据队列
 
 队列是方案会话内有界的 FIFO 消息通道，成功接收后消费消息。
@@ -761,7 +1253,8 @@ payload 为类型明确的完整记录，例如工件标识、宽度、高度和
 sequence 表示队列内成功入队顺序，不保证不同生产者的业务先后顺序。
 correlationId 用于标识同一工件或批次，不能直接用不同流程各自的运行标识替代。
 messageId 用于辨认重复投递，sequence 用于队列顺序，两者不互相替代。
-producerOrigin 记录生产会话、流程运行与调用；createdAt 用于追溯和过期策略，不作为工件配对依据。
+producerOrigin 区分会话内的流程运行/调用与显式外部来源（会话、来源标识）；
+createdAt 用于追溯和过期策略，不作为工件配对依据。
 完整记录原子入队，不向消费者暴露未填完的消息。
 
 手册描述 FIFO 和所需行数据齐备后接收，未公开其底层存储实现。
@@ -783,10 +1276,16 @@ CorrelationJoiner 是数据服务，与同一流程内等待控制路径的 Join
 普通消费队列不等同于广播；多个消费者是否分流或各自收到副本需另行定义。
 发送或接收失败后如何重试必须明确，不能假定已消费或已发送的消息自动回滚。
 
+S2.3 的 `DataQueueDefinition` 要求完整 Record Schema、正容量、显式溢出/空队列/批量/消费者策略；
+最大批量不得超过容量。`QueueMessage` 使用独立的运行期 UUID `MessageId`、从 1 开始的序号、
+`CorrelationId`、生产来源、时间及完整 `DataValue` 记录。定义和消息类型/身份的局部校验已实现，
+没有入队/消费/等待 API，也未验证 FIFO 调度、重复投递去重或多来源齐备汇合。
+
 ## 13. 工具状态、脚本与逻辑
 
 NodeState 与普通输出、全局变量及队列消息分别存储。
-它至少包含节点标识、状态代次、状态作用域、初始化状态、重置策略与工具内部状态。
+运行记录包含节点标识、状态代次、状态作用域、初始化状态与工具内部状态；
+重置策略由对应的状态定义声明。
 
 | 数据 | 读取和保留语义 |
 |---|---|
@@ -802,6 +1301,15 @@ Invocation 状态域在逻辑调用结束时关闭；WorkflowRun 状态每轮初
 实例更换不等于状态重置，配置兼容性与状态代次按 §2.1 管理。
 工具须声明状态修改发生在计算中还是结果接受时；取消、失败及重试不保证自动回滚状态。
 持久化只保存状态定义、初值和重置配置，默认不保存当前累积值。
+
+S2.3 已实现 `NodeStateDefinition` 的 Schema、配置初值、寿命域、重置、兼容、修改时机及并发策略，
+`NodeStateKey` 用节点、正代次和显式 Invocation/WorkflowRun/SolutionSession 域区分运行状态。
+`NodeState` 的初始化状态与当前值/失败诊断一致性可校验；Ready 必须有同类型值且无错误，
+其他阶段不能发布当前值，Failed 必须携带错误诊断。调用域还检查键中节点与调用节点一致。
+当前 `IsolatedPerInvocation` 仅适用于 Invocation 寿命域，跨调用保留状态须声明 Serialized 或 ToolManaged；
+此检查只约束策略一致性，不实现锁或并发调度。
+`next_state_generation` 拒绝零和溢出，不因执行实例更换自动修改代次。
+这是定义和运行记录校验，尚未执行 Init、重置、并发访问、代次迁移或取消释放。
 
 脚本与逻辑工具复用 ToolDescriptor 和 Binding：
 已解析输入进入工具，输出经类型校验后作为普通节点结果发布。
@@ -846,7 +1354,7 @@ C01–C10 的对象边界、身份、类型、绑定、图像/ROI、控制图、
 
 | 事项 | 完成时机与边界 |
 |---|---|
-| C++ 类型、错误返回、公开端口、RunRequest/RunHandle、快照/工厂/操作句柄的具体签名 | 第二阶段形成可编译契约及必要测试替身；第三阶段实现运行服务，保持身份、所有权和同步/异步边界 |
+| C++ 类型、错误返回、公开端口、RunRequest/RunHandle、快照/工厂/操作句柄的具体签名 | S2 已完成可编译契约及必要测试替身；S3 实现运行服务，保持身份、所有权和同步/异步边界 |
 | 工具级允许来源、转换表、Schema 与状态兼容性 | 对应工具实现前；不能修改通用错误和隔离规则 |
 | 控制到达/关闭、取消竞争及单线程就绪调度算法 | 第三阶段；覆盖 C06/C08 场景后才算通过 |
 | 会话管理、输入受理、结果物化、回调注销与事件通道 | 第三阶段先模拟验证；UI 在第五阶段接入，厂商后端在第六阶段单独验证 |
@@ -865,5 +1373,6 @@ C01–C10 的对象边界、身份、类型、绑定、图像/ROI、控制图、
 
 2026-10-27，S1 状态为**文档审查通过，相关能力尚未实现**；
 逐项结论见 [development.md 的 S1 文档审查记录](development.md#81-s1-文档审查记录)。
-以上后续细化事项与执行验证仍未完成，不因 S1 通过而记作已实现。
+2026-11-09，S2 模型与绑定范围通过整体验收，见 [development.md §8.10](development.md#810-s27-与-s2-整体验收记录)。
+表中 S3–S6 后续细化事项与执行验证仍未完成，不因 S1/S2 通过而记作已实现。
 实施中新增决策应回写对应职责文档并补充验收依据。
