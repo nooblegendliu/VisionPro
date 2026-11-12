@@ -1,5 +1,4 @@
 #include <visionpro/workflow/run.hpp>
-#include <visionpro/core/text.hpp>
 #include "runtime_values.hpp"
 
 #include <algorithm>
@@ -21,12 +20,6 @@ template <class E> bool known(E value, E last)
     return static_cast<N>(value) >= 0 && static_cast<N>(value) <= static_cast<N>(last);
 }
 
-bool valid_diagnostic(const Diagnostic& diagnostic)
-{
-    return known(diagnostic.severity, core::Severity::Error) && !diagnostic.message.empty()
-        && core::is_valid_utf8(diagnostic.message);
-}
-
 } // namespace
 
 struct RunRequest::Storage {
@@ -36,11 +29,13 @@ struct RunRequest::Storage {
     RunTrigger trigger;
     std::optional<core::CorrelationId> correlation;
     std::optional<DebugStatePolicy> debug_state;
+    std::vector<core::GlobalVariableEntry> globals;
 };
 
 Result<RunRequest> RunRequest::create(const ConfigSnapshot& snapshot, RunTarget target,
     const std::vector<RunInput>& inputs, RunTrigger trigger,
-    std::optional<core::CorrelationId> correlation, std::optional<DebugStatePolicy> debug_state)
+    std::optional<core::CorrelationId> correlation, std::optional<DebugStatePolicy> debug_state,
+    std::span<const core::GlobalVariableEntry> globals)
 {
     const auto workflow_id = std::visit([](const auto& value) { return value.workflow; }, target);
     const auto contextualize = [&](Diagnostic diagnostic) -> Result<RunRequest> {
@@ -56,7 +51,8 @@ Result<RunRequest> RunRequest::create(const ConfigSnapshot& snapshot, RunTarget 
     if (!workflow || !workflow->enabled) {
         return contextualize(error(ErrorCode::InvalidRunRequest, "Request workflow is absent or disabled in this snapshot."));
     }
-    const std::vector<core::InputDescriptor>* schema = &workflow->interface.inputs;
+    const PublicInterface* public_interface = &workflow->interface;
+    const std::vector<core::InputDescriptor>* schema = &public_interface->inputs;
     if (const auto* node_target = std::get_if<NodeTarget>(&target)) {
         const auto* node = find_node(*workflow, node_target->node);
         if (!node || !node->enabled) {
@@ -64,25 +60,36 @@ Result<RunRequest> RunRequest::create(const ConfigSnapshot& snapshot, RunTarget 
         }
         // Disabled containing groups cannot be bypassed by targeting a child.
         auto child = node->id;
-        for (std::size_t depth = 0; depth < workflow->nodes.size(); ++depth) {
+        std::set<core::NodeId> ancestors{child};
+        for (;;) {
             const auto parent = std::ranges::find(workflow->containment, child, &Containment::child);
             if (parent == workflow->containment.end()) { break; }
             const auto* owner = find_node(*workflow, parent->parent);
-            if (!owner || !owner->enabled) { return contextualize(error(ErrorCode::InvalidRunRequest, "A containing group is absent or disabled.")); }
+            if (!owner || !owner->enabled || !std::holds_alternative<GroupConfiguration>(owner->configuration)
+                || !ancestors.insert(owner->id).second) {
+                return contextualize(error(ErrorCode::InvalidRunRequest, "Independent target requires a valid, enabled containing Group chain."));
+            }
             child = owner->id;
         }
-        if (const auto* group = std::get_if<GroupConfiguration>(&node->configuration)) { schema = &group->interface.inputs; }
-        else {
+        if (const auto* group = std::get_if<GroupConfiguration>(&node->configuration)) {
+            public_interface = &group->interface;
+            schema = &public_interface->inputs;
+        } else {
             const auto& tool_config = std::get<ToolConfiguration>(node->configuration);
             const auto* tool = snapshot.find_tool(tool_config.type);
             if (!tool || tool->config_version != tool_config.config_version) {
                 return contextualize(error(ErrorCode::InvalidRunRequest, "Independent target requires its exact tool configuration version."));
             }
+            public_interface = nullptr;
             schema = &tool->inputs;
         }
         if (!debug_state) { debug_state = DebugStatePolicy::Isolated; }
     } else if (debug_state) {
         return contextualize(error(ErrorCode::InvalidRunRequest, "Debug state policy applies only to independent node/group targets."));
+    }
+    if (public_interface) {
+        if (auto checked = validate_public_interface(*public_interface);
+            const auto* failure = std::get_if<Diagnostic>(&checked)) { return contextualize(*failure); }
     }
 
     std::set<core::InputId> supplied;
@@ -118,8 +125,11 @@ Result<RunRequest> RunRequest::create(const ConfigSnapshot& snapshot, RunTarget 
         }
         fixed.push_back({declaration.id, *value, origin});
     }
+    if (auto checked = detail::validate_global_read_snapshot(snapshot.solution(), snapshot.identity().session, globals);
+        const auto* failure = std::get_if<Diagnostic>(&checked)) { return contextualize(*failure); }
     return RunRequest{std::make_shared<const Storage>(Storage{
-        snapshot, std::move(target), std::move(fixed), std::move(trigger), std::move(correlation), debug_state})};
+        snapshot, std::move(target), std::move(fixed), std::move(trigger), std::move(correlation), debug_state,
+        {globals.begin(), globals.end()}})};
 }
 
 const ConfigSnapshot& RunRequest::snapshot() const noexcept { return storage_->snapshot; }
@@ -130,6 +140,7 @@ const FixedRunInput* RunRequest::input(const core::InputId& id) const noexcept
     const auto found = std::ranges::find(storage_->inputs, id, &FixedRunInput::id);
     return found == storage_->inputs.end() ? nullptr : &*found;
 }
+std::span<const core::GlobalVariableEntry> RunRequest::globals() const noexcept { return storage_->globals; }
 const RunTrigger& RunRequest::trigger() const noexcept { return storage_->trigger; }
 const std::optional<core::CorrelationId>& RunRequest::correlation() const noexcept { return storage_->correlation; }
 std::optional<DebugStatePolicy> RunRequest::debug_state() const noexcept { return storage_->debug_state; }
@@ -146,7 +157,7 @@ Result<NodeResult> NodeResult::create(const NodeResultData& data)
         return failure;
     };
     if (data.identity.run.run != data.identity.invocation.workflow_run || !known(data.status, ExecutionStatus::TimedOut)
-        || !known(data.judgement, Judgement::NG) || data.elapsed.count() < 0) {
+        || !known(data.judgement, Judgement::NG) || !core::valid_execution_timing(data.elapsed, data.timings)) {
         return fail("Result identity, status, judgement or elapsed time is inconsistent.");
     }
     if (data.status == ExecutionStatus::Pending || data.status == ExecutionStatus::Running || data.status == ExecutionStatus::Skipped) {
@@ -158,7 +169,7 @@ Result<NodeResult> NodeResult::create(const NodeResultData& data)
     }
     bool has_error = false;
     for (const auto& diagnostic : data.diagnostics) {
-        if (!valid_diagnostic(diagnostic)) { return fail("Result diagnostic must have a recognized severity and UTF-8 explanation."); }
+        if (!core::is_valid_diagnostic(diagnostic)) { return fail("Result contains an invalid diagnostic."); }
         has_error = has_error || diagnostic.severity == core::Severity::Error;
     }
     std::set<core::ControlOutputId> selected;
@@ -171,7 +182,7 @@ Result<NodeResult> NodeResult::create(const NodeResultData& data)
         if (const auto* available = std::get_if<DataValue>(&slot.content)) {
             if (!success || available->type() != slot.type) { return fail("Only successful calls publish available outputs, with exact types."); }
         } else if (const auto* absent = std::get_if<NotProduced>(&slot.content)) {
-            if (!known(absent->reason, OutputAbsenceReason::TimedOut)
+            if (!known(absent->reason, OutputAbsenceReason::ConditionNotMet)
                 || (success && (absent->reason == OutputAbsenceReason::Failed || absent->reason == OutputAbsenceReason::Cancelled || absent->reason == OutputAbsenceReason::TimedOut))
                 || (!success && ((data.status == ExecutionStatus::Failed && absent->reason != OutputAbsenceReason::Failed)
                     || (data.status == ExecutionStatus::Cancelled && absent->reason != OutputAbsenceReason::Cancelled)
@@ -180,7 +191,7 @@ Result<NodeResult> NodeResult::create(const NodeResultData& data)
             }
         } else {
             const auto& diagnostic = std::get<InvalidOutput>(slot.content).diagnostic;
-            if (success || !valid_diagnostic(diagnostic) || diagnostic.severity != core::Severity::Error) {
+            if (success || !core::is_valid_diagnostic(diagnostic) || diagnostic.severity != core::Severity::Error) {
                 return fail("Invalid outputs require error diagnostics and cannot form a successful call result.");
             }
             has_error = true;

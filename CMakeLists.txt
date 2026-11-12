@@ -76,6 +76,7 @@ endif()
 # ------------------------------------------------------------------
 # 4. 核心库与无 GUI 测试
 # ------------------------------------------------------------------
+find_package(Threads REQUIRED)
 add_subdirectory(source/core)
 add_subdirectory(source/workflow)
 

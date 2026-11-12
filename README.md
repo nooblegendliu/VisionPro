@@ -11,11 +11,11 @@ VisionPro 是一个采用 C++20、Qt、OpenCV 和 CMake 的桌面视觉算法软
 
 ## 当前状态
 
-S1 基础模型与契约设计已完成文档审查；S2.1–S2.7 已完成验证，S2 整体验收通过，下一阶段为 S3 无 GUI 执行与配置往返。
+S1 文档审查和 S2 核心模型与绑定验收已通过。S3.4 已接通无 GUI 的分叉、汇合与基本分支，下一阶段为 S3.5 状态服务与单节点调用。
 
 - 已建立初始目录、开发规则及基础设计文档。
 - 已确定 C++20、Qt、OpenCV、CMake 技术栈。
-- 已建立 `visionpro_core` 静态库，包含身份、配置/运行值、工具元数据、只读图像与裁剪、几何/ROI/掩膜、资源与状态定义及局部校验、结构化诊断和 CTest；尚无执行器或可运行应用。
+- 已建立 `visionpro_core` 静态库，包含身份、配置/运行值、工具元数据、只读图像与裁剪、几何/ROI/掩膜、资源与状态定义及局部校验、结构化诊断和 CTest。
 - 已建立 `visionpro_workflow`，包含方案/流程/节点、控制/绑定/包含关系、Group 公开数据与控制映射、配置快照、单次请求、结果记录及复制重映射。
 - C01–C10 为 S1 审查通过的设计基线，具体能力按后续阶段实现和验收。
 - 2026-10-27 的逐项结论见 [S1 文档审查记录](docs/development.md#81-s1-文档审查记录)。
@@ -26,7 +26,11 @@ S1 基础模型与契约设计已完成文档审查；S2.1–S2.7 已完成验�
 - S2.5 新增 `validate_solution`，检查流程图、公开边界、类型化绑定及嵌套领域引用，返回独立的派生依赖索引；2026-11-09 完成 Debug/Release 构建，各 39/39 项 CTest 通过。见 [S2.5 验收记录](docs/development.md#88-s25-实现与验证记录)。
 - S2.6 新增会话内 `ResultStore` 和 `BindingResolver`，按精确调用身份解析已有结果、作用域公开输入、常量和只读资源/全局快照，区分成功、等待、不可用和失败；2026-11-09 完成 Debug/Release 构建，各 44/44 项 CTest 通过。见 [S2.6 验收记录](docs/development.md#89-s26-实现与验证记录)。
 - S2.7 已收敛 RunRequest/RunHandle、实例工厂及 InvocationOperation，补齐固定调用投影和组合验证；2026-11-09 完成 Debug/Release 全量重建，各 48/48 项 CTest 通过。14 项 S2 必需子范围全部通过，见 [S2 整体验收与 S3 交接清单](docs/development.md#810-s27-与-s2-整体验收记录)。
-- 本文列出的后续能力均属于规划。
+- 2026-11-11 完成 Manual 复核及 [S3.1–S3.9 实施计划](docs/development.md#6-第三阶段实施与验证)，覆盖内存执行、生命周期、配置往返及无 GUI 入口。
+- S3.1 的执行计划固定工具配置和请求输入，并复用同一范围解析绑定。逐输出可用性、节点状态规格、外部诊断、耗时和异步通知已通过模拟验证。Windows x64 Release 的 55 项 CTest 全部通过。见 [S3.1 实现与验证](docs/development.md#812-s31-实现与验证记录)。
+- S3.2 的 `WorkflowEngine` 支持按流程受理、同步顺序调用、FailFast 和本轮结果查询。不同流程独立受理，由同一工作线程按受理顺序执行。Windows x64 Release 的 59 项 CTest 全部通过。见 [S3.2 实现与验证](docs/development.md#813-s32-实现与验证记录)。
+- S3.3 的执行器通过通知推进异步操作，在同一仲裁点处理取消和结果提交。逻辑终态后仍持有流程槽位，实际退出并清理后归还。Windows x64 Release 的 62 项 CTest 全部通过。见 [S3.3 实现与验证](docs/development.md#814-s33-实现与验证记录)。
+- S3.4 的执行器按控制边到达与关闭调度无环流程，支持 AllActivated 汇合、命名出口零选与多选，并按本轮绑定就绪推进兄弟分路。见 [S3.4 实现与验证](docs/development.md#815-s34-实现与验证记录)。
 
 ## 设计基线与当前重点
 
@@ -48,6 +52,9 @@ S2 将这些契约落实为可构建、可测试的无 GUI 核心库，完成方
 它既包含基础类型，也包含实际的校验与取值逻辑；节点调度、取消和配置读写在 S3 接入。
 具体交付和退出条件见 [S2 范围](docs/requirements.md#4-第二阶段核心模型与绑定验证)，
 实施顺序和首批任务见 [S2 实施与验证](docs/development.md#5-第二阶段实施与验证)。
+
+S3.5 将接入节点状态域、初始化和重置，以及独立单节点调用。S3 的任务依赖、26 项验收子范围及退出条件见
+[S3 实施与验证](docs/development.md#6-第三阶段实施与验证)。
 
 ## 流程与数据模型
 
@@ -86,16 +93,17 @@ GUI 和无 GUI 入口共用运行请求及结果接口，第三方 SDK 的名称
 
 核心流程模型、运行调度和方案契约由 VisionPro 独立定义。
 逻辑上划分应用层、核心层与能力层，具体模块映射见 [architecture.md](docs/architecture.md)。
-初期规划使用静态工具注册表，动态插件后置。
+首批工具按类型静态注册，动态插件后置。
 
-S2 已验证 Windows x64、MSVC 19.51、CMake/CTest 4.4.0；完整版本及当前复现步骤见 [开发说明](docs/development.md#37-s27-构建与测试命令)。
+S3.4 在 Windows x64、MSVC 19.51、CMake/CTest 4.4.0 环境完成 Release 验证，66 项测试全部通过。
+复现步骤见 [S3.4 Release 构建与测试](docs/development.md#311-s34-release-构建与测试命令)。
 Qt、OpenCV 的版本和获取方式在相应模块接入前确定。
 
 ## 开发阶段
 
 1. 基础模型与契约设计：文档审查通过。
 2. 核心模型与绑定验证：S2.1–S2.7 完成，Debug/Release 及全部 S2 必需子范围通过；工具调用使用可控替身，尚无生产执行服务。
-3. 无 GUI 顺序、分叉、汇合、基本分支与配置往返验证。
+3. 无 GUI 执行与配置往返验证。S3.1–S3.4 已完成，S3.5–S3.9 待实现。
 4. 无 GUI 视觉闭环。
 5. 基础可视化界面。
 6. 完整循环、多流程并行、触发、共享服务及工业接入。
@@ -124,8 +132,8 @@ Qt、OpenCV 的版本和获取方式在相应模块接入前确定。
 
 当前 [CMake 配置](CMakeLists.txt) 构建无 GUI 的 `visionpro_core`、`visionpro_workflow` 和测试程序，
 不需要 Qt、OpenCV 或厂商 SDK。UUID 生成后端当前使用 Windows CNG，其他平台后端尚未实现。
-Debug、Release 的当前命令见 [development.md §3.6](docs/development.md#36-s26-构建与测试命令)。
-尚无应用启动入口。
+当前 Release 命令见 [development.md §3.11](docs/development.md#311-s34-release-构建与测试命令)。
+库入口可执行内存方案，见 [WorkflowEngine 分路调度契约](docs/data-model.md#48-s34-分叉汇合与基本分支)。命令行入口在 S3.9 接入。
 
 ## 文档导航
 

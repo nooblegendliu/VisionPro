@@ -40,7 +40,7 @@ struct GlobalReference {
 using BindingTarget = std::variant<core::InputId, core::ParameterId>;
 using BindingSource = std::variant<core::ConfigValue, OutputReference, ScopedInputReference,
     core::ResourceReference, GlobalReference>;
-enum class MissingReason { NotSelected, Disabled };
+enum class MissingReason { NotSelected, Disabled, ToolDidNotProduce, ConditionNotMet };
 struct AvailabilityPolicy {
     // Empty means require an available value. Pending/errors never become absence.
     std::vector<MissingReason> accepted_absence;

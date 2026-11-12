@@ -1,5 +1,8 @@
 #pragma once
 
+#include <visionpro/core/state.hpp>
+#include <visionpro/core/timing.hpp>
+#include <visionpro/core/tool_output.hpp>
 #include <visionpro/workflow/snapshot.hpp>
 
 #include <chrono>
@@ -25,8 +28,8 @@ struct RunInput { core::InputId id; core::DataValue value; };
 enum class InputOrigin { Provided, Default };
 struct FixedRunInput { core::InputId id; core::DataValue value; InputOrigin origin; };
 
-// A prepared request owns its snapshot and inputs. It is not admission, a run ID,
-// an execution plan or permission to access active state/resources.
+// A prepared request owns its snapshot, inputs and supplied global read values.
+// The run backend assigns an identity upon admission.
 class RunRequest final {
 public:
     RunRequest(const RunRequest&) noexcept = default;
@@ -36,11 +39,14 @@ public:
     [[nodiscard]] static core::Result<RunRequest> create(const ConfigSnapshot& snapshot,
         RunTarget target, const std::vector<RunInput>& inputs, RunTrigger trigger,
         std::optional<core::CorrelationId> correlation = std::nullopt,
-        std::optional<DebugStatePolicy> debug_state = std::nullopt);
+        std::optional<DebugStatePolicy> debug_state = std::nullopt,
+        std::span<const core::GlobalVariableEntry> globals = {});
     [[nodiscard]] const ConfigSnapshot& snapshot() const noexcept;
     [[nodiscard]] const RunTarget& target() const noexcept;
     [[nodiscard]] std::span<const FixedRunInput> inputs() const noexcept;
     [[nodiscard]] const FixedRunInput* input(const core::InputId& id) const noexcept;
+    // The read snapshot contains only the explicitly supplied current values.
+    [[nodiscard]] std::span<const core::GlobalVariableEntry> globals() const noexcept;
     [[nodiscard]] const RunTrigger& trigger() const noexcept;
     [[nodiscard]] const std::optional<core::CorrelationId>& correlation() const noexcept;
     [[nodiscard]] std::optional<DebugStatePolicy> debug_state() const noexcept;
@@ -71,10 +77,10 @@ struct OutputAddress {
 
 enum class ExecutionStatus { Pending, Running, Succeeded, Failed, Skipped, Cancelled, TimedOut };
 enum class Judgement { NotEvaluated, OK, NG };
-enum class OutputAbsenceReason { NotSelected, Disabled, ToolDidNotProduce, Failed, Cancelled, TimedOut };
-struct NotProduced { OutputAbsenceReason reason; };
-struct InvalidOutput { core::Diagnostic diagnostic; };
-using OutputContent = std::variant<core::DataValue, NotProduced, InvalidOutput>;
+using core::OutputAbsenceReason;
+using core::NotProduced;
+using core::InvalidOutput;
+using core::OutputContent;
 struct OutputSlot { core::OutputId id; core::DataType type; OutputContent content; };
 struct NodeResultData {
     ResultIdentity identity;
@@ -82,12 +88,13 @@ struct NodeResultData {
     Judgement judgement;
     std::vector<OutputSlot> outputs;
     std::vector<core::Diagnostic> diagnostics;
-    std::chrono::nanoseconds elapsed{0};
-    std::vector<core::ControlOutputId> selected_control_outputs;
+    std::optional<std::chrono::nanoseconds> elapsed{};
+    std::vector<core::ControlOutputId> selected_control_outputs{};
+    std::vector<core::TimingMeasurement> timings{};
 };
 
-// A detached terminal-call record, not a committed result. Declared output Schema,
-// active invocation and once-only publication checks belong to later services.
+// A detached terminal-call record. The result store checks declared output
+// Schema, and the run backend controls publication.
 class NodeResult final {
 public:
     NodeResult(const NodeResult&) noexcept = default;

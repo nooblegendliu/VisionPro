@@ -3,6 +3,7 @@
 #include <visionpro/core/value.hpp>
 #include <visionpro/core/resource.hpp>
 #include <visionpro/core/state.hpp>
+#include <visionpro/core/tool_output.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -67,6 +68,9 @@ struct OutputDescriptor {
     std::string display_name;
     DataType type;
     ValueSemantics semantics;
+    bool required{true};
+    // A successful non-required output still reports its declared omission explicitly.
+    std::vector<OutputAbsenceReason> allowed_absence{};
 };
 
 struct ControlOutputDescriptor { ControlOutputId id; std::string display_name; };
@@ -94,6 +98,25 @@ struct ToolExecutionPolicy {
     bool operator==(const ToolExecutionPolicy&) const = default;
 };
 
+struct StatePolicyChoice {
+    EnumMemberId choice;
+    StateScope scope;
+    StateResetPolicy reset;
+    bool operator==(const StatePolicyChoice&) const = default;
+};
+struct StatePolicyParameter {
+    ParameterId id;
+    std::vector<StatePolicyChoice> choices;
+    bool operator==(const StatePolicyParameter&) const = default;
+};
+// Unmapped fields keep their values from the tool's state definition.
+// The referenced parameters are validated and fixed before invocation.
+struct StateParameterProjection {
+    std::optional<ParameterId> initial_value;
+    std::optional<StatePolicyParameter> policy;
+    bool operator==(const StateParameterProjection&) const = default;
+};
+
 struct ToolDescriptor {
     ToolTypeId id;
     std::string display_name;
@@ -108,6 +131,7 @@ struct ToolDescriptor {
     std::optional<RegionCapabilities> region_capabilities;
     std::vector<PixelFormat> image_formats;
     ToolExecutionPolicy execution;
+    StateParameterProjection state_parameters;
 };
 
 struct SchemaSupport {
@@ -120,6 +144,7 @@ struct SchemaSupport {
 [[nodiscard]] Result<std::monostate> validate_descriptor(const ToolDescriptor& descriptor);
 [[nodiscard]] Result<std::monostate> validate_input_descriptor(const InputDescriptor& descriptor);
 [[nodiscard]] Result<std::monostate> validate_output_descriptor(const OutputDescriptor& descriptor);
+[[nodiscard]] bool allows_output_absence(const OutputDescriptor& descriptor, OutputAbsenceReason reason);
 [[nodiscard]] Result<std::monostate> validate_image_support(const ToolDescriptor& descriptor, const ImageHandle& image);
 [[nodiscard]] Result<std::monostate> validate_schema_support(
     const ToolDescriptor& descriptor, const SchemaSupport& support);

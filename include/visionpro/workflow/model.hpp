@@ -84,6 +84,8 @@ struct Solution {
     std::optional<core::NodeId> parent = std::nullopt);
 [[nodiscard]] core::Result<std::vector<core::NodeId>> descendants(const Workflow& workflow, const core::NodeId& group);
 [[nodiscard]] core::Result<std::monostate> validate_public_interface(const PublicInterface& interface);
+// Solution envelope, stable identities and the shared definition catalogs.
+[[nodiscard]] core::Result<std::monostate> validate_global_invariants(const Solution& solution);
 // Local shape, identity and containment checks only. Not proof of executability:
 // references, boundary/type compatibility and control/data cycles are checked in S2.5.
 [[nodiscard]] core::Result<std::monostate> validate_model_shape(const Solution& solution);

@@ -12,6 +12,8 @@ add_library(visionpro_core STATIC
     value.cpp
     tool_descriptor.cpp
     tool_execution.cpp
+    tool_registry.cpp
+    timing.cpp
     image.cpp
     geometry.cpp
     resource.cpp

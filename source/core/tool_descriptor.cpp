@@ -327,6 +327,59 @@ Check binding_check(const Target& target, BindingSourceKind source, const DataTy
     return std::monostate{};
 }
 
+Check validate_state_parameters(const ToolDescriptor& tool)
+{
+    const auto& projection = tool.state_parameters;
+    if (!projection.initial_value && !projection.policy) { return std::monostate{}; }
+    const auto fail = [](ParameterId id, std::string message) {
+        DiagnosticLocation where;
+        where.parameter = id;
+        return error(ErrorCode::InvalidDescriptor, std::move(message), std::move(where));
+    };
+    if (!tool.state) {
+        const auto id = projection.initial_value ? *projection.initial_value : projection.policy->id;
+        return fail(id, "A state parameter requires a declared state definition.");
+    }
+    const auto fixed = [&](const ParameterId& id) -> const ParameterDescriptor* {
+        const auto found = std::ranges::find(tool.parameters, id, &ParameterDescriptor::id);
+        return found != tool.parameters.end() && found->binding.time == BindingTime::SnapshotBuild ? &*found : nullptr;
+    };
+    if (projection.initial_value) {
+        const auto* initial = fixed(*projection.initial_value);
+        if (!initial || initial->type != tool.state->schema) {
+            return fail(*projection.initial_value, "State initial value requires a SnapshotBuild parameter of the exact state type.");
+        }
+    }
+    if (!projection.policy) { return std::monostate{}; }
+    const auto& policy = *projection.policy;
+    const auto* parameter = fixed(policy.id);
+    if (!parameter || parameter->type.kind() != TypeKind::Enum) {
+        return fail(policy.id, "State policy requires a SnapshotBuild Enum parameter.");
+    }
+    const auto& allowed = parameter->constraints.allowed_values;
+    std::set<EnumMemberId> unmapped;
+    if (allowed.empty()) {
+        for (const auto& member : parameter->type.enum_members()) { unmapped.insert(member.id); }
+    } else {
+        for (const auto& value : allowed) { unmapped.insert(*value.as_enum()); }
+    }
+    for (const auto& choice : policy.choices) {
+        if (unmapped.erase(choice.choice) == 0) {
+            return fail(policy.id, "State policy mappings must name unique selectable Enum members.");
+        }
+        auto effective = *tool.state;
+        effective.scope = choice.scope;
+        effective.reset = choice.reset;
+        if (std::holds_alternative<Diagnostic>(validate_node_state_definition(effective))) {
+            return fail(policy.id, "A mapped scope or reset policy is incompatible with the declared state definition.");
+        }
+    }
+    if (!unmapped.empty()) {
+        return fail(policy.id, "State policy requires a mapping for every selectable Enum member.");
+    }
+    return std::monostate{};
+}
+
 } // namespace
 
 Result<std::monostate> validate_input_descriptor(const InputDescriptor& descriptor)
@@ -340,7 +393,25 @@ Result<std::monostate> validate_output_descriptor(const OutputDescriptor& descri
             return checked;
         }
     }
+    DiagnosticLocation location;
+    location.output = descriptor.id;
+    const bool may_omit = !descriptor.allowed_absence.empty();
+    if (descriptor.required == may_omit) {
+        return error(ErrorCode::InvalidDescriptor, "Required outputs cannot allow omissions; non-required outputs must declare a reason.", location);
+    }
+    std::set<OutputAbsenceReason> reasons;
+    for (const auto reason : descriptor.allowed_absence) {
+        if (!is_tool_output_absence(reason) || !reasons.insert(reason).second) {
+            return error(ErrorCode::InvalidDescriptor, "Output omission reasons must be recognized, unique tool omissions.", location);
+        }
+    }
     return std::monostate{};
+}
+
+bool allows_output_absence(const OutputDescriptor& descriptor, OutputAbsenceReason reason)
+{
+    return !descriptor.required && is_tool_output_absence(reason)
+        && std::ranges::find(descriptor.allowed_absence, reason) != descriptor.allowed_absence.end();
 }
 
 Result<std::monostate> validate_descriptor(const ToolDescriptor& descriptor)
@@ -422,6 +493,9 @@ Result<std::monostate> validate_descriptor(const ToolDescriptor& descriptor)
         return std::monostate{};
     };
     if (auto checked = check_targets(descriptor.parameters); std::holds_alternative<Diagnostic>(checked)) { return checked; }
+    if (auto checked = validate_state_parameters(descriptor); const auto* failure = std::get_if<Diagnostic>(&checked)) {
+        return contextualize(*failure);
+    }
     if (auto checked = check_targets(descriptor.inputs); std::holds_alternative<Diagnostic>(checked)) { return checked; }
     std::set<OutputId> outputs;
     for (const auto& output : descriptor.outputs) {
@@ -430,11 +504,9 @@ Result<std::monostate> validate_descriptor(const ToolDescriptor& descriptor)
         if (!outputs.insert(output.id).second) {
             return error(ErrorCode::InvalidDescriptor, "Duplicate data output identity.", output_location);
         }
-        for (auto checked : {label(output.display_name), semantics(output.semantics)}) {
-            if (auto* failure = std::get_if<Diagnostic>(&checked)) {
-                failure->location = output_location;
-                return checked;
-            }
+        if (auto checked = validate_output_descriptor(output); auto* failure = std::get_if<Diagnostic>(&checked)) {
+            failure->location = output_location;
+            return checked;
         }
         if (auto checked = consistent_schema(output.type, definitions, output_location); std::holds_alternative<Diagnostic>(checked)) {
             return checked;

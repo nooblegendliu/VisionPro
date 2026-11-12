@@ -3,12 +3,16 @@
 #include <visionpro/core/runtime_id_factory.hpp>
 #include <visionpro/core/schema_id_factory.hpp>
 
+#include <atomic>
 #include <exception>
 #include <functional>
 #include <iostream>
+#include <latch>
 #include <stdexcept>
 #include <string_view>
+#include <thread>
 #include <type_traits>
+#include <utility>
 
 namespace {
 using namespace visionpro::core;
@@ -95,6 +99,9 @@ Factory sync_factory()
 struct Driver {
     std::optional<InvocationCompletion> completion;
     std::weak_ptr<const InvocationContext> context;
+    std::weak_ptr<InvocationControl> control;
+    std::function<void()> on_cancel;
+    std::function<void(const InvocationContext&)> on_inline_exit;
     int cancellation_calls{0};
     bool cancellation_throws{false};
 };
@@ -103,6 +110,7 @@ struct Control final : InvocationControl {
     void request_cancel() override
     {
         ++driver->cancellation_calls;
+        if (driver->on_cancel) { driver->on_cancel(); }
         if (driver->cancellation_throws) { throw std::runtime_error("cancel failure"); }
     }
     std::shared_ptr<Driver> driver;
@@ -119,9 +127,15 @@ struct AsyncInstance final : ToolInstance {
         auto control = std::make_shared<Control>(driver);
         take(completion.register_control(control));
         driver->completion = completion; driver->context = context;
+        driver->control = control;
         if (behavior == 2) { throw std::runtime_error("after launch"); }
         if (behavior == 3) { return artificial_error(); }
         if (behavior == 5) { take(completion.complete(completed(*context))); throw std::runtime_error("after provisional completion"); }
+        if (auto probe = std::exchange(driver->on_inline_exit, {})) {
+            take(completion.complete(completed(*context)));
+            take(completion.mark_exited());
+            probe(*context);
+        }
         return InvocationStart{AsynchronousInvocation{control}};
     }
 };
@@ -131,6 +145,81 @@ struct ProbeLease final : ResourceLease {
     ~ProbeLease() override { if (destroyed) { destroyed(); } }
     std::function<void()> destroyed;
 };
+
+struct ExitProbe final : InvocationWakeup {
+    void signal(const ToolInvocationIdentity&, InvocationWaitTarget target) noexcept override
+    {
+        if (target == InvocationWaitTarget::PhysicalExit) { ++exits; }
+    }
+    std::atomic<int> exits{0};
+};
+
+struct ReleaseLatch {
+    std::latch& gate;
+    ~ReleaseLatch() { gate.count_down(); }
+};
+
+void exit_during_cancel(const ToolExecutionConfiguration& configuration, const SchemaId& slot,
+    const ResourceReference& resource, bool reentrant)
+{
+    auto driver = std::make_shared<Driver>();
+    std::weak_ptr<const ResourceLease> weak_lease;
+    std::weak_ptr<ToolInstance> weak_instance;
+    const auto [operation, result] = [&] {
+        const auto lease = std::make_shared<ProbeLease>(resource);
+        weak_lease = lease;
+        auto values = context_data(configuration);
+        values.resources = {{slot, lease}};
+        const auto context = take(InvocationContext::create(values));
+        const auto instance = std::make_shared<AsyncInstance>(configuration, driver);
+        weak_instance = instance;
+        return std::pair{take(InvocationOperation::start(instance, context)), completed(context)};
+    }();
+    const auto token = *driver->completion;
+    const auto wakeup = std::make_shared<ExitProbe>();
+    take(operation.notify_when(InvocationWaitTarget::PhysicalExit, wakeup));
+
+    const auto report_exit = [&] {
+        take(token.complete(result));
+        take(token.mark_exited());
+        check(operation.poll().completion.has_value() && !operation.physically_exited() && wakeup->exits == 0,
+            "a backend exit reported during cancellation does not publish physical exit");
+        check(!driver->context.expired() && !weak_lease.expired() && !weak_instance.expired() && !driver->control.expired(),
+            "the operation retains the context, instance, control and lease until cancellation returns");
+        check(take(operation.wait_for(InvocationWaitTarget::PhysicalExit, std::chrono::milliseconds{0})).outcome
+                == InvocationWaitOutcome::TimedOut,
+            "physical wait remains pending while the cancellation callback owns access");
+        check(take(operation.request_cancel()) == CancellationRequest::CleanupInProgress,
+            "a reported exit defers cleanup without replaying cancellation");
+        rejects(token.mark_exited(), ErrorCode::InvalidState, "duplicate exit is rejected even during deferred cleanup");
+        rejects(token.complete(result), ErrorCode::InvalidState, "duplicate completion cannot overwrite the result during deferred cleanup");
+    };
+    if (reentrant) {
+        driver->on_cancel = report_exit;
+        driver->cancellation_throws = true;
+        rejects(operation.request_cancel(), ErrorCode::ExecutionBoundaryFailure,
+            "a reentrant cancellation can report exit and still propagate a typed callback failure");
+    } else {
+        std::latch entered{1}, allow_return{1};
+        driver->on_cancel = [&] {
+            entered.count_down();
+            allow_return.wait();
+        };
+        Result<CancellationRequest> disposition;
+        {
+            std::jthread caller([&] { disposition = operation.request_cancel(); });
+            const ReleaseLatch release{allow_return};
+            entered.wait();
+            report_exit();
+        }
+        check(take(disposition) == CancellationRequest::Requested, "concurrent cancellation returns after deferred cleanup");
+    }
+    check(operation.physically_exited() && wakeup->exits == 1 && driver->cancellation_calls == 1,
+        "deferred physical exit is published exactly once when cancellation returns");
+    check(driver->context.expired() && weak_lease.expired() && weak_instance.expired() && driver->control.expired(),
+        "physical exit releases all invocation ownership");
+    rejects(token.complete(result), ErrorCode::InvalidState, "late completion stays rejected after deferred exit");
+}
 
 void tool_execution()
 {
@@ -183,9 +272,11 @@ void tool_execution()
     const auto progress = operation.poll();
     check(progress.physically_exited && progress.completion && progress.completion->status == ToolCompletionStatus::Succeeded,
         "synchronous return is terminal and physically exited");
-    check(progress.completion && *progress.completion->outputs[0].value.as_int64() == 11, "tool sees its own fixed configuration and invocation values");
+    check(progress.completion && *std::get<DataValue>(progress.completion->outputs[0].content).as_int64() == 11,
+        "tool sees its own fixed configuration and invocation values");
     auto second_operation = take(InvocationOperation::start(second, take(InvocationContext::create(context_data(other_configuration, 2)))));
-    check(*second_operation.poll().completion->outputs[0].value.as_int64() == 22, "same-type nodes do not share editable parameter state");
+    check(*std::get<DataValue>(second_operation.poll().completion->outputs[0].content).as_int64() == 22,
+        "same-type nodes do not share editable parameter state");
     check(std::dynamic_pointer_cast<SyncInstance>(first)->last_context.expired(), "synchronous exit releases operation-owned invocation context immediately");
     check(take(operation.wait_for(InvocationWaitTarget::PhysicalExit, std::chrono::milliseconds{0})).outcome == InvocationWaitOutcome::Reached,
         "completed synchronous physical wait returns immediately");
@@ -269,8 +360,9 @@ void tool_execution()
     auto wrong_identity = terminal; wrong_identity.identity.attempt = count<AttemptId>(2);
     rejects(driver->completion->complete(wrong_identity), ErrorCode::InvalidValue, "callback must match the exact attempt identity");
     take(driver->completion->complete(terminal));
-    terminal.outputs[0].value = DataValue::integer(999);
-    check(*async_operation.poll().completion->outputs[0].value.as_int64() == 11, "completion detaches caller-owned output containers");
+    terminal.outputs[0].content = DataValue::integer(999);
+    check(*std::get<DataValue>(async_operation.poll().completion->outputs[0].content).as_int64() == 11,
+        "completion detaches caller-owned output containers");
     check(take(async_operation.wait_for(InvocationWaitTarget::LogicalCompletion, std::chrono::milliseconds{0})).outcome == InvocationWaitOutcome::Reached
         && take(async_operation.wait_for(InvocationWaitTarget::PhysicalExit, std::chrono::milliseconds{0})).outcome == InvocationWaitOutcome::TimedOut,
         "logical completion never claims physical cleanup has finished");
@@ -299,6 +391,19 @@ void tool_execution()
             check(failed.poll().physically_exited, "partially started backend can explicitly finish cleanup");
         } else { check(failed.poll().physically_exited, "failure before control registration confirms that no asynchronous activity started"); }
     }
+    auto inline_driver = std::make_shared<Driver>();
+    auto inline_instance = std::make_shared<AsyncInstance>(async_configuration, inline_driver);
+    inline_driver->on_inline_exit = [&](const InvocationContext& context) {
+        auto overlap = InvocationOperation::start(inline_instance, context);
+        rejects(overlap, ErrorCode::InvalidState, "inline exit keeps a serialized instance occupied until begin returns");
+        if (std::holds_alternative<InvocationOperation>(overlap)) {
+            take(inline_driver->completion->complete(completed(context)));
+            take(inline_driver->completion->mark_exited());
+        }
+    };
+    const auto inline_operation = take(InvocationOperation::start(inline_instance, async_context));
+    check(inline_operation.physically_exited() && inline_operation.poll().completion->status == ToolCompletionStatus::Succeeded,
+        "an inline completion and exit become observable at the end of startup");
     auto cancelling = std::make_shared<Driver>(); cancelling->cancellation_throws = true;
     const auto cancel_failure = take(InvocationOperation::start(std::make_shared<AsyncInstance>(async_configuration, cancelling), async_context));
     rejects(cancel_failure.request_cancel(), ErrorCode::ExecutionBoundaryFailure, "cancellation exception cannot escape the controlled boundary");
@@ -346,6 +451,8 @@ void tool_execution()
     take(leased_driver->completion->mark_exited());
     check(destructor_observed && weak_lease.expired() && weak_instance.expired() && leased_operation->poll().physically_exited,
         "physical exit publishes only after owned lease and instance cleanup");
+    exit_during_cancel(leased_configuration, slot, resource, false);
+    exit_during_cancel(leased_configuration, slot, resource, true);
 
     auto detached_driver = std::make_shared<Driver>();
     std::weak_ptr<ToolInstance> detached_instance;

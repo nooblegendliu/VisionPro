@@ -1,5 +1,6 @@
 #pragma once
 
+#include <visionpro/workflow/resolver.hpp>
 #include <visionpro/workflow/run.hpp>
 
 namespace visionpro::workflow {
@@ -8,18 +9,43 @@ enum class RunWaitTarget { Completion, Quiescence };
 enum class RunWaitOutcome { Satisfied, DeadlineExpired };
 enum class RunCancelDisposition { Requested, AlreadyRequested, AlreadyCompleted };
 
+enum class NodeSkipReason { Disabled, UpstreamClosed, FailFast, RunCancelled, RunTimedOut, NotSelected };
+struct RunBindingTrace {
+    BindingTarget target;
+    std::vector<SourceTrace> sources;
+};
+struct RunNodeProgress {
+    core::NodeId node;
+    ExecutionStatus status{ExecutionStatus::Pending};
+    // Only started calls have a key that can address a NodeResult.
+    std::optional<core::InvocationKey> invocation{};
+    std::optional<NodeSkipReason> skip_reason{};
+    std::vector<RunBindingTrace> bindings{};
+};
+
+enum class ControlLinkStatus { Pending, Arrived, Closed };
+enum class ControlCloseReason { NotSelected, Disabled, Failed, Cancelled, TimedOut };
+// Runtime state of one control link in the run's root scope.
+struct RunControlLinkProgress {
+    core::ControlLinkId link;
+    ControlLinkStatus status{ControlLinkStatus::Pending};
+    std::optional<ControlCloseReason> close_reason{};
+};
+
 // A logical terminal status does not imply that callbacks, leases or workers
 // have exited. Pending is an accepted run which has not started yet.
 struct RunProgress {
     ExecutionStatus status{ExecutionStatus::Pending};
     bool quiescent{false};
     std::vector<core::Diagnostic> diagnostics;
+    std::vector<RunNodeProgress> nodes{}; // In planned control order when reported by the backend.
+    std::vector<RunControlLinkProgress> control_links{};
 };
 struct RunWaitResult { RunWaitOutcome outcome; RunProgress progress; };
 
 // Backend extension point, not an engine or an admission service. The backend
 // must keep its own owning reference until quiescence, even if all clients drop
-// their handles. It serializes state transitions and fences callbacks in S3.
+// their handles. It serializes state transitions and any callback delivery.
 // Implementations use condition/event waits (never a polling loop), permit
 // concurrent wait/cancel/query, and keep the prepared request fixed.
 class RunControl {
@@ -69,7 +95,7 @@ struct RunBusy { RunIdentity active; };
 struct RunRejected { core::Diagnostic diagnostic; };
 using RunSubmission = std::variant<RunHandle, RunBusy, RunRejected>;
 
-// S3 implements atomic admission. Busy/rejection must not modify active inputs
+// Busy/rejection must not modify active inputs
 // or retain the new request as an implicit future run. Accepted returns the exact
 // prepared request with a newly allocated run ID. Implementations translate
 // unexpected exceptions before leaving this boundary; no throwing-after-accept.

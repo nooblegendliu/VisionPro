@@ -54,23 +54,68 @@ Result<ConfigValue> fixed_parameter(const ParameterDescriptor& parameter, const 
 }
 ToolInvocationIdentity projected_identity(const ResultIdentity& result)
 { return {result.run.snapshot.session, result.run.snapshot.snapshot, result.invocation, result.attempt}; }
+
+Check validate_lease(const ToolResourceBinding& binding, const std::shared_ptr<const ResourceLease>& lease)
+{
+    DiagnosticLocation location;
+    location.resource = binding.resource.id;
+    if (!lease) {
+        return Diagnostic{ErrorCode::InvalidResource, Severity::Error, location,
+            "An invocation lease requires non-null ownership."};
+    }
+    if (lease->reference() != binding.resource) {
+        return Diagnostic{ErrorCode::ResourceVersionMismatch, Severity::Error, location,
+            "Invocation lease does not match the fixed resource identity, kind and revision."};
+    }
+    return std::monostate{};
+}
+
 Check validate_leases(const ToolExecutionConfiguration& configuration,
     std::span<const InvocationResourceLease> leases)
 {
     std::set<SchemaId> slots;
     for (const auto& bound : leases) {
         const auto configured = std::ranges::find(configuration.data().resources, bound.slot, &ToolResourceBinding::slot);
-        if (!slots.insert(bound.slot).second || !bound.lease || configured == configuration.data().resources.end()) {
-            return Diagnostic{ErrorCode::InvalidResource, Severity::Error, {}, "Invocation leases require unique configured slots and non-null ownership."};
+        if (!slots.insert(bound.slot).second || configured == configuration.data().resources.end()) {
+            return Diagnostic{ErrorCode::InvalidResource, Severity::Error, {}, "Invocation leases require unique configured slots."};
         }
-        if (bound.lease->reference() != configured->resource) {
-            return Diagnostic{ErrorCode::ResourceVersionMismatch, Severity::Error, {}, "Invocation lease does not match the fixed resource identity, kind and revision."};
-        }
+        auto checked = validate_lease(*configured, bound.lease);
+        if (auto* failure = std::get_if<Diagnostic>(&checked)) { return std::move(*failure); }
     }
     if (slots.size() != configuration.data().resources.size()) {
         return Diagnostic{ErrorCode::MissingRequiredValue, Severity::Error, {}, "Each configured resource slot requires its explicit owning lease."};
     }
     return std::monostate{};
+}
+
+Result<std::shared_ptr<const ResourceLease>> acquire_lease(InvocationResourceProvider& provider,
+    const ToolExecutionConfiguration& configuration, const ToolResourceBinding& binding)
+{
+    try {
+        return provider.acquire(configuration, binding);
+    } catch (...) {
+        return Diagnostic{ErrorCode::ExecutionBoundaryFailure, Severity::Error, {},
+            "Resource provider threw across its execution boundary."};
+    }
+}
+
+Result<std::vector<InvocationResourceLease>> acquire_leases(InvocationResourceProvider& provider,
+    const ToolExecutionConfiguration& configuration)
+{
+    std::vector<InvocationResourceLease> leases;
+    leases.reserve(configuration.data().resources.size());
+    for (const auto& binding : configuration.data().resources) {
+        auto acquired = acquire_lease(provider, configuration, binding);
+        if (auto* failure = std::get_if<Diagnostic>(&acquired)) {
+            if (!failure->location.resource) { failure->location.resource = binding.resource.id; }
+            return std::move(*failure);
+        }
+        auto lease = std::get<std::shared_ptr<const ResourceLease>>(std::move(acquired));
+        auto checked = validate_lease(binding, lease);
+        if (auto* failure = std::get_if<Diagnostic>(&checked)) { return std::move(*failure); }
+        leases.push_back({binding.slot, std::move(lease)});
+    }
+    return leases;
 }
 } // namespace
 
@@ -79,6 +124,13 @@ core::Result<PreparedTool> PreparedTool::create(const ConfigSnapshot& snapshot, 
 {
     auto resolver = BindingResolver::create(snapshot);
     if (const auto* failure = std::get_if<core::Diagnostic>(&resolver)) { return *failure; }
+    return create(std::get<BindingResolver>(std::move(resolver)), workflow, node);
+}
+
+core::Result<PreparedTool> PreparedTool::create(BindingResolver resolver, core::WorkflowId workflow,
+    core::NodeId node)
+{
+    const auto& snapshot = resolver.snapshot();
     const auto* flow = find_workflow(snapshot.solution(), workflow);
     const auto* configured = flow ? find_node(*flow, node) : nullptr;
     const auto* tool_config = configured ? std::get_if<ToolConfiguration>(&configured->configuration) : nullptr;
@@ -111,12 +163,24 @@ core::Result<PreparedTool> PreparedTool::create(const ConfigSnapshot& snapshot, 
     }
     auto projected = core::ToolExecutionConfiguration::create(data);
     if (const auto* failure = std::get_if<core::Diagnostic>(&projected)) { return *failure; }
-    return PreparedTool{snapshot, std::get<BindingResolver>(std::move(resolver)),
-        std::get<core::ToolExecutionConfiguration>(std::move(projected))};
+    return PreparedTool{snapshot, std::move(resolver), std::get<core::ToolExecutionConfiguration>(std::move(projected))};
 }
 
 InvocationPreparation PreparedTool::prepare(const ResolutionContext& context, core::AttemptId attempt,
     const ResultStore& results, std::span<const core::InvocationResourceLease> leases) const
+{
+    return prepare(context, attempt, results, leases, nullptr);
+}
+
+InvocationPreparation PreparedTool::prepare(const ResolutionContext& context, core::AttemptId attempt,
+    const ResultStore& results, InvocationResourceProvider& provider) const
+{
+    return prepare(context, attempt, results, {}, &provider);
+}
+
+InvocationPreparation PreparedTool::prepare(const ResolutionContext& context, core::AttemptId attempt,
+    const ResultStore& results, std::span<const core::InvocationResourceLease> leases,
+    InvocationResourceProvider* provider) const
 {
     const auto& fixed = configuration_.data();
     const auto fail = [&](core::ErrorCode code, std::string message) {
@@ -143,14 +207,24 @@ InvocationPreparation PreparedTool::prepare(const ResolutionContext& context, co
     if (failure) { return InvocationFailure{*failure, std::move(bindings)}; }
     if (unavailable) { return UnavailableInvocation{std::move(bindings)}; }
     if (pending) { return PendingInvocation{std::move(bindings)}; }
-    if (auto checked = validate_leases(configuration_, leases); const auto* invalid = std::get_if<core::Diagnostic>(&checked)) {
-        auto diagnostic = *invalid;
-        diagnostic.location.solution = snapshot_.solution().id; diagnostic.location.workflow = fixed.workflow;
+    const auto resource_failure = [&](core::Diagnostic diagnostic) {
+        diagnostic.location.solution = snapshot_.solution().id;
+        diagnostic.location.workflow = fixed.workflow;
         diagnostic.location.node = fixed.node;
         return InvocationFailure{std::move(diagnostic), std::move(bindings)};
+    };
+    std::vector<core::InvocationResourceLease> resources;
+    if (provider) {
+        auto acquired = acquire_leases(*provider, configuration_);
+        if (auto* invalid = std::get_if<core::Diagnostic>(&acquired)) { return resource_failure(std::move(*invalid)); }
+        resources = std::get<std::vector<core::InvocationResourceLease>>(std::move(acquired));
+    } else {
+        auto checked = validate_leases(configuration_, leases);
+        if (auto* invalid = std::get_if<core::Diagnostic>(&checked)) { return resource_failure(std::move(*invalid)); }
+        resources.assign(leases.begin(), leases.end());
     }
     core::InvocationContextData data{configuration_,
-        {fixed.session, fixed.snapshot, context.consumer, attempt}, {}, {}, {}, {leases.begin(), leases.end()}};
+        {fixed.session, fixed.snapshot, context.consumer, attempt}, {}, {}, {}, std::move(resources)};
     for (const auto& target : bindings) {
         const auto& resolved = std::get<ResolvedBinding>(target.resolution);
         if (const auto* input = std::get_if<core::InputId>(&target.target)) { data.inputs.push_back({*input, resolved.value}); }
@@ -177,9 +251,15 @@ core::Result<NodeResult> checked_node_result(const PreparedInvocation& invocatio
         || invocation.snapshot.identity().snapshot != configuration.snapshot) {
         return fail("Completion must match the prepared snapshot, node, invocation and attempt exactly.");
     }
+    if (auto checked = core::validate_tool_completion(invocation.context, completion);
+        auto* invalid = std::get_if<core::Diagnostic>(&checked)) {
+        invalid->location.solution = invocation.snapshot.solution().id;
+        return std::move(*invalid);
+    }
     const RunIdentity run{invocation.snapshot.identity(), configuration.workflow, completion.identity.invocation.workflow_run};
     NodeResultData data{{run, completion.identity.invocation, completion.identity.attempt}, ExecutionStatus::Succeeded,
-        Judgement::NotEvaluated, {}, completion.diagnostics, completion.elapsed, completion.selected_control_outputs};
+        Judgement::NotEvaluated, {}, completion.diagnostics, completion.elapsed, completion.selected_control_outputs,
+        completion.timings};
     switch (completion.status) {
     case core::ToolCompletionStatus::Succeeded: data.status = ExecutionStatus::Succeeded; break;
     case core::ToolCompletionStatus::Failed: data.status = ExecutionStatus::Failed; break;
@@ -193,15 +273,25 @@ core::Result<NodeResult> checked_node_result(const PreparedInvocation& invocatio
     case core::ToolJudgement::NG: data.judgement = Judgement::NG; break;
     default: return error(core::ErrorCode::InvalidNodeResult, "Unknown tool judgement.", invocation.snapshot, configuration.workflow, configuration.node);
     }
-    for (const auto& output : completion.outputs) { data.outputs.push_back({output.id, output.value.type(), output.value}); }
-    if (data.status != ExecutionStatus::Succeeded) {
-        if (!completion.outputs.empty()) {
-            return error(core::ErrorCode::InvalidNodeResult, "Failed, cancelled or timed-out tool completions cannot publish available values.",
-                invocation.snapshot, configuration.workflow, configuration.node);
+    for (const auto& output : completion.outputs) {
+        const auto declaration = std::ranges::find(configuration.tool.outputs, output.id, &core::OutputDescriptor::id);
+        auto& slot = data.outputs.emplace_back(OutputSlot{output.id, declaration->type, output.content});
+        if (auto* invalid = std::get_if<InvalidOutput>(&slot.content)) {
+            invalid->diagnostic.location.solution = invocation.snapshot.solution().id;
+            invalid->diagnostic.location.workflow = configuration.workflow;
+            invalid->diagnostic.location.node = configuration.node;
+            invalid->diagnostic.location.tool = configuration.tool.id;
+            invalid->diagnostic.location.output = output.id;
         }
+    }
+    if (data.status != ExecutionStatus::Succeeded) {
         const auto reason = data.status == ExecutionStatus::Failed ? OutputAbsenceReason::Failed
             : data.status == ExecutionStatus::Cancelled ? OutputAbsenceReason::Cancelled : OutputAbsenceReason::TimedOut;
-        for (const auto& output : configuration.tool.outputs) { data.outputs.push_back({output.id, output.type, NotProduced{reason}}); }
+        for (const auto& output : configuration.tool.outputs) {
+            if (std::ranges::find(completion.outputs, output.id, &core::ToolOutput::id) == completion.outputs.end()) {
+                data.outputs.push_back({output.id, output.type, NotProduced{reason}});
+            }
+        }
     }
     auto result = NodeResult::create(data);
     if (const auto* invalid = std::get_if<core::Diagnostic>(&result)) { return *invalid; }

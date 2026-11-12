@@ -81,9 +81,15 @@ Check validate_record(const ConfigSnapshot& snapshot, const NodeResult& result)
     if (data.status == ExecutionStatus::Succeeded) {
         for (const auto& declaration : outputs) {
             const auto* slot = result.output(declaration.id);
-            if (!slot || !std::holds_alternative<DataValue>(slot->content)) {
+            if (!slot) {
                 auto diagnostic = fail(ErrorCode::InvalidNodeResult,
-                    "Successful results require an available value for every declared output; Optional None and empty collections are values.");
+                    "Successful results must report every declared output.");
+                diagnostic.location.output = declaration.id;
+                return diagnostic;
+            }
+            if (const auto* absence = std::get_if<NotProduced>(&slot->content);
+                absence && !allows_output_absence(declaration, absence->reason)) {
+                auto diagnostic = fail(ErrorCode::InvalidNodeResult, "Output omission must match a declared reason on a non-required output.");
                 diagnostic.location.output = declaration.id;
                 return diagnostic;
             }

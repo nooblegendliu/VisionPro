@@ -7,8 +7,8 @@
 
 namespace visionpro::workflow {
 
-// Session-local, single-threaded storage for accepted artificial terminal records.
-// This is not execution admission, retry arbitration or concurrent result commit.
+// Session-scoped storage for terminal records. Owners serialize writes against
+// readers and arbitrate admission and result acceptance outside this container.
 class ResultStore final {
 public:
     explicit ResultStore(core::SolutionSessionId session) : session_(session) {}

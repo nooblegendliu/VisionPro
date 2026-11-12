@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <set>
 #include <utility>
 
 namespace visionpro::workflow::detail {
@@ -156,6 +157,29 @@ Check validate_runtime_value(const core::DataType& type, const core::ValueConstr
             if (value == std::get<DataValue>(candidate)) { allowed = true; break; }
         }
         if (!allowed) { return error(ErrorCode::ConstraintViolation, "Runtime value is not explicitly allowed."); }
+    }
+    return std::monostate{};
+}
+
+Check validate_global_read_snapshot(const Solution& solution, const core::SolutionSessionId& session,
+    std::span<const core::GlobalVariableEntry> globals)
+{
+    std::set<core::VariableId> variables;
+    for (const auto& entry : globals) {
+        const auto definition = std::ranges::find(solution.variables, entry.variable, &core::GlobalVariableDefinition::id);
+        const auto reject = [&](ErrorCode code, std::string message) {
+            auto diagnostic = error(code, std::move(message));
+            diagnostic.location.variable = entry.variable;
+            return diagnostic;
+        };
+        if (definition == solution.variables.end() || !variables.insert(entry.variable).second) {
+            return reject(ErrorCode::InvalidResolutionContext, "Global read snapshot contains an unknown or duplicate variable.");
+        }
+        const auto origin_session = std::visit([](const auto& origin) { return origin.session; }, entry.update_origin);
+        if (origin_session != session) {
+            return reject(ErrorCode::ResultIdentityMismatch, "Global read snapshot belongs to another solution session.");
+        }
+        if (auto checked = core::validate_global_variable_entry(*definition, entry); failed(checked)) { return checked; }
     }
     return std::monostate{};
 }

@@ -81,7 +81,9 @@ Result<DataValue> system_value(const NodeResultData& result, SystemField field)
         const auto judgement = result.judgement == Judgement::OK ? "OK" : result.judgement == Judgement::NG ? "NG" : "NotEvaluated";
         return DataValue::enumeration(type, key<EnumMemberId>(judgement));
     }
-    case SystemField::Elapsed: return DataValue::integer(result.elapsed.count());
+    case SystemField::Elapsed:
+        if (result.elapsed) { return DataValue::integer(result.elapsed->count()); }
+        return error(ErrorCode::InputUnavailable, "Current invocation wall-clock time was not measured.");
     case SystemField::Diagnostics: {
         std::vector<DataValue> values;
         const auto& record = *type.element_type();
@@ -99,6 +101,17 @@ Result<DataValue> system_value(const NodeResultData& result, SystemField field)
     }
     }
     return error(ErrorCode::InvalidBinding, "Unknown system field.");
+}
+
+std::optional<MissingReason> normal_missing_reason(OutputAbsenceReason reason)
+{
+    switch (reason) {
+    case OutputAbsenceReason::NotSelected: return MissingReason::NotSelected;
+    case OutputAbsenceReason::Disabled: return MissingReason::Disabled;
+    case OutputAbsenceReason::ToolDidNotProduce: return MissingReason::ToolDidNotProduce;
+    case OutputAbsenceReason::ConditionNotMet: return MissingReason::ConditionNotMet;
+    default: return std::nullopt;
+    }
 }
 
 struct Absence { OutputAbsenceReason reason; std::size_t trace; };
@@ -127,8 +140,9 @@ void merge(Evaluation& target, Evaluation source)
 class Resolution {
 public:
     Resolution(const ConfigSnapshot& snapshot, const ValidationIndex& index,
-        const ResolutionContext& context, const BindingTarget* target, const ResultStore& store)
-        : snapshot_(snapshot), index_(index), context_(context), target_(target), store_(store) {}
+        const ResolutionContext& context, const BindingTarget* target, const ResultStore& store,
+        const RunRequest* request)
+        : snapshot_(snapshot), index_(index), context_(context), target_(target), store_(store), request_(request) {}
     BindingResolution run();
     Check context_only()
     {
@@ -138,7 +152,10 @@ public:
     }
 private:
     Check validate_context();
+    Check validate_scopes();
+    Check validate_sources(const ScopeDependencies& scope);
     Check validate_scope_inputs(const ResolutionScope& scope);
+    bool independent() const { return request_ && std::holds_alternative<NodeTarget>(request_->target()); }
     template<class Target> BindingResolution resolve(const Target& descriptor);
     Evaluation source(const BindingSource& value, std::size_t index);
     Evaluation output(const OutputReference& reference, std::size_t index);
@@ -153,6 +170,7 @@ private:
     const ResolutionContext& context_;
     const BindingTarget* target_;
     const ResultStore& store_;
+    const RunRequest* request_;
     const Workflow* flow_{nullptr};
     const Node* node_{nullptr};
     const ToolDescriptor* tool_{nullptr};
@@ -221,14 +239,38 @@ Check Resolution::validate_context()
     if (!flow_ || !flow_->enabled || !node_ || !node_->enabled) {
         return error(ErrorCode::InvalidResolutionContext, "Resolution consumer must be an enabled node in the current workflow.");
     }
-    for (auto owner = parent(*flow_, node_->id); owner; owner = parent(*flow_, *owner)) {
-        if (!find_node(*flow_, *owner)->enabled) { return error(ErrorCode::InvalidResolutionContext, "Consumer is inside a disabled Group."); }
-    }
-    if (const auto* tool = std::get_if<ToolConfiguration>(&node_->configuration)) { tool_ = snapshot_.find_tool(tool->type); }
     scope_ = find(context_.scopes, context_.consumer.scope);
-    if (!scope_ || scope_->group != parent(*flow_, node_->id)) {
+    const auto owner = parent(*flow_, node_->id);
+    if (!scope_ || scope_->group != (independent() ? std::nullopt : owner)) {
         return error(ErrorCode::ScopeViolation, "Current runtime scope does not match the consumer's static owner.");
     }
+    const auto scope_index = std::ranges::find_if(index_.scopes, [&](const auto& entry) {
+        return entry.workflow == flow_->id && entry.group == owner;
+    });
+    if (scope_index == index_.scopes.end() || !contains(scope_index->reachable, node_->id)) {
+        return error(ErrorCode::IncompleteExecutionScope, "Resolution consumer is outside the validated control entry range.");
+    }
+    for (auto group = owner; group; group = parent(*flow_, *group)) {
+        if (!find_node(*flow_, *group)->enabled) { return error(ErrorCode::InvalidResolutionContext, "Consumer is inside a disabled Group."); }
+    }
+    if (const auto* tool = std::get_if<ToolConfiguration>(&node_->configuration)) { tool_ = snapshot_.find_tool(tool->type); }
+    if (request_) {
+        if (context_.scopes.size() != 1 || scope_->id.value() != 0 || scope_->parent
+            || !scope_->inputs.empty() || !context_.visible_outer_scopes.empty()) {
+            return error(ErrorCode::InvalidResolutionContext, "A planned invocation uses one root scope and the request's fixed inputs.");
+        }
+        if (independent() && !context_.sources.empty()) {
+            return error(ErrorCode::InvalidResolutionContext, "Independent invocations have no upstream source selections.");
+        }
+    } else if (auto checked = validate_scopes(); failed(checked)) {
+        return checked;
+    }
+    if (auto checked = validate_sources(*scope_index); failed(checked)) { return checked; }
+    return detail::validate_global_read_snapshot(snapshot_.solution(), context_.run.snapshot.session, context_.globals);
+}
+
+Check Resolution::validate_scopes()
+{
     std::set<ExecutionScopeId> ids;
     for (const auto& scope : context_.scopes) {
         if (!ids.insert(scope.id).second) { return error(ErrorCode::InvalidResolutionContext, "Runtime scope identities must be unique."); }
@@ -264,6 +306,11 @@ Check Resolution::validate_context()
             return error(ErrorCode::ScopeViolation, "Visible outer scopes must be explicit same-owner ancestors, not siblings or Group internals.");
         }
     }
+    return std::monostate{};
+}
+
+Check Resolution::validate_sources(const ScopeDependencies& scope)
+{
     std::set<NodeId> selections;
     for (const auto& selection : context_.sources) {
         const auto* producer = find_node(*flow_, selection.node);
@@ -272,8 +319,11 @@ Check Resolution::validate_context()
             return error(ErrorCode::InvalidResolutionContext, "Source selection must identify one distinct producer per node.");
         }
         if (!source_scope || source_scope->group != scope_->group || parent(*flow_, producer->id) != scope_->group
-            || (selection.scope != scope_->id && !visible.contains(selection.scope))) {
+            || (selection.scope != scope_->id && !contains(context_.visible_outer_scopes, selection.scope))) {
             return error(ErrorCode::ScopeViolation, "Source selection crosses an undeclared runtime or static scope boundary.");
+        }
+        if (request_ && !contains(scope.reachable, selection.node)) {
+            return error(ErrorCode::IncompleteExecutionScope, "Source selection is outside the planned control entry range.");
         }
         const auto* absence = std::get_if<MissingReason>(&selection.state);
         if (absence && *absence != MissingReason::NotSelected && *absence != MissingReason::Disabled) {
@@ -284,25 +334,12 @@ Check Resolution::validate_context()
             return error(ErrorCode::InvalidResolutionContext, "Disabled source tracking must agree with the fixed configuration.");
         }
     }
-    const auto scope_index = std::ranges::find_if(index_.scopes, [&](const auto& entry) {
-        return entry.workflow == flow_->id && entry.group == scope_->group;
-    });
-    if (scope_index == index_.scopes.end() || !contains(scope_index->reachable, node_->id)) {
-        return error(ErrorCode::IncompleteExecutionScope, "Resolution consumer is outside the validated control entry range.");
-    }
-    std::set<VariableId> variables;
-    for (const auto& entry : context_.globals) {
-        const auto* definition = find(snapshot_.solution().variables, entry.variable);
-        if (!definition || !variables.insert(entry.variable).second) { return error(ErrorCode::InvalidResolutionContext, "Global read snapshot contains an unknown or duplicate variable."); }
-        const auto session = std::visit([](const auto& origin) { return origin.session; }, entry.update_origin);
-        if (session != context_.run.snapshot.session) { return error(ErrorCode::ResultIdentityMismatch, "Global read snapshot belongs to another solution session."); }
-        if (auto checked = validate_global_variable_entry(*definition, entry); failed(checked)) { return checked; }
-    }
     return std::monostate{};
 }
 
 Evaluation Resolution::output(const OutputReference& reference, std::size_t index)
 {
+    if (independent()) { return invalid(error(ErrorCode::InputUnavailable, "Independent invocations cannot access upstream results.")); }
     if (reference.workflow != flow_->id || parent(*flow_, reference.node) != scope_->group) {
         return invalid(error(ErrorCode::ScopeViolation, "Output reference cannot cross workflow or Group boundaries."));
     }
@@ -433,6 +470,12 @@ Evaluation Resolution::source(const BindingSource& source, std::size_t index)
         else if constexpr (std::is_same_v<T, OutputReference>) { return output(value, index); }
         else if constexpr (std::is_same_v<T, ScopedInputReference>) {
             if (value.workflow != flow_->id || value.group != scope_->group) { return invalid(error(ErrorCode::ScopeViolation, "Public input reference must address this exact scope owner.")); }
+            if (request_) {
+                const auto* fixed = independent() ? nullptr : request_->input(value.input);
+                if (!fixed) { return invalid(error(ErrorCode::InputUnavailable, "No fixed public input exists for this invocation.")); }
+                traces_.push_back({index, PublicInputTrace{value, context_.run, scope_->id, fixed->origin}, {}});
+                return available(selected(fixed->value, value.selector));
+            }
             const auto* declared = find(interface(*scope_).inputs, value.input);
             if (!declared) { return invalid(error(ErrorCode::UnknownTarget, "Public input is not declared.")); }
             const auto* provided = find(scope_->inputs, value.input);
@@ -482,9 +525,8 @@ template<class Target> BindingResolution Resolution::resolve(const Target& descr
         bool omitted = false;
         std::vector<Absence> rejected;
         for (const auto& absence : read.absences) {
-            const auto normal = absence.reason == OutputAbsenceReason::Disabled || absence.reason == OutputAbsenceReason::NotSelected;
-            const auto reason = absence.reason == OutputAbsenceReason::Disabled ? MissingReason::Disabled : MissingReason::NotSelected;
-            if (!defaulted && normal && contains(binding->availability.accepted_absence, reason)) {
+            const auto reason = normal_missing_reason(absence.reason);
+            if (!defaulted && reason && contains(binding->availability.accepted_absence, *reason)) {
                 traces_.at(absence.trace).accepted_absence = reason; omitted = true;
             } else { rejected.push_back(absence); }
         }
@@ -535,6 +577,12 @@ BindingResolution Resolution::run()
     if (auto checked = validate_context(); const auto* diagnostic = std::get_if<Diagnostic>(&checked)) { return failure({*diagnostic, {}}); }
     if (!target_) { return failure({error(ErrorCode::UnknownTarget, "A binding target is required."), {}}); }
     if (const auto* input = std::get_if<InputId>(target_)) {
+        if (independent()) {
+            if (const auto* fixed = request_->input(*input)) {
+                return ResolvedBinding{fixed->value, {{0, IndependentInputTrace{*input, context_.run, fixed->origin}, {}}}, {}};
+            }
+            return failure({error(ErrorCode::UnknownTarget, "Independent request has no declared input with this identity."), {}});
+        }
         const auto& inputs = tool_ ? tool_->inputs : std::get<GroupConfiguration>(node_->configuration).interface.inputs;
         if (const auto* descriptor = find(inputs, *input)) { return resolve(*descriptor); }
     } else if (tool_) {
@@ -548,13 +596,13 @@ core::Result<BindingResolver> BindingResolver::create(const ConfigSnapshot& snap
 {
     auto validated = validate_solution(snapshot.solution(), snapshot.tools());
     if (const auto* failure = std::get_if<core::Diagnostic>(&validated)) { return *failure; }
-    return BindingResolver{snapshot, std::get<ValidationIndex>(std::move(validated))};
+    return BindingResolver{snapshot, std::make_shared<const ValidationIndex>(std::get<ValidationIndex>(std::move(validated)))};
 }
 BindingResolution BindingResolver::resolve(const ResolutionContext& context,
     const BindingTarget& target, const ResultStore& results) const
-{ return Resolution{snapshot_, index_, context, &target, results}.run(); }
+{ return Resolution{snapshot_, *index_, context, &target, results, request_ ? &*request_ : nullptr}.run(); }
 core::Result<std::monostate> BindingResolver::validate_context(const ResolutionContext& context,
     const ResultStore& results) const
-{ return Resolution{snapshot_, index_, context, nullptr, results}.context_only(); }
+{ return Resolution{snapshot_, *index_, context, nullptr, results, request_ ? &*request_ : nullptr}.context_only(); }
 
 } // namespace visionpro::workflow

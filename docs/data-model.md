@@ -9,8 +9,9 @@ SDK 指南补充的应用调用、一次性输入、Group、输出有效性及�
 S2.1–S2.4 的身份、值系统、工具元数据和诊断接口见 §3、§4.2–§4.3、§9，
 图像、几何、资源与状态的实现边界见 §6.1、§7.1、§10.1.1、§11–§13。
 S2.4 的方案/关系/快照见 §2.5–§2.6，复制见 §3.3，请求与结果见 §4.4、§8.2.1。
-S2.5 静态校验与派生依赖接口见 §5.6，已通过 Debug/Release 验证。
-阶段验证记录集中在 development.md §8.4–§8.8。
+S2 的严格静态校验与结果解析见 §5.6–§5.7。S3.1 的执行范围与计划见 §5.8，完成结果与诊断见 §8.1.1、§9。
+S3.2 的运行准入、顺序执行和结果查询见 §4.6。S3.3 的异步仲裁和退出见 §4.7，S3.4 的分路调度见 §4.8。
+阶段验证记录集中在 development.md §8。
 
 目标能力不得因首个执行器、算法适配器或存储后端的范围而缩减。
 各阶段的范围和验收由 [requirements.md](requirements.md) 定义，
@@ -73,8 +74,8 @@ ToolDescriptor 表示类型定义，Node 表示配置，ToolInstance 表示运�
 
 | 对象 | 保存的内容 | 禁止混入的内容 |
 |---|---|---|
-| ToolDescriptor | 输入输出、参数、状态及执行能力元数据 | 某个节点的当前参数或累积值 |
-| Node | 稳定身份、类型版本、参数与绑定配置 | 运行句柄、当前结果和累积状态 |
+| ToolDescriptor | 输入输出、参数、状态能力与约束及执行能力元数据 | 某个节点的当前参数或累积值 |
+| Node | 稳定身份、类型版本、参数与绑定配置，包括工具允许的状态初值和重置选择 | 运行句柄、当前结果和累积状态 |
 | ConfigSnapshot | 一致的只读节点配置、类型版本及固定资源版本 | 可变编辑模型的借用引用 |
 | ToolInstance | 执行对象、缓存及受控资源/状态访问 | 方案序列化逻辑和其他节点的可变实例 |
 | NodeResult | 调用身份、输出、状态及诊断 | 可编辑配置和下次调用的可变工作区 |
@@ -89,7 +90,12 @@ NodeState 支持 Invocation、WorkflowRun、SolutionSession 作用域，见 §13
 不能随实例销毁隐式重置累加器，也不能把脚本首次初始化退化为每轮初始化。
 不同节点的配置和可变状态相互隔离；同类型不构成共享可变实例的理由。
 
-ToolDescriptor 声明同步/异步、可重入性、副作用、状态作用域、资源需求及取消/重试安全性。
+ToolDescriptor 声明同步/异步、可重入性、副作用、允许的状态作用域与配置约束、资源需求及取消/重试安全性。
+工具允许节点选择状态初值、每轮初始化或跨轮累计等行为时，选择属于节点配置，不能成为同类型节点共用的固定值。
+优先复用已声明、已校验的类型化节点参数，在快照/计划准备时生成该节点的有效状态规格；
+状态配置参数在该准备边界固定，不在一次状态域存活期间通过普通取值改变其寿命或初值。
+有效规格须满足工具的能力与约束，不新增任意状态配置字典，也不另存一份可独立编辑的参数副本。
+S3.1 已从固定参数生成有效规格，S3.5 将规格接入状态服务。当前接口见 §13。
 业务 Init 由状态域协调；实例资源准备可随实例重建，不能重新执行已完成的业务 Init。
 节点状态不存在两份可独立修改的副本。
 配置变更按工具声明判断状态兼容性：兼容时保留，不兼容时创建新状态代次；
@@ -106,7 +112,7 @@ ToolDescriptor 声明同步/异步、可重入性、副作用、状态作用域�
 | ToolRegistry | 静态注册类型描述与实例工厂，不负责保存当前工程 |
 | BindingValidator | 校验来源、目标能力、类型、字段与结构依赖 |
 | BindingResolver | 在具体调用上下文中解析有效值，不隐式执行来源 |
-| ExecutionPlanner | 从配置快照、工具元数据和执行器能力生成只读计划，拒绝所选执行范围内不合法或不支持的流程 |
+| ExecutionPlan::create | 从配置快照、工具元数据和执行器能力生成只读计划，拒绝所选执行范围内不合法或不支持的流程 |
 | WorkflowEngine | 按合法控制关系创建或获取实例、组织调用并处理失败与取消 |
 
 这些是运行服务，不是方案文件中的对象。
@@ -184,8 +190,8 @@ Group 复用 `NodeId` 表示可调用的容器，区别于 ROI 的 `RegionId`。
 工具目录不允许重复类型，且每个 ToolDescriptor 必须局部合法。
 
 捕获不会加载资源文件或锁定实际内容，只固定资源身份、版本/摘要及读取策略等配置声明；
-未注册工具也可保留在局部合法的配置草稿中。它不是 ExecutionPlan，不证明图、工具或运行资源可执行，
-也不提供多线程编辑与受理之间的原子切换；S2.5 可对其只读内容静态校验，加载及受理由 S3 接入。
+捕获要求方案级不变量成立，保留带局部问题的配置和缺工具草稿供编辑诊断。
+执行范围与工具能力由 `ExecutionPlan` 校验，详见 §5.8。
 
 ### 2.7 S2.7 工具实例、固定调用与操作
 
@@ -198,7 +204,7 @@ Group 复用 `NodeId` 表示可调用的容器，区别于 ROI 的 `RegionId`。
 
 `ToolInstanceFactory` 经 `create_tool_instance` 返回独立的 shared owning 实例或定位到节点的诊断。
 空实例、配置不匹配和重复发行同一实例被拒绝；未预期异常转为 ExecutionBoundaryFailure。
-实例与配置互不回写。当前静态工具目录仍由调用方显式提供，生产注册表和工厂装配由 S3 实现。
+实例与配置互不回写。S3.1 的 `ToolRegistry` 按工具类型固定元数据、版本能力与实例工厂，见 §5.8。
 
 `InvocationContext` 复制并只读持有一次调用的 Session/Snapshot/Invocation/Attempt 身份、完整输入/参数、
 已冻结的 ROI 来源和具名资源租约。缺值不能到这里再使用默认值，SnapshotBuild 参数也不能被替换。
@@ -210,9 +216,14 @@ Group 复用 `NodeId` 表示可调用的容器，区别于 ROI 的 `RegionId`。
 `InvocationOperation::start` 是显式工具调用入口，先检查固定配置、状态能力及实例可重入约束。
 同步工具返回 ToolCompletion，返回时本次调用已经实际退出。异步工具先登记非空 InvocationControl，
 再开始后台访问，并独立保留 InvocationCompletion token；登记后启动失败仍交回可查询、可取消和可等待的操作。
-`complete` 只接收匹配身份与输出 Schema 的一次终态，`mark_exited` 独立确认后台访问结束并释放操作持有的访问权。
+`complete` 只接收匹配身份与输出 Schema 的一次终态。`mark_exited` 独立报告后台访问结束。
+操作等启动入口及在途取消回调返回，再完成自身持有对象的清理并发布实际退出。
 逻辑完成不释放输入、图像、实例或资源租约；完成载荷复制后保持独立，重复/迟到完成不覆盖已有结果。
 条件变量等待区分 LogicalCompletion 与 PhysicalExit；wait_for 的 TimedOut 只指等待期限，不创建工具超时结果。
+S3.1 新增 `InvocationOperation::notify_when`，按逻辑完成和实际退出各允许一次登记。
+接收者以弱引用登记，已达到的目标在登记时唤醒，随后达到的目标由报告线程唤醒。
+`InvocationWakeup::signal` 在锁外传入调用身份与目标，接收方可查询进度并将通知放入调度队列。
+实际退出和逻辑完成由不同线程报告时，接收方按查询到的进度处理。S3.3 的执行器接收这两类通知，详见 §4.7。
 取消只表达协作请求。工具完成并不意味着 workflow 已接受结果，S3 仍需仲裁取消、超时、Attempt 和控制推进资格。
 完整服务不得只依赖本操作的互斥保护来保证全流程提交或关闭的正确性。
 
@@ -224,6 +235,8 @@ Group 复用 `NodeId` 表示可调用的容器，区别于 ROI 的 `RegionId`。
 只有全部值就绪且租约匹配，才产生持有快照与 core InvocationContext 的 PreparedInvocation；此步骤不创建实例或启动工具。
 `checked_node_result` 将匹配的 ToolCompletion 映射为 NodeResult，并复用 ResultStore 检查快照中的完整输出契约；
 它不会插入真实仓库，也不会把工具完成误作引擎提交。
+通过 `ExecutionPlan` 取得的 PreparedTool 复用计划范围和固定请求。独立调用按 §5.5 准备输入，
+工具完成及结果投影按 §8.1.1 保留各输出可用性。
 
 ## 3. 标识与引用（C02）
 
@@ -458,15 +471,15 @@ Workflow 或独立 Node/Group 目标、按 InputId 提供的 DataValue、触发�
 `FixedRunInput` 记录 Provided/Default 来源，输入容器独立持有、图像只读共享；每个新请求重新检查输入，
 失败请求不会改写已有请求或从上一轮补图像。参数动态覆盖不在此接口中隐式开放。
 
-此工厂只准备不可变请求，不产生 WorkflowRunId，也不负责 Busy 准入、调度或重试。
-S2.7 的 RunHandle 是独立的已受理句柄契约，见下一节；真实受理服务仍归 S3。
-工作流入口/依赖及工具能力的运行校验仍须后续计划和执行服务完成。
+请求还可持有调用方提供的只读全局值快照，逐项保留变量 ID、值、版本和更新来源。
+构造时校验变量唯一性、定义类型及来源会话。缺少条目时运行绑定报告 GlobalUnavailable。
+请求构造只固定输入与配置。S3.2 的运行服务负责分配 WorkflowRunId 和准入，见 §4.6。
 
 ### 4.5 S2.7 已受理运行句柄
 
 [run_handle.hpp](../include/visionpro/workflow/run_handle.hpp) 定义 `RunSubmission` 三个互斥分支：
 `RunHandle` 表示受理成功，`RunBusy` 指明占用中的运行身份，`RunRejected` 保存拒绝诊断。
-`RunSubmitter` 是 S3 准入服务的接口；S2 没有生产准入实现，不在准备 RunRequest 时分配运行标识或占用槽位。
+`RunSubmitter` 是准入服务的接口，S3.2 由 `WorkflowEngine` 实现。
 服务必须原子配对已准备的快照与输入；Busy/拒绝不得更改当前输入，也不得把被拒请求留下作为下一轮输入。
 
 `RunControl` 在构造时持有 const RunRequest 和由其快照、目标及新 WorkflowRunId 组成的 RunIdentity。
@@ -478,8 +491,8 @@ S2.7 的 RunHandle 是独立的已受理句柄契约，见下一节；真实受�
 Succeeded、Failed、Cancelled、TimedOut 是逻辑终态，Skipped 不是整轮运行终态。
 `wait(Completion/Quiescence, steady_clock deadline)` 返回 Satisfied 或 DeadlineExpired 及同次进度快照；
 等待期限到达不制造 TimedOut 运行，更不表示已释放内存或资源。
-`cancel` 只返回 Requested、AlreadyRequested 或 AlreadyCompleted；实际取消与结果提交的竞争由 S3 仲裁。
-后端等待应使用条件/事件通知，并提供线程安全的查询、等待和取消；当前可控替身只验证接口语义。
+`cancel` 返回 Requested、AlreadyRequested 或 AlreadyCompleted。后端使用条件/事件通知，
+提供线程安全的查询、等待和取消。S3.2 同步调用的取消边界见 §4.6。
 
 `lookup(InvocationKey)` 不查询最近结果：校验当前 Run、目标 Workflow/Node（Group 包含其子节点），
 并核对返回记录的 Session/Snapshot/Run/Invocation；已有 NodeResult 仍经过 ResultStore 的输出契约检查。
@@ -487,6 +500,67 @@ Succeeded、Failed、Cancelled、TimedOut 是逻辑终态，Skipped 不是整轮
 返回的不可变记录可独立保活。边界保留后端预期诊断，将不预期异常转为 ExecutionBoundaryFailure；
 非法状态、矛盾等待结果和空后端返回 InvalidRunHandle。
 这不替代后端对单调状态迁移、重复/迟到完成与提交资格的同步保护。
+
+### 4.6 S3.2 内存执行闭环
+
+[workflow_engine.hpp](../include/visionpro/workflow/workflow_engine.hpp) 的 `WorkflowEngine::create(registry)`
+分配新的方案会话身份并启动一个工作线程。调用方使用 `engine.session()` 捕获快照，再构造 RunRequest。
+`submit` 校验会话和计划能力，原子分配 WorkflowRunId 并占用目标 WorkflowId 的槽位。
+同一流程跨快照的重复提交返回 RunBusy 和当前 RunIdentity。其他流程独立受理，按受理顺序在同一线程执行。
+Busy 与校验拒绝不改写在途请求。已受理且待执行的流程通过句柄报告 Pending。
+此阶段受理 WorkflowTarget。NodeTarget 的独立执行和状态隔离归 S3.5。
+
+工作线程沿显式入口和无条件控制边准备调用，使用请求的固定公开输入和只读全局值快照。
+本轮使用根作用域 0 和首次尝试 0，并分配各调用的 InvocationId。绑定只选择本轮已经接受的来源调用。
+逐个创建工具实例，经 InvocationOperation 完成同步调用，再由 `checked_node_result` 和 ResultStore 校验终态。
+成功调用提交合法的输出槽并推进后继，包含 Judgement::NG。技术失败触发 FailFast，后继标记 Skipped。
+已启动但结果无效的调用提交 Failed 记录与诊断。准备或创建实例失败的节点标记 Failed，调用键为空。
+禁用节点关闭当前链，节点和后继分别记录 Disabled 和 UpstreamClosed。
+
+`RunProgress.nodes` 按控制顺序记录节点状态、已启动的 InvocationKey、跳过原因和逐绑定的来源追溯。
+客户端用调用键查询不可变 NodeResult，可从 ResultIdentity 读取本轮快照、调用及尝试身份。
+每轮结果由对应 RunHandle 的后端持有，其他运行各用独立的结果仓库。
+
+同步取消在准备、启动和结果提交边界检查。取消先于提交时，已启动调用在返回后记录 Cancelled，
+未开始的后继记录 RunCancelled，先前已提交的节点结果仍可查。Completion 等待逻辑终态。
+Quiescence 等待调用清理、计划释放及准入槽位归还。引擎销毁时排空已受理工作并等待工作线程退出，
+客户端句柄在引擎退出后仍可读取已持有的结果。
+
+### 4.7 S3.3 异步执行、取消与实际退出
+
+S3.3 接通了同步与异步工具组成的线性计划。调用启动后登记逻辑完成和实际退出通知，
+通知只携带调用身份和目标。执行器核对会话、快照、运行、节点、作用域、调用及尝试身份，
+将当前运行标记为就绪。每轮合并唤醒，操作对象保留完成数据和退出状态。
+单工作线程按受理顺序处理就绪运行，异步操作等待期间可推进其他流程。
+
+结果校验后在同一运行控制锁内决定取消、发布结果及授予后继控制许可。
+取消先于提交时，已启动调用提交 Cancelled 记录，已声明 Cooperative 的工具收到一次协作请求。
+工具后来报告的完成用于操作收尾。取消后于节点提交时，已发布结果保留，未启动后继记录 RunCancelled。
+同一线性流程在前一操作实际退出并释放准备持有的对象后才启动后继，启动边界再次检查取消。
+流程逻辑终态可先于实际退出。Completion 和 Quiescence 分别等待上述两类状态。
+
+调用方可在创建引擎时注入 `InvocationResourceProvider`。提供方负责资源访问权，规划检查其声明的资源类别。
+`PreparedTool` 在绑定就绪后按固定资源槽获取租约并核对身份、类别和版本。
+启动后操作持有工具实例和调用上下文。输入、图像及租约保留到退出和清理，流程槽位随后归还。
+等待期限到达与丢弃句柄均保留在途工作的所有权。类型化节点状态访问在 S3.5 接入。
+
+### 4.8 S3.4 分叉、汇合与基本分支
+
+`WorkflowEngine` 对选定流程根作用域的无环计划维护控制边状态及节点就绪队列。
+`RunProgress.nodes` 按计划的控制拓扑顺序记录节点，`control_links` 按边 ID 暴露 Pending、Arrived 或 Closed 及关闭原因。
+显式入口提供一次虚拟到达，实际入边仍按 AllActivated 等待。成功完成时，无条件边全部获得控制许可，
+命名边按工具的出口选择分别获得许可或关闭为 NotSelected。许可在对应操作实际退出及清理后交付。
+全部入边正常关闭且没有虚拟到达时，节点记录跳过，并沿未执行的子路径继续关闭。
+分支选择和禁用传播保留各自的原因，未执行节点的调用键为空。
+
+同一流程的多个就绪节点可各自持有在途异步操作。单工作线程按完整调用及尝试身份消费通知，每个活动尝试合并自己的唤醒。
+已获控制许可的节点使用原有绑定解析器准备数据。Pending 节点等待相关来源提交或确定缺失后重新入队。
+已接受的兄弟结果可直接满足数据绑定，控制后继仍等待控制前驱退出。
+绑定明确允许缺失时产生类型化 None 或按配置顺序聚合剩余来源。必需值缺失与解析失败分别保留原诊断，节点在准备阶段终止。
+
+FailFast 在运行控制锁内关闭尚未确定的边并停止后续调度。已确定的到达与正常关闭保留原状态，
+尚未提交的在途兄弟转为 Cancelled，并按工具能力请求协作退出。引擎持有流程槽位直至全部在途操作清理。
+嵌套分支在同一作用域逐边传播。Group 执行与循环按后续阶段接入。
 
 ## 5. 数据绑定与控制关系（C04、C06）
 
@@ -531,8 +605,8 @@ Binding 统一表达输入和可订阅参数：
 S2.4 的 [binding.hpp](../include/visionpro/workflow/binding.hpp) 已实现上述配置表示：
 `BindingTarget` 区分 InputId/ParameterId，来源区分常量、OutputReference、ScopedInputReference、ResourceReference 和 GlobalReference。
 结果引用区分 OutputId 与 SystemField，选择器当前实现 FieldSelection 与固定 ElementSelection，运行身份不进入配置。
-源列表保留顺序，基数与显式转换策略独立；`AvailabilityPolicy` 仅可声明接受 NotSelected/Disabled 缺失，
-没有把 Pending、来源错误或任意失败转换成 None 的策略。
+源列表保留顺序，基数与显式转换策略独立。`AvailabilityPolicy` 可声明接受 NotSelected、Disabled 及合法的工具不产出原因。
+Pending 保持等待，来源错误进入失败路径。
 `validate_binding_shape` 只检查源数量、已知枚举及引用本身的基本形式，不访问结果、加载资源或消费消息。
 来源/目标能力、选择器类型、作用域与图依赖由 S2.5 校验，接口见 §5.6；S2.6 取值与可用性接口见 §5.7。
 
@@ -542,7 +616,8 @@ S2.4 的 [binding.hpp](../include/visionpro/workflow/binding.hpp) 已实现上�
 |---|---|
 | 已提交值为 0、false 或空集合 | 有效值；访问空集合 [0] 仍报错 |
 | 显式 Optional None，或已确定 NotSelected 且目标声明接受 | 按声明得到 None/合并缺项，不自动取历史值 |
-| 必需值确定不可用 | InputUnavailable；不调用工具，记录 DependencyUnavailable 并按错误策略结束等待 |
+| 成功调用按输出元数据合法地 NotProduced | 保留源输出的缺失原因；目标仅在显式接受该原因时得到 None/合并缺项，否则 InputUnavailable |
+| 必需值确定不可用 | 在准备阶段报告 InputUnavailable，按错误策略结束等待，节点无工具调用 |
 | 来源仍 Pending/执行中 | 不提前转成 None；仅等待已激活或可在合法控制路径激活且无等待环的生产者 |
 | 来源 Failed、Cancelled、TimedOut | 保留诊断，Optional 不能吞掉错误；走显式错误策略 |
 | 输出槽为 Invalid | 保留输出诊断，即使目标为 Optional 也不能转成 None；默认整次调用提交失败，局部容错另行声明 |
@@ -598,6 +673,11 @@ AnySelected 等提前继续策略需明确剩余工作的处置后再开放，�
 普通无环区域不允许任意回边；重复执行通过显式循环区域表达。
 循环配置包含起始值、终止值、步长及终点是否包含，步长不得为零；
 边界方向决定零次迭代，计数溢出报错，不允许靠整数回绕退出。
+起始值与终止值可采用工具允许的类型化绑定；每次进入循环时解析一次并固定本次循环边界，
+解析使用本轮合法作用域中的数据，Pending、缺失与失败遵守 §5.1，不补跑来源或读取历史值。
+动态来源不默认表示逐迭代追读变化；以后如支持每次迭代重新求终止值，须另行声明求值时机与可见来源。
+迭代间隔以非负毫秒配置，默认零；表示前次迭代结束后、下次迭代启动前的等待，不是循环计数步长。
+该等待必须可取消，不阻塞调度器处理其他就绪工作；取消后不创建下一次迭代。
 每次迭代建立子作用域及新的 Invocation，支持嵌套且禁止隐式跨迭代读最近值。
 循环内部可读取当前迭代和明确可见的外层结果。
 
@@ -606,7 +686,8 @@ AnySelected 等提前继续策略需明确剩余工作的处置后再开放，�
 Collect 返回有元素类型的空集合，Reduce 使用显式初值，否则报缺少归约初值。
 异常中断默认不发布完整成功导出；若需要部分结果，须声明完成标记、有效性和消费者。
 正常提前退出须有显式控制出口及导出策略，不能伪装成迭代失败。
-模型表达上述语义，完整循环调度在第六阶段实现。
+以上为 S6 目标契约；当前 C++ 配置模型尚无专门的循环配置类型，循环边界绑定、间隔及调度均未实现。
+不能把普通 Group 或任意控制回边当作已支持的循环结构。
 
 ### 5.4 多流程、触发与并发（C06）
 
@@ -635,6 +716,15 @@ Group 的每次调用建立子作用域；外部通过公开端口与显式导�
 显式复用调试样本时复制/持有该数据并记为新调用输入，不冒充本轮上游输出。
 它使用独立运行身份和明确状态策略：默认隔离调试状态，使用活动状态须显式请求并满足互斥；
 不能通过“调试”绕过有副作用工具的执行及资源约束。
+
+S3.1 的 NodeTarget 计划按目标工具输入 Schema 校验并固定本次提供的输入，
+不再为了取得这些输入去解析目标在原流程中的上游绑定，也不要求目标由原流程入口可达。
+原快照和节点配置保持不变，注入值记录为本次独立调用来源，不伪造上游调用或结果。
+SnapshotBuild 参数继续使用固定配置；其余参数仍按工具声明的合法来源解析，
+独立调用无法提供的运行订阅必须明确诊断，不能回退到最近结果或隐式执行来源。
+执行范围、类型、资源及状态能力仍需校验；绕过外部控制编排不意味着绕过调用契约。
+计划中的 PreparedTool 从 RunRequest 取值，在 `IndependentInputTrace` 记录输入身份与 Provided/Default 来源。
+S3.5 接入生产独立调用、状态隔离与受控活动状态访问。
 
 方案级运行从启用集合中固定本次参与流程；被禁用的流程不进入新一轮计划，
 直接运行禁用目标须显式临时启用并生成对应快照，不能静默忽略禁用配置。
@@ -692,7 +782,7 @@ S2.5 没有新增任意外层结果读取或循环语义；后续能力须显式
 |---|---|
 | ExecutionStatus | `visionpro.execution_status` v1 Enum：Pending、Running、Succeeded、Failed、Skipped、Cancelled、TimedOut |
 | Judgement | `visionpro.judgement` v1 Enum：NotEvaluated、OK、NG |
-| Elapsed | Int64，单位约定为纳秒 |
+| Elapsed | Int64，单位为纳秒。未测量返回 InputUnavailable |
 | Diagnostics | List of `visionpro.diagnostic` v1 Record：code(Int64)、severity(`visionpro.severity` v1 Enum：Info/Warning/Error)、message(String) |
 
 Diagnostics 是可绑定投影，完整位置和其他诊断信息仍保留在 NodeResult 的 `Diagnostic` 记录中。
@@ -726,8 +816,8 @@ Diagnostics 是可绑定投影，完整位置和其他诊断信息仍保留在 N
 失败输出的 Invalid 诊断进入原因列表，Optional 和默认值均不吞掉这些错误。
 系统字段可读取已存终态的状态、判定、耗时和诊断；来源仍等待时也不读取上一轮系统字段。
 
-正常缺失仅在 Binding 明确接受对应 NotSelected/Disabled 时处理：
-单来源 Optional 产生类型化 None，多来源集合省略对应来源并保持其余配置顺序，追溯记录接受的缺失原因。
+正常缺失要求 Binding 明确接受对应原因。NotSelected、Disabled 来自控制选择；ToolDidNotProduce、ConditionNotMet 来自成功调用的输出槽。
+单来源 Optional 产生类型化 None，多来源集合省略对应来源并保持其余配置顺序，追溯记录接受的原因。
 合法 Available(None)、空 List、0 和 false 保持原值；没有 Binding 才采用已声明默认值。
 Record 字段和固定 List 索引逐步访问，不隐式解包 Optional；实际越界返回 IndexOutOfRange。
 Exact、WrapOptional 和显式 Int64→Float64 按声明执行；结果继续检查类型、范围、允许值集合和长度，
@@ -757,6 +847,27 @@ Group 输入从当前宿主公开接口取值，Group 输出继续通过公开�
 
 解析不修改配置、ResultStore、全局快照或队列，不负责状态 Init、共享写入、设备调度、取消与实际执行。
 来源追溯分别记录常量/默认值、精确结果调用与 Attempt、作用域公开输入、全局版本和资源引用。
+
+### 5.8 S3.1 执行范围与计划
+
+`validate_global_invariants` 检查方案头、方案内稳定身份唯一性及共享定义目录。
+`diagnose_solution` 在全局检查和元数据校验通过后返回各流程的首条局部诊断及布局问题。
+`validate_solution` 继续严格校验全方案，供编辑审查和既有解析入口使用。
+
+[execution_plan.hpp](../include/visionpro/workflow/execution_plan.hpp) 的 `ExecutionPlan::create` 从 RunRequest 的快照和静态工具目录生成计划。
+WorkflowTarget 从显式入口计算控制闭包。它检查所选流程的包含关系、范围内节点与公开映射、
+范围外连入前驱、来源跨界、控制环和控制/数据联合依赖。快照保留全部配置，未参与的流程或断开节点可继续诊断编辑。
+NodeTarget 计划只含指定工具，保留其静态所属关系。
+
+[tool_registry.hpp](../include/visionpro/core/tool_registry.hpp) 的 `ToolRegistry` 拥有静态注册项中的工具描述、SchemaSupport 与工厂引用。
+计划检查所选工具的注册契约、版本和能力。默认配置支持同步、按调用创建实例的线性流程。
+调用方可声明支持分叉/汇合及命名控制连线、异步调用、节点状态或特定类型的资源租约。
+Group 执行、持续实例、连续/外部触发以及独立调用访问活动状态由后续服务支持。
+计划和检查过程无工厂调用。计划的 `create_instance` 仅接受范围内已启用的节点。
+
+计划保留 RunRequest、入口和同一只读 ValidationIndex；每个 PreparedTool 复用该索引。
+准备计划调用时，ResolutionContext 使用一个空的根作用域，公开输入和独立节点输入从固定请求取得。
+流程内仍需明确选择本轮上游调用，独立调用无需上游来源。计划索引提供依赖信息，实际就绪及结果提交由执行服务处理。
 
 ## 6. 图像（C05）
 
@@ -922,7 +1033,11 @@ NodeResult 对每个已声明输出记录 OutputId、类型、可用性与必要
 可用性至少区分 Available、NotProduced(reason)、Invalid(diagnostic)。
 Available 的值仍可能是 Optional None 或空 List，两者与未产生/失效输出不同。
 必需输出在成功提交前必须 Available；缺失或失效使契约校验失败。
-允许不产生的输出须由元数据声明原因，消费者按 C04 判定，不能只看数量为零就当有效空集合。
+输出元数据须声明必需性，以及非必需输出允许不产生的原因；未作声明时按必需输出处理。
+例如工具声明“条件不满足时不输出”时，可提交成功调用及对应 NotProduced 原因，
+不把源输出记录改成 Optional None、空集合、技术失败或控制分支未选中。
+允许不产生的输出须逐槽携带声明过的原因，消费者按 C04 的来源与缺失策略判定；
+需要接受此类缺失的绑定也须显式声明，不能只看数量为零就当有效空集合。
 任一已声明输出的 Invalid 默认使整次调用提交失败，不能因为该输出非必需就自动吞掉或降成 NotProduced；
 非必需输出仅可按元数据声明的原因不产生。如工具支持局部容错，须显式声明输出有效性及允许的消费者，
 不放宽默认失败无算法输出规则。
@@ -932,6 +1047,12 @@ Available 的值仍可能是 Optional None 或空 List，两者与未产生/失�
 不同状态域不能统一按“非零就是错误”转换。输出级状态不等于业务 OK/NG。
 Failed/Cancelled/TimedOut 默认不发布算法输出的规则仍然有效，
 SDK 暴露局部结果并不自动授权本项目将失败输出用于普通绑定。
+
+S3.1 的 `OutputDescriptor` 增加 `required` 和 `allowed_absence`，默认要求可用值。
+非必需输出须声明 ToolDidNotProduce 或 ConditionNotMet 等允许原因。成功的 `ToolCompletion` 逐槽报告
+DataValue 或允许的 NotProduced，缺少槽位或报告 Invalid 都会被拒绝。
+`checked_node_result` 复用完成校验并物化 NodeResult。失败完成可保留 Invalid 槽的错误诊断，
+其余声明输出按失败、取消或超时原因物化。ResultStore 复查输出契约，BindingResolver 按消费者的缺失策略取值。
 
 ### 8.2 运行、调用与尝试身份
 
@@ -985,14 +1106,13 @@ S2.6 的 ResultStore 补充完整输出校验和精确结果访问；取消竞�
 ### 8.2.2 S2.6 会话内结果访问
 
 [result_store.hpp](../include/visionpro/workflow/result_store.hpp) 的 `ResultStore(session)` 是
-**单线程、会话内的人工终态记录容器**，不是执行受理、重试仲裁或并发提交服务。
+**单线程、会话内的终态记录容器**。执行受理、重试仲裁及并发提交由运行服务负责。
 `insert(snapshot, result)` 要求仓库会话、结果 RunIdentity、SnapshotIdentity 和 InvocationKey 一致；
 同一 WorkflowRunId 首次固定其 Workflow/快照，不能改用于其他流程或配置。
 仓库按完整 InvocationKey 存储，重复逻辑调用返回 DuplicateResult，即使 AttemptId 不同也不覆盖旧记录。
 
 插入检查节点和工具版本、声明输出身份/精确类型、控制出口，以及运行值中的资源、坐标和能力。
-当前 OutputDescriptor 尚无允许缺失的输出元数据，因此 Succeeded 必须对每个声明输出提供 Available；
-Optional None 与空 List 都是 Available 值，缺槽或 NotProduced 均不能冒充成功完整结果。
+Succeeded 必须对每个声明输出提供 Available 或元数据许可的 NotProduced。Optional None 与空 List 都是 Available 值。
 失败/取消/超时保留其终态与诊断，不能带 Available 算法输出。运行输出中的 ROI 必须完整，
 不得包含未解析 InheritedRegion，以免结果读取引入第二层隐式运行依赖。
 
@@ -1000,7 +1120,7 @@ Optional None 与空 List 都是 Available 值，缺槽或 NotProduced 均不能
 身份冲突与已退役运行分别报错，不提供 latest 查询，也不从旧作用域补值。
 `release_run(run)` 移除该运行索引并记住其退役身份，迟到记录不能重新占用这个 RunId；
 即使从未插入结果，也可显式退役。已返回的记录、值和图像仍保持自身只读所有权，释放索引不会使其悬空。
-这里验证的是人工记录重复/隔离/保活规则，不代表 S3 的提交资格、回调静默、取消竞争或真实设备寿命已验证。
+S2.6 验证人工记录的重复拒绝、隔离与保活。S3.2 的同步运行服务按 §4.6 将校验后的实际调用结果提交到每轮仓库。
 
 ### 8.3 结果提交、取消与副作用
 
@@ -1119,12 +1239,22 @@ S2.6 增加 1801–1811：结果身份不匹配、重复/退役结果、无效�
 调用方可补充已知的外层对象位置。内存分配失败等非预期异常不在值类型内部吞掉，
 工作线程与 UI 回调的异常转换仍按 §2 的边界在后续阶段实现。
 
-适配诊断还保留 provider、API/模块名、错误域、原始数值码及描述、后端版本和关联身份。
+适配诊断的目标契约是以类型化字段保留 provider、API/模块名、错误域、原始数值码及描述、后端版本和关联身份，
+与本项目归一化的 ErrorCode 同时存在；不依赖解析 message 恢复原码，也不以任意键值字典承载这些固定语义。
 SDK 调用错误、算法状态、输出有效性、资源连接和业务判定分别归类；
 字符串参数接口和名称查找只在适配边界解析/映射，不放宽核心类型、编码和稳定身份要求。
 未知厂商错误保留原码并标为未映射，不能默认归为 NG 或可重试错误。
-耗时区分排队/等待、调用墙钟、工具报告算法耗时、结果物化及显示耗时；
-采用明确单位和测量来源，未测得记为未知，不能把多分路耗时直接相加当作流程总时长。
+耗时按测量范围分别记录排队/等待、调用墙钟、工具报告模块耗时、工具报告算法耗时、结果物化及显示耗时；
+每项包含明确单位、测量来源及已知/未知状态，未测得不能记为零，也不能把多分路耗时直接相加当作流程总时长。
+外部报告的模块耗时可能包含算法耗时，不将两者相加；单位须由相应接口契约确认，未知时不得猜测并换算。
+SDK 示例中的 fModuleTime/fAlgorithmTime 说明了测量范围，但该示例未明确单位，不构成本项目单位选择的依据。
+
+S3.1 的 `Diagnostic.external` 可选保存 `ExternalDiagnostic`，包含 provider、operation、类型化状态域、
+原始数值码、映射状态、可选厂商域、描述及后端版本。归一化的 ErrorCode 和位置字段继续保留。
+`ToolCompletion` 与 `NodeResultData` 的 `elapsed` 是可选的原生调用墙钟纳秒，实测零有效。
+`timings` 按测量范围、来源、单位、可选数值和提供方保存其他测量。可分别表达未测量和已报告但单位未知。
+结果投影保留这些字段，系统 Elapsed 绑定只读取原生墙钟，缺值报告 InputUnavailable。
+各域成功码的适配与真实厂商验证分别归 S3.6、S6。
 
 ## 10. 资源、版本与持久化（C09）
 
@@ -1300,7 +1430,11 @@ Invocation 状态域在逻辑调用结束时关闭；WorkflowRun 状态每轮初
 同节点的并发状态访问由串行化、隔离副本或工具明确支持的并发策略控制，不能仅用进程静态变量维护。
 实例更换不等于状态重置，配置兼容性与状态代次按 §2.1 管理。
 工具须声明状态修改发生在计算中还是结果接受时；取消、失败及重试不保证自动回滚状态。
-持久化只保存状态定义、初值和重置配置，默认不保存当前累积值。
+持久化保存节点选定的初值和重置等配置及其工具版本约束，默认不保存当前累积值或 Init 进度；
+有效状态规格由所加载的类型化配置重新生成，不能只保存工具级默认值而丢失节点选择。
+初值、寿命域或重置选择改变时，按工具声明检查兼容性并决定是否建立新代次；
+需要应用新初值的变更不能默默继承旧累计值，也不能提前重置在途快照使用的旧代次。
+显式重置以受控操作作用于选定节点及状态域，不通过修改共享 ToolDescriptor 影响同类型的其他节点。
 
 S2.3 已实现 `NodeStateDefinition` 的 Schema、配置初值、寿命域、重置、兼容、修改时机及并发策略，
 `NodeStateKey` 用节点、正代次和显式 Invocation/WorkflowRun/SolutionSession 域区分运行状态。
@@ -1310,6 +1444,11 @@ S2.3 已实现 `NodeStateDefinition` 的 Schema、配置初值、寿命域、重
 此检查只约束策略一致性，不实现锁或并发调度。
 `next_state_generation` 拒绝零和溢出，不因执行实例更换自动修改代次。
 这是定义和运行记录校验，尚未执行 Init、重置、并发访问、代次迁移或取消释放。
+S3.1 通过 `ToolDescriptor.state_parameters` 将状态初值映射到同类型的 SnapshotBuild 参数，
+将寿命域和重置策略映射到 SnapshotBuild Enum 的可选成员。工具元数据校验每个可选成员都有唯一合法的策略。
+`ToolExecutionConfiguration::effective_state()` 固定本节点选择，未映射的字段沿用类型级状态定义。
+同一工具类型可配置不同初值和每轮/会话策略。节点绑定保存可编辑选择，S3.5 接入类型化访问、Init 和代次，
+S3.7 验证选择往返。
 
 脚本与逻辑工具复用 ToolDescriptor 和 Binding：
 已解析输入进入工具，输出经类型校验后作为普通节点结果发布。
@@ -1356,13 +1495,14 @@ C01–C10 的对象边界、身份、类型、绑定、图像/ROI、控制图、
 |---|---|
 | C++ 类型、错误返回、公开端口、RunRequest/RunHandle、快照/工厂/操作句柄的具体签名 | S2 已完成可编译契约及必要测试替身；S3 实现运行服务，保持身份、所有权和同步/异步边界 |
 | 工具级允许来源、转换表、Schema 与状态兼容性 | 对应工具实现前；不能修改通用错误和隔离规则 |
+| 节点状态选择到有效规格、输出必需性/合法不产出、独立单节点输入准备、外部诊断与耗时表示 | S3.1 已实现并模拟验证接口；实际运行接入归 S3.2–S3.6 |
 | 控制到达/关闭、取消竞争及单线程就绪调度算法 | 第三阶段；覆盖 C06/C08 场景后才算通过 |
 | 会话管理、输入受理、结果物化、回调注销与事件通道 | 第三阶段先模拟验证；UI 在第五阶段接入，厂商后端在第六阶段单独验证 |
 | Group 公开边界、独立运行、导入导出及方案级启用集合 | 第二阶段定义 Schema；第六阶段实现完整子图和多流程服务 |
 | JSON 字段、临时文件和原子替换后端协议 | 第三阶段；固定版本化夹具与故障注入验收 |
 | 算法 ROI 适配、空区域策略、数值容差 | 第四阶段；支持范围由工具声明，未知形状不隐式转换 |
 | 多流程并行、连续/外部触发、重入与排队参数 | 第六阶段；按状态域和资源限制，不引入方案全局锁 |
-| 完整循环、提前退出、数据聚合的工具接口 | 第六阶段；遵守 §5.3 作用域及零次迭代规则 |
+| 完整循环、起止绑定求值、可取消毫秒间隔、提前退出及数据聚合 | 第六阶段；遵守 §5.3 作用域及零次迭代规则，当前 C++ 尚无专门循环配置 |
 | 队列空满、批量/多消费者、关联汇合超时和重复策略 | 第六阶段；完整记录、关联键和消费原子性不可省略 |
 | 全局批量快照、设备清理期限、重连与重试协议 | 对应服务接入前；响应丢失不默认重发非幂等操作 |
 | 资源/历史/消息容量和性能预算 | 对应实现测量后；业务输入不受显示缓存淘汰影响 |
@@ -1374,5 +1514,6 @@ C01–C10 的对象边界、身份、类型、绑定、图像/ROI、控制图、
 2026-10-27，S1 状态为**文档审查通过，相关能力尚未实现**；
 逐项结论见 [development.md 的 S1 文档审查记录](development.md#81-s1-文档审查记录)。
 2026-11-09，S2 模型与绑定范围通过整体验收，见 [development.md §8.10](development.md#810-s27-与-s2-整体验收记录)。
-表中 S3–S6 后续细化事项与执行验证仍未完成，不因 S1/S2 通过而记作已实现。
+S3.1–S3.4 的接口、执行、异步生命周期和分路验证记录见 [development.md §8.12–§8.15](development.md#812-s31-实现与验证记录)。
+S3.5 及后续阶段按各自范围验收。
 实施中新增决策应回写对应职责文档并补充验收依据。

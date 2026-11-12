@@ -1,6 +1,23 @@
 #include <visionpro/core/diagnostic.hpp>
+#include <visionpro/core/text.hpp>
 
 namespace visionpro::core {
+
+bool is_valid_diagnostic(const Diagnostic& diagnostic) noexcept
+{
+    const auto valid_text = [](std::string_view value) { return !value.empty() && is_valid_utf8(value); };
+    if (diagnostic.severity < Severity::Info || diagnostic.severity > Severity::Error || !valid_text(diagnostic.message)) {
+        return false;
+    }
+    if (!diagnostic.external) { return true; }
+    const auto& external = *diagnostic.external;
+    return external.domain >= ExternalStatusDomain::Unknown && external.domain <= ExternalStatusDomain::Judgement
+        && (external.mapping == ExternalCodeMapping::Unmapped
+            || (external.mapping == ExternalCodeMapping::Mapped && external.domain != ExternalStatusDomain::Unknown))
+        && valid_text(external.operation)
+        && (!external.description || valid_text(*external.description))
+        && (!external.backend_version || valid_text(*external.backend_version));
+}
 
 ErrorCategory error_category(ErrorCode code) noexcept
 {

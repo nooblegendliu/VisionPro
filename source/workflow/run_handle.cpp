@@ -1,6 +1,5 @@
 #include <visionpro/workflow/run_handle.hpp>
 #include <visionpro/workflow/result_store.hpp>
-#include <visionpro/core/text.hpp>
 
 #include <algorithm>
 
@@ -33,9 +32,7 @@ Result<RunProgress> checked(const RunRequest& request, RunProgress progress)
     }
     bool has_error = false;
     for (const auto& diagnostic : progress.diagnostics) {
-        if ((diagnostic.severity != core::Severity::Info && diagnostic.severity != core::Severity::Warning
-             && diagnostic.severity != core::Severity::Error) || diagnostic.message.empty()
-            || !core::is_valid_utf8(diagnostic.message)) {
+        if (!core::is_valid_diagnostic(diagnostic)) {
             return failure(request, ErrorCode::InvalidRunHandle, "Invalid run diagnostic.");
         }
         has_error = has_error || diagnostic.severity == core::Severity::Error;

@@ -29,7 +29,12 @@ struct ValidationIndex { std::vector<ScopeDependencies> scopes; };
     std::span<const core::ToolDescriptor> tools,
     std::span<const core::SchemaSupport> support = {});
 
-// Stable public system-result projection, shared with the future resolver.
+// Fatal catalog/identity errors use the diagnostic branch. Local issues remain
+// editable; the report includes the first issue per workflow and any layout issue.
+[[nodiscard]] core::Result<std::vector<core::Diagnostic>> diagnose_solution(const Solution& solution,
+    std::span<const core::ToolDescriptor> tools);
+
+// Stable public system-result projection, shared with the resolver.
 // Elapsed is an Int64 count of nanoseconds. Diagnostics is List<Record>.
 [[nodiscard]] core::Result<core::DataType> system_field_type(SystemField field);
 

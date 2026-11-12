@@ -1,5 +1,6 @@
 #pragma once
 
+#include <visionpro/core/timing.hpp>
 #include <visionpro/core/tool_descriptor.hpp>
 
 #include <chrono>
@@ -28,10 +29,13 @@ public:
     ToolExecutionConfiguration(ToolExecutionConfiguration&& other) noexcept : data_(other.data_) {}
     ToolExecutionConfiguration& operator=(ToolExecutionConfiguration&& other) noexcept { data_ = other.data_; return *this; }
     [[nodiscard]] static Result<ToolExecutionConfiguration> create(const ToolExecutionConfigurationData& data);
-    [[nodiscard]] const ToolExecutionConfigurationData& data() const noexcept { return *data_; }
+    [[nodiscard]] const ToolExecutionConfigurationData& data() const noexcept;
+    // Immutable node-specific state specification, derived from fixed parameters.
+    [[nodiscard]] const std::optional<NodeStateDefinition>& effective_state() const noexcept;
 private:
-    explicit ToolExecutionConfiguration(std::shared_ptr<const ToolExecutionConfigurationData> data) : data_(std::move(data)) {}
-    std::shared_ptr<const ToolExecutionConfigurationData> data_;
+    struct Storage;
+    explicit ToolExecutionConfiguration(std::shared_ptr<const Storage> data) : data_(std::move(data)) {}
+    std::shared_ptr<const Storage> data_;
 };
 
 struct ToolInvocationIdentity {
@@ -90,16 +94,19 @@ private:
 
 enum class ToolCompletionStatus { Succeeded, Failed, Cancelled, TimedOut };
 enum class ToolJudgement { NotEvaluated, OK, NG };
-struct ToolOutputValue { OutputId id; DataValue value; };
+struct ToolOutput { OutputId id; OutputContent content; };
 struct ToolCompletion {
     ToolInvocationIdentity identity;
     ToolCompletionStatus status;
     ToolJudgement judgement;
-    std::vector<ToolOutputValue> outputs;
+    std::vector<ToolOutput> outputs;
     std::vector<Diagnostic> diagnostics;
-    std::chrono::nanoseconds elapsed{0};
-    std::vector<ControlOutputId> selected_control_outputs;
+    std::optional<std::chrono::nanoseconds> elapsed{};
+    std::vector<ControlOutputId> selected_control_outputs{};
+    std::vector<TimingMeasurement> timings{};
 };
+[[nodiscard]] Result<std::monostate> validate_tool_completion(const InvocationContext& context,
+    const ToolCompletion& result);
 
 namespace detail { struct InvocationState; }
 class InvocationOperation;
@@ -119,6 +126,9 @@ public:
     // begin failure promises there is no asynchronous activity needing cleanup.
     [[nodiscard]] Result<std::monostate> register_control(std::shared_ptr<InvocationControl> control) const;
     [[nodiscard]] Result<std::monostate> complete(const ToolCompletion& result) const;
+    // Report that backend work has stopped. PhysicalExit is published after
+    // startup and any in-flight cancellation callback have returned and the
+    // operation has released its owned invocation state.
     [[nodiscard]] Result<std::monostate> mark_exited() const;
     [[nodiscard]] bool cancellation_requested() const;
 private:
@@ -129,7 +139,8 @@ private:
 class InvocationControl {
 public:
     virtual ~InvocationControl() = default;
-    // Cooperative request only; returning does not imply completion or physical exit.
+    // Called outside operation locks. May report completion and backend exit
+    // synchronously; the operation defers cleanup until this callback returns.
     virtual void request_cancel() = 0;
 };
 struct AsynchronousInvocation { std::shared_ptr<InvocationControl> control; };
@@ -172,6 +183,15 @@ enum class InvocationWaitOutcome { Reached, TimedOut };
 struct InvocationWaitResult { InvocationWaitOutcome outcome; InvocationProgress progress; };
 enum class CancellationRequest { Requested, AlreadyRequested, AlreadyExited, CleanupInProgress };
 
+class InvocationWakeup {
+public:
+    virtual ~InvocationWakeup() = default;
+    // Called outside operation locks on the registering or backend thread.
+    // Implementations should enqueue a wakeup and return promptly. Concurrent
+    // signals for different targets need not arrive in transition order.
+    virtual void signal(const ToolInvocationIdentity& identity, InvocationWaitTarget target) noexcept = 0;
+};
+
 class InvocationOperation final {
 public:
     InvocationOperation(const InvocationOperation&) noexcept = default;
@@ -181,6 +201,11 @@ public:
     [[nodiscard]] static Result<InvocationOperation> start(std::shared_ptr<ToolInstance> instance,
         const InvocationContext& context);
     [[nodiscard]] InvocationProgress poll() const;
+    [[nodiscard]] bool physically_exited() const;
+    // One weakly held, one-shot notification per target. If the target has
+    // already been reached, signal synchronously before returning.
+    [[nodiscard]] Result<std::monostate> notify_when(InvocationWaitTarget target,
+        std::weak_ptr<InvocationWakeup> wakeup) const;
     [[nodiscard]] Result<InvocationWaitResult> wait_for(InvocationWaitTarget target, std::chrono::milliseconds timeout) const;
     [[nodiscard]] Result<CancellationRequest> request_cancel() const;
 private:

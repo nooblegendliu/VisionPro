@@ -14,7 +14,7 @@ struct ConfigSnapshot::Storage {
 core::Result<ConfigSnapshot> ConfigSnapshot::capture(const Solution& solution,
     std::span<const core::ToolDescriptor> tools, SnapshotIdentity identity)
 {
-    if (const auto checked = validate_model_shape(solution);
+    if (const auto checked = validate_global_invariants(solution);
         const auto* failure = std::get_if<core::Diagnostic>(&checked)) { return *failure; }
     std::set<core::ToolTypeId> types;
     for (const auto& tool : tools) {

@@ -42,10 +42,12 @@ struct PublicInputTrace {
     core::ExecutionScopeId scope;
     InputOrigin origin;
 };
+struct IndependentInputTrace { core::InputId input; RunIdentity run; InputOrigin origin; };
 struct GlobalReadTrace { core::VariableId variable; std::uint64_t revision; core::UpdateOrigin update_origin; };
 struct SourceTrace {
     std::size_t source_index;
-    std::variant<ConstantTrace, ResultTrace, PublicInputTrace, GlobalReadTrace, core::ResourceReference> origin;
+    std::variant<ConstantTrace, ResultTrace, PublicInputTrace, GlobalReadTrace, core::ResourceReference,
+        IndependentInputTrace> origin;
     std::optional<MissingReason> accepted_absence;
 };
 // Preserve the complete inherited region expression, including its corrections
@@ -77,6 +79,8 @@ using BindingResolution = std::variant<ResolvedBinding, PendingBinding, Unavaila
 
 class BindingResolver final {
 public:
+    BindingResolver(const BindingResolver&) noexcept = default;
+    BindingResolver& operator=(const BindingResolver&) noexcept = default;
     [[nodiscard]] static core::Result<BindingResolver> create(const ConfigSnapshot& snapshot);
     // Also usable for zero-argument tools before preparing a fixed invocation.
     [[nodiscard]] core::Result<std::monostate> validate_context(const ResolutionContext& context,
@@ -85,10 +89,13 @@ public:
         const BindingTarget& target, const ResultStore& results) const;
     [[nodiscard]] const ConfigSnapshot& snapshot() const noexcept { return snapshot_; }
 private:
-    BindingResolver(ConfigSnapshot snapshot, ValidationIndex index)
-        : snapshot_(std::move(snapshot)), index_(std::move(index)) {}
+    friend class ExecutionPlan;
+    BindingResolver(ConfigSnapshot snapshot, std::shared_ptr<const ValidationIndex> index,
+        std::optional<RunRequest> request = {})
+        : snapshot_(std::move(snapshot)), index_(std::move(index)), request_(std::move(request)) {}
     ConfigSnapshot snapshot_;
-    ValidationIndex index_;
+    std::shared_ptr<const ValidationIndex> index_;
+    std::optional<RunRequest> request_;
 };
 
 } // namespace visionpro::workflow

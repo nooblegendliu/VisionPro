@@ -1,5 +1,4 @@
 #include <visionpro/core/tool_execution.hpp>
-#include <visionpro/core/text.hpp>
 
 #include <algorithm>
 #include <condition_variable>
@@ -83,8 +82,11 @@ Check completion_check(const InvocationContext& context, const ToolCompletion& r
 {
     const auto& invocation = context.data();
     const auto& descriptor = invocation.configuration.data().tool;
-    if (result.identity != invocation.identity || result.elapsed.count() < 0) {
-        return error(ErrorCode::InvalidValue, "Completion identity and elapsed duration must match the invocation.");
+    if (result.identity != invocation.identity) {
+        return error(ErrorCode::InvalidValue, "Completion identity must match the invocation.");
+    }
+    if (!valid_execution_timing(result.elapsed, result.timings)) {
+        return error(ErrorCode::InvalidValue, "Completion timing must have recognized scope, source, unit and nonnegative values.");
     }
     if ((result.status != ToolCompletionStatus::Succeeded && result.status != ToolCompletionStatus::Failed
             && result.status != ToolCompletionStatus::Cancelled && result.status != ToolCompletionStatus::TimedOut)
@@ -94,27 +96,60 @@ Check completion_check(const InvocationContext& context, const ToolCompletion& r
     const bool success = result.status == ToolCompletionStatus::Succeeded;
     bool has_error = false;
     for (const auto& diagnostic : result.diagnostics) {
-        if ((diagnostic.severity != Severity::Info && diagnostic.severity != Severity::Warning && diagnostic.severity != Severity::Error)
-            || diagnostic.message.empty() || !is_valid_utf8(diagnostic.message)) {
-            return error(ErrorCode::InvalidValue, "Completion diagnostics require recognized severity and a UTF-8 explanation.");
+        if (!is_valid_diagnostic(diagnostic)) {
+            return error(ErrorCode::InvalidValue, "Completion contains an invalid diagnostic.");
         }
         has_error = has_error || diagnostic.severity == Severity::Error;
     }
-    if ((success && has_error) || (result.status == ToolCompletionStatus::Failed && !has_error)
-        || (!success && (result.judgement != ToolJudgement::NotEvaluated || !result.outputs.empty() || !result.selected_control_outputs.empty()))) {
-        return error(ErrorCode::InvalidValue, "Failure cannot publish values, judgements or normal control selections, and needs a diagnostic.");
+    if ((success && has_error) || (!success
+            && (result.judgement != ToolJudgement::NotEvaluated || !result.selected_control_outputs.empty()))) {
+        return error(ErrorCode::InvalidValue, "Completion diagnostics, judgement and control selections must agree with its status.");
     }
     std::set<OutputId> outputs;
+    const auto output_error = [](OutputId output, ErrorCode code, std::string message) {
+        auto diagnostic = error(code, std::move(message));
+        diagnostic.location.output = output;
+        return diagnostic;
+    };
     for (const auto& output : result.outputs) {
         const auto* declaration = find(descriptor.outputs, output.id);
-        if (!declaration || !outputs.insert(output.id).second || declaration->type != output.value.type()) {
-            auto diagnostic = error(ErrorCode::TypeMismatch, "Completion outputs must uniquely match the declared output Schema.");
-            diagnostic.location.output = output.id; return diagnostic;
+        if (!declaration || !outputs.insert(output.id).second) {
+            return output_error(output.id, ErrorCode::TypeMismatch, "Completion outputs must uniquely match declared output identities.");
         }
-        if (unresolved_region(output.value)) { return error(ErrorCode::InvalidValue, "Published output values cannot contain unresolved ROI inheritance."); }
+        if (const auto* value = std::get_if<DataValue>(&output.content)) {
+            if (!success || unresolved_region(*value)) {
+                return output_error(output.id, ErrorCode::InvalidValue,
+                    "Only successful completions publish available values, with no unresolved ROI inheritance.");
+            }
+            if (declaration->type != value->type()) {
+                return output_error(output.id, ErrorCode::TypeMismatch, "Completion output value has the wrong type.");
+            }
+        } else if (const auto* absent = std::get_if<NotProduced>(&output.content)) {
+            if (!success || !allows_output_absence(*declaration, absent->reason)) {
+                return output_error(output.id, ErrorCode::InvalidValue, "Output omission must match a declared reason on a non-required output.");
+            }
+        } else {
+            auto diagnostic = std::get<InvalidOutput>(output.content).diagnostic;
+            if (!is_valid_diagnostic(diagnostic) || diagnostic.severity != Severity::Error) {
+                return output_error(output.id, ErrorCode::InvalidValue, "Invalid output requires a valid error diagnostic.");
+            }
+            if (result.status != ToolCompletionStatus::Failed) {
+                diagnostic.location.output = output.id;
+                return diagnostic;
+            }
+            has_error = true;
+        }
+    }
+    if (result.status == ToolCompletionStatus::Failed && !has_error) {
+        return error(ErrorCode::InvalidValue, "Failed completion requires an error diagnostic.");
     }
     if (success && outputs.size() != descriptor.outputs.size()) {
-        return error(ErrorCode::MissingRequiredValue, "Successful completion must publish every declared output.");
+        for (const auto& declaration : descriptor.outputs) {
+            if (!outputs.contains(declaration.id)) {
+                return output_error(declaration.id, ErrorCode::MissingRequiredValue,
+                    "Successful completion must report each output as available or explicitly not produced.");
+            }
+        }
     }
     std::set<ControlOutputId> controls;
     for (const auto& control : result.selected_control_outputs) {
@@ -125,6 +160,26 @@ Check completion_check(const InvocationContext& context, const ToolCompletion& r
     return std::monostate{};
 }
 } // namespace
+
+Result<std::monostate> validate_tool_completion(const InvocationContext& context, const ToolCompletion& result)
+{
+    auto checked = completion_check(context, result);
+    if (auto* failure = std::get_if<Diagnostic>(&checked)) {
+        *failure = contextualize(std::move(*failure), context.data().configuration.data());
+    }
+    return checked;
+}
+
+struct ToolExecutionConfiguration::Storage {
+    ToolExecutionConfigurationData configuration;
+    std::optional<NodeStateDefinition> state;
+};
+
+const ToolExecutionConfigurationData& ToolExecutionConfiguration::data() const noexcept
+{ return data_->configuration; }
+
+const std::optional<NodeStateDefinition>& ToolExecutionConfiguration::effective_state() const noexcept
+{ return data_->state; }
 
 Result<ToolExecutionConfiguration> ToolExecutionConfiguration::create(const ToolExecutionConfigurationData& data)
 {
@@ -155,7 +210,25 @@ Result<ToolExecutionConfiguration> ToolExecutionConfiguration::create(const Tool
     for (const auto& required : data.tool.resources) {
         if (required.required && !slots.contains(required.slot)) { return fail(error(ErrorCode::MissingRequiredValue, "Required configuration resource slot is absent.")); }
     }
-    return ToolExecutionConfiguration{std::make_shared<const ToolExecutionConfigurationData>(data)};
+    auto state = data.tool.state;
+    if (state) {
+        const auto& projection = data.tool.state_parameters;
+        // Descriptor validation guarantees the exact types and full mapping,
+        // and every SnapshotBuild parameter was fixed above.
+        if (projection.initial_value) {
+            state->initial_value = find(data.parameters, *projection.initial_value)->value;
+        }
+        if (projection.policy) {
+            const auto& value = find(data.parameters, projection.policy->id)->value;
+            const auto choice = std::ranges::find(projection.policy->choices, *value.as_enum(), &StatePolicyChoice::choice);
+            state->scope = choice->scope;
+            state->reset = choice->reset;
+        }
+        if (unresolved_region(state->initial_value)) {
+            return fail(error(ErrorCode::InvalidState, "State initial value cannot retain runtime ROI inheritance."));
+        }
+    }
+    return ToolExecutionConfiguration{std::make_shared<const Storage>(Storage{data, std::move(state)})};
 }
 
 Result<InvocationContext> InvocationContext::create(const InvocationContextData& data)
@@ -260,6 +333,9 @@ Result<InvocationContext> InvocationContext::create(const InvocationContextData&
 
 namespace detail {
 struct InvocationState {
+    explicit InvocationState(ToolInvocationIdentity identity) : identity(std::move(identity)) {}
+
+    const ToolInvocationIdentity identity;
     mutable std::mutex mutex;
     std::condition_variable changed;
     std::shared_ptr<const InvocationContext> context;
@@ -267,12 +343,62 @@ struct InvocationState {
     std::shared_ptr<InvocationControl> control;
     std::weak_ptr<InvocationControl> registered_control;
     std::optional<ToolCompletion> completion;
+    std::optional<std::weak_ptr<InvocationWakeup>> completion_wakeup;
+    std::optional<std::weak_ptr<InvocationWakeup>> exit_wakeup;
     bool exited{false};
     bool exiting{false};
     bool registered{false};
     bool cancelled{false};
+    bool starting{true};
+    bool cancelling{false};
     ~InvocationState() { if (instance) { instance->active_.fetch_sub(1); } }
     InvocationProgress progress() const { return {completion, exited, cancelled}; }
+    bool reached(InvocationWaitTarget target) const
+    { return target == InvocationWaitTarget::LogicalCompletion ? completion.has_value() : exited; }
+    std::optional<std::weak_ptr<InvocationWakeup>>& wakeup(InvocationWaitTarget target)
+    { return target == InvocationWaitTarget::LogicalCompletion ? completion_wakeup : exit_wakeup; }
+    std::shared_ptr<InvocationWakeup> take_wakeup(InvocationWaitTarget target)
+    {
+        auto& registration = wakeup(target);
+        if (!registration) { return {}; }
+        auto listener = registration->lock();
+        registration->reset();
+        return listener;
+    }
+
+    // The transition that last satisfies this condition owns cleanup.
+    // Called under mutex by the exit report and the two backend call boundaries.
+    bool ready_for_cleanup() const noexcept { return exiting && !starting && !cancelling; }
+    void finish_exit()
+    {
+        std::shared_ptr<ToolInstance> owned_instance;
+        std::shared_ptr<InvocationControl> owned_control;
+        std::shared_ptr<const InvocationContext> owned_context;
+        {
+            std::lock_guard lock(mutex);
+            owned_instance = std::move(instance);
+            owned_control = std::move(control);
+            owned_context = std::move(context);
+        }
+        // Backend destructors can reenter the operation. Keep the invocation
+        // context available through destruction of the operation-owned objects.
+        owned_control.reset();
+        const std::weak_ptr<ToolInstance> remaining_instance = owned_instance;
+        owned_instance.reset();
+        owned_context.reset();
+        // If another owner keeps the instance, retain its serialized slot
+        // through lease cleanup as well.
+        if (const auto held = remaining_instance.lock()) { held->active_.fetch_sub(1); }
+        std::shared_ptr<InvocationWakeup> listener;
+        {
+            std::lock_guard lock(mutex);
+            exiting = false;
+            exited = true;
+            listener = take_wakeup(InvocationWaitTarget::PhysicalExit);
+            changed.notify_all();
+        }
+        if (listener) { listener->signal(identity, InvocationWaitTarget::PhysicalExit); }
+    }
 };
 } // namespace detail
 
@@ -308,34 +434,29 @@ Result<std::monostate> InvocationCompletion::register_control(std::shared_ptr<In
 Result<std::monostate> InvocationCompletion::complete(const ToolCompletion& result) const
 {
     const auto state = state_;
-    std::lock_guard lock(state->mutex);
-    if (state->completion || state->exited) { return error(ErrorCode::InvalidState, "Invocation completion is accepted only once, before physical exit."); }
-    if (auto checked = completion_check(*state->context, result); failed(checked)) { return checked; }
-    state->completion = result; // Detach caller-owned containers; DataValue owns immutable nested payloads.
-    state->changed.notify_all();
+    std::shared_ptr<InvocationWakeup> listener;
+    {
+        std::lock_guard lock(state->mutex);
+        if (state->completion || state->exited) { return error(ErrorCode::InvalidState, "Invocation completion is accepted only once, before physical exit."); }
+        if (auto checked = validate_tool_completion(*state->context, result); failed(checked)) { return checked; }
+        state->completion = result; // Detach caller-owned containers; DataValue owns immutable nested payloads.
+        listener = state->take_wakeup(InvocationWaitTarget::LogicalCompletion);
+        state->changed.notify_all();
+    }
+    if (listener) { listener->signal(state->identity, InvocationWaitTarget::LogicalCompletion); }
     return std::monostate{};
 }
 Result<std::monostate> InvocationCompletion::mark_exited() const
 {
     const auto state = state_;
-    std::shared_ptr<ToolInstance> instance;
-    std::shared_ptr<InvocationControl> control;
-    std::shared_ptr<const InvocationContext> context;
+    bool clean;
     {
         std::lock_guard lock(state->mutex);
         if (!state->completion || state->exited || state->exiting) { return error(ErrorCode::InvalidState, "Physical exit follows one terminal completion and is reported once."); }
         state->exiting = true;
-        instance = std::move(state->instance); control = std::move(state->control); context = std::move(state->context);
+        clean = state->ready_for_cleanup();
     }
-    // Destroy backend objects outside the state lock; their destructors may release tokens.
-    context.reset(); control.reset();
-    if (instance) { instance->active_.fetch_sub(1); }
-    instance.reset();
-    {
-        std::lock_guard lock(state->mutex);
-        state->exiting = false; state->exited = true;
-        state->changed.notify_all();
-    }
+    if (clean) { state->finish_exit(); }
     return std::monostate{};
 }
 bool InvocationCompletion::cancellation_requested() const
@@ -348,10 +469,10 @@ Result<InvocationOperation> InvocationOperation::start(std::shared_ptr<ToolInsta
     if (!instance || &instance->configuration().data() != &configuration) {
         return fail(error(ErrorCode::InvalidState, "Invocation instance is not bound to this fixed configuration."));
     }
-    if (configuration.tool.state || configuration.tool.execution.effects == ToolEffects::State) {
-        return fail(error(ErrorCode::MissingCapability, "Stateful invocation requires the typed state service/lease that is not implemented in S2.7."));
+    if (context.data().configuration.effective_state() || configuration.tool.execution.effects == ToolEffects::State) {
+        return fail(error(ErrorCode::MissingCapability, "Stateful invocation requires a typed state service and access lease."));
     }
-    auto state = std::make_shared<detail::InvocationState>();
+    auto state = std::make_shared<detail::InvocationState>(context.data().identity);
     state->context = std::make_shared<const InvocationContext>(context);
     if (configuration.tool.execution.reentrancy == ToolReentrancy::Serialized) {
         std::size_t expected = 0;
@@ -359,10 +480,24 @@ Result<InvocationOperation> InvocationOperation::start(std::shared_ptr<ToolInsta
     } else { instance->active_.fetch_add(1); }
     state->instance = instance;
     InvocationCompletion completion{state};
+    const auto expose = [&] {
+        instance.reset();
+        bool clean;
+        {
+            std::lock_guard lock(state->mutex);
+            state->starting = false;
+            clean = state->ready_for_cleanup();
+        }
+        if (clean) { state->finish_exit(); }
+        return InvocationOperation{state};
+    };
     const auto startup_failed = [&](Diagnostic diagnostic) -> Result<InvocationOperation> {
         diagnostic = contextualize(std::move(diagnostic), configuration);
         diagnostic.severity = Severity::Error;
-        if (diagnostic.message.empty() || !is_valid_utf8(diagnostic.message)) { diagnostic.message = "Tool startup failed with an invalid diagnostic."; }
+        if (!is_valid_diagnostic(diagnostic)) {
+            diagnostic.message = "Tool startup failed with an invalid diagnostic.";
+            diagnostic.external.reset();
+        }
         bool registered;
         bool exited;
         {
@@ -375,7 +510,7 @@ Result<InvocationOperation> InvocationOperation::start(std::shared_ptr<ToolInsta
             state->changed.notify_all();
         }
         if (!registered && !exited) { static_cast<void>(completion.mark_exited()); }
-        return InvocationOperation{state};
+        return expose();
     };
     try {
         auto begun = instance->begin(state->context, completion);
@@ -396,42 +531,82 @@ Result<InvocationOperation> InvocationOperation::start(std::shared_ptr<ToolInsta
                 return startup_failed(error(ErrorCode::InvalidState, "Asynchronous start must return its previously registered non-null control object."));
             }
         }
-        return InvocationOperation{std::move(state)};
     } catch (...) {
         return startup_failed(error(ErrorCode::ExecutionBoundaryFailure, "Tool begin threw across its execution boundary."));
     }
+    return expose();
 }
 InvocationProgress InvocationOperation::poll() const
 { std::lock_guard lock(state_->mutex); return state_->progress(); }
+bool InvocationOperation::physically_exited() const
+{ std::lock_guard lock(state_->mutex); return state_->exited; }
+Result<std::monostate> InvocationOperation::notify_when(InvocationWaitTarget target,
+    std::weak_ptr<InvocationWakeup> wakeup) const
+{
+    const auto listener = wakeup.lock();
+    if (!listener || (target != InvocationWaitTarget::LogicalCompletion && target != InvocationWaitTarget::PhysicalExit)) {
+        return error(ErrorCode::InvalidValue, "Notification requires a known target and a live wakeup receiver.");
+    }
+    const auto state = state_;
+    {
+        std::lock_guard lock(state->mutex);
+        auto& registration = state->wakeup(target);
+        if (registration) { return error(ErrorCode::InvalidState, "Invocation notification already registered for this target."); }
+        if (!state->reached(target)) {
+            registration.emplace(std::move(wakeup));
+            return std::monostate{};
+        }
+        registration.emplace();
+    }
+    listener->signal(state->identity, target);
+    return std::monostate{};
+}
 Result<InvocationWaitResult> InvocationOperation::wait_for(InvocationWaitTarget target, std::chrono::milliseconds timeout) const
 {
     if ((target != InvocationWaitTarget::LogicalCompletion && target != InvocationWaitTarget::PhysicalExit) || timeout.count() < 0) {
         return error(ErrorCode::InvalidValue, "Wait requires a known target and a nonnegative timeout.");
     }
     std::unique_lock lock(state_->mutex);
-    const auto reached = [&]() { return target == InvocationWaitTarget::LogicalCompletion ? state_->completion.has_value() : state_->exited; };
+    const auto reached = [&]() { return state_->reached(target); };
     const bool ready = state_->changed.wait_for(lock, timeout, reached);
     return InvocationWaitResult{ready ? InvocationWaitOutcome::Reached : InvocationWaitOutcome::TimedOut, state_->progress()};
 }
 Result<CancellationRequest> InvocationOperation::request_cancel() const
 {
+    const auto state = state_;
     std::shared_ptr<InvocationControl> control;
     {
-        std::lock_guard lock(state_->mutex);
-        if (state_->exited) { return CancellationRequest::AlreadyExited; }
-        if (state_->exiting) { return CancellationRequest::CleanupInProgress; }
-        if (state_->cancelled) { return CancellationRequest::AlreadyRequested; }
-        if (state_->context->data().configuration.data().tool.execution.cancellation != ToolCancellation::Cooperative) {
+        std::lock_guard lock(state->mutex);
+        if (state->exited) { return CancellationRequest::AlreadyExited; }
+        if (state->exiting) { return CancellationRequest::CleanupInProgress; }
+        if (state->cancelled) { return CancellationRequest::AlreadyRequested; }
+        if (state->context->data().configuration.data().tool.execution.cancellation != ToolCancellation::Cooperative) {
             return error(ErrorCode::MissingCapability, "Tool does not declare cooperative cancellation support.");
         }
-        state_->cancelled = true; control = state_->control;
+        state->cancelled = true;
+        state->cancelling = true;
+        control = state->control;
     }
+    bool callback_failed = false;
     try {
         if (control) { control->request_cancel(); }
-        return CancellationRequest::Requested;
     } catch (...) {
+        callback_failed = true;
+    }
+    // Release the local reference before making cleanup eligible. Otherwise a
+    // concurrent exit could publish while the control was still being released.
+    control.reset();
+    bool clean;
+    {
+        std::lock_guard lock(state->mutex);
+        state->cancelling = false;
+        clean = state->ready_for_cleanup();
+    }
+    if (clean) { state->finish_exit(); }
+    if (callback_failed) {
         return error(ErrorCode::ExecutionBoundaryFailure, "Cancellation callback threw; cancellation still does not imply physical exit.");
     }
+    return CancellationRequest::Requested;
 }
 
 } // namespace visionpro::core

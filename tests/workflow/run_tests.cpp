@@ -82,6 +82,7 @@ static_assert(!std::is_default_constructible_v<RunRequest>);
 static_assert(!std::is_default_constructible_v<NodeResult>);
 static_assert(!std::is_convertible_v<RunRequest, ConfigValue>);
 static_assert(std::is_same_v<decltype(std::declval<const RunRequest&>().inputs()), std::span<const FixedRunInput>>);
+static_assert(std::is_same_v<decltype(std::declval<const RunRequest&>().globals()), std::span<const GlobalVariableEntry>>);
 static_assert(std::is_same_v<decltype(std::declval<const NodeResult&>().data()), const NodeResultData&>);
 static_assert(!std::is_same_v<RunIdentity, ResultIdentity>);
 static_assert(!std::is_same_v<OutputAddress, OutputReference>);
@@ -234,6 +235,49 @@ void run_isolation()
     check(image_request->input(image_id()) && moved.input(image_id()), "moving a request preserves validated source invariants");
 }
 
+void fixed_globals()
+{
+    auto setup = fixture();
+    const auto variable = uuid<VariableId>();
+    const auto session = snapshot_identity().session;
+    const auto source = token<SchemaId>("test.global.source");
+    setup.solution.variables.push_back({variable, "Threshold", DataType::integer(), ConfigValue::integer(9)});
+    const auto snapshot = capture(setup);
+    const auto target = WorkflowTarget{uuid<WorkflowId>()};
+    const GlobalVariableEntry entry{variable, DataValue::integer(42), 6, ExternalUpdateOrigin{session, source}};
+    std::vector globals{entry};
+    const auto create = [&](std::span<const GlobalVariableEntry> values) {
+        return RunRequest::create(snapshot, target, inputs(), trigger(), {}, {}, values);
+    };
+
+    const auto frozen = take(create(globals));
+    globals.front() = {variable, DataValue::integer(7), 8, ExternalUpdateOrigin{session, token<SchemaId>("test.updated")}};
+    const auto earlier = frozen.globals();
+    const auto later = take(create(globals));
+    check(earlier.size() == 1 && earlier.front().variable == variable
+        && earlier.front().current_value == entry.current_value && earlier.front().revision == 6,
+        "editing caller-owned globals leaves an earlier request's value and revision intact");
+    const auto* origin = earlier.empty() ? nullptr : std::get_if<ExternalUpdateOrigin>(&earlier.front().update_origin);
+    check(origin && origin->session == session && origin->source == source,
+        "request preserves the supplied update origin");
+    check(later.globals().size() == 1 && later.globals().front().current_value == globals.front().current_value
+        && later.globals().front().revision == 8, "a later request can use a new current value");
+    check(request(snapshot, inputs()).globals().empty(), "configuration initial values do not fill an absent read snapshot");
+
+    const std::array duplicates{entry, entry};
+    const auto duplicate = expect_error(create(duplicates), ErrorCode::InvalidResolutionContext);
+    check(duplicate.location.variable == variable, "duplicate read values locate the repeated variable");
+    globals.front() = entry;
+    globals.front().variable = uuid<VariableId>(2);
+    expect_error(create(globals), ErrorCode::InvalidResolutionContext);
+    globals.front() = entry;
+    globals.front().current_value = DataValue::boolean(true);
+    expect_error(create(globals), ErrorCode::InvalidGlobalVariable);
+    globals.front() = entry;
+    globals.front().update_origin = ExternalUpdateOrigin{uuid<SolutionSessionId>(2), source};
+    expect_error(create(globals), ErrorCode::ResultIdentityMismatch);
+}
+
 ResultIdentity identity()
 {
     return {{snapshot_identity(), uuid<WorkflowId>(), counter<WorkflowRunId>(3)},
@@ -263,7 +307,8 @@ void result_models()
     check(std::get<DataValue>(result.output(token<OutputId>("list"))->content).elements()->empty(), "Available empty list remains a value");
     check(std::holds_alternative<NotProduced>(result.output(token<OutputId>("omitted"))->content), "not-produced slot has an explicit absence reason");
     check(!result.output(token<OutputId>("unknown")), "result lookup never invents an undeclared slot");
-    check(result.data().elapsed.count() == 10 && result.data().selected_control_outputs.size() == 1, "terminal result retains duration and named control selection");
+    check(result.data().elapsed == std::chrono::nanoseconds{10} && result.data().selected_control_outputs.size() == 1,
+        "terminal result retains duration and named control selection");
     const auto base = identity();
     auto changed = base; changed.run.snapshot.session = uuid<SolutionSessionId>(2);
     check(changed != base, "result identity includes the session");
@@ -336,7 +381,7 @@ int main(int argc, char** argv)
     const std::string_view group = argv[1];
     try {
         if (group == "run_inputs") { run_inputs(); }
-        else if (group == "run_isolation") { run_isolation(); }
+        else if (group == "run_isolation") { run_isolation(); fixed_globals(); }
         else if (group == "result_models") { result_models(); }
         else { return 2; }
     } catch (const std::exception& exception) {

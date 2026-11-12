@@ -106,6 +106,40 @@ public:
 };
 std::vector<InvocationResourceLease> leases()
 { return {{key<SchemaId>("table"), std::make_shared<const Lease>(ResourceReference{uuid<ResourceId>(), ResourceKind::Binary, 1})}}; }
+
+class RecordingResourceProvider final : public InvocationResourceProvider {
+public:
+    enum class Behavior { Acquire, StaleRevision, RejectSecond, ThrowOnSecond };
+
+    explicit RecordingResourceProvider(Behavior behavior = Behavior::Acquire) : behavior_(behavior) {}
+    std::span<const ResourceKind> kinds() const noexcept override
+    {
+        static constexpr ResourceKind supported[]{ResourceKind::Binary};
+        return supported;
+    }
+    Result<std::shared_ptr<const ResourceLease>> acquire(const ToolExecutionConfiguration&,
+        const ToolResourceBinding& binding) override
+    {
+        requests.push_back(binding);
+        if (requests.size() == 2) {
+            if (behavior_ == Behavior::RejectSecond) {
+                return Diagnostic{ErrorCode::ResourceNotFound, Severity::Error, {}, "Resource is unavailable."};
+            }
+            if (behavior_ == Behavior::ThrowOnSecond) { throw std::runtime_error("Provider failure"); }
+        }
+        auto reference = binding.resource;
+        if (behavior_ == Behavior::StaleRevision) { ++reference.revision.value(); }
+        auto lease = std::make_shared<const Lease>(std::move(reference));
+        issued.emplace_back(lease);
+        return std::shared_ptr<const ResourceLease>{std::move(lease)};
+    }
+
+    std::vector<ToolResourceBinding> requests;
+    std::vector<std::weak_ptr<const ResourceLease>> issued;
+private:
+    Behavior behavior_;
+};
+
 class AddInstance final : public ToolInstance {
 public:
     AddInstance(ToolExecutionConfiguration configuration, int& starts) : ToolInstance(std::move(configuration)), starts_(starts) {}
@@ -284,6 +318,61 @@ void projection_and_operation()
         "device lease identity does not invent a resource revision");
 }
 
+void provider_acquisition()
+{
+    auto editable = fixture();
+    const auto model_slot = key<SchemaId>("model");
+    const auto model_id = uuid<ResourceId>(2);
+    editable.tools[1].resources.push_back({model_slot, ResourceKind::Binary, true});
+    editable.worker().resources.push_back({model_slot, {model_id, ResourceKind::Binary, {}}});
+    editable.solution.resources.push_back({model_id, "Model", ResourceKind::Binary,
+        ManagedResource{{PathBase::SolutionDirectory, "model.bin", {}}, 7, std::string(64, 'b')}});
+    const auto snapshot = editable.snapshot();
+    const auto tool = take(PreparedTool::create(snapshot, uuid<WorkflowId>(), uuid<NodeId>(2)));
+    const auto attempt = number<AttemptId>(0);
+    ResultStore store(snapshot_id().session);
+    RecordingResourceProvider provider;
+
+    auto current = context();
+    check(std::holds_alternative<PendingInvocation>(tool.prepare(current, attempt, store, provider))
+        && provider.requests.empty(), "the provider is untouched while bindings are pending");
+    current.sources[1].state = MissingReason::NotSelected;
+    check(std::holds_alternative<UnavailableInvocation>(tool.prepare(current, attempt, store, provider))
+        && provider.requests.empty(), "unavailable inputs do not acquire any leases");
+
+    current = context();
+    take(store.insert(snapshot, record(snapshot, 1, DataValue::integer(10))));
+    take(store.insert(snapshot, record(snapshot, 3, DataValue::integer(20))));
+    {
+        const auto prepared = tool.prepare(current, attempt, store, provider);
+        const auto* invocation = std::get_if<PreparedInvocation>(&prepared);
+        check(provider.requests.size() == 2 && provider.requests[0].slot == key<SchemaId>("table")
+            && provider.requests[0].resource.revision == 1 && provider.requests[1].slot == model_slot
+            && provider.requests[1].resource.revision == 7, "the provider receives each slot with its pinned reference once");
+        check(invocation && invocation->context.data().resources.size() == 2 && provider.issued.size() == 2
+            && !provider.issued[0].expired() && !provider.issued[1].expired(),
+            "prepared context owns both provider leases");
+    }
+    check(std::ranges::all_of(provider.issued, [](const auto& lease) { return lease.expired(); }),
+        "destroying the prepared invocation releases its provider leases");
+
+    const auto reject = [&](RecordingResourceProvider::Behavior behavior, ErrorCode code, std::size_t attempts, ResourceId resource) {
+        RecordingResourceProvider failing(behavior);
+        const auto prepared = tool.prepare(current, attempt, store, failing);
+        const auto* failure = std::get_if<InvocationFailure>(&prepared);
+        check(failure && failure->diagnostic.code == code && failure->diagnostic.location.resource == resource
+            && failure->diagnostic.location.solution == snapshot.solution().id
+            && failure->diagnostic.location.workflow == current.run.workflow
+            && failure->diagnostic.location.node == current.consumer.node && failure->bindings.size() == 5,
+            "resource failure preserves the resource, invocation location and binding resolutions");
+        check(failing.requests.size() == attempts && failing.issued.size() == 1 && failing.issued[0].expired(),
+            "resource acquisition stops at the first failure and releases previously acquired leases");
+    };
+    reject(RecordingResourceProvider::Behavior::RejectSecond, ErrorCode::ResourceNotFound, 2, model_id);
+    reject(RecordingResourceProvider::Behavior::ThrowOnSecond, ErrorCode::ExecutionBoundaryFailure, 2, model_id);
+    reject(RecordingResourceProvider::Behavior::StaleRevision, ErrorCode::ResourceVersionMismatch, 1, uuid<ResourceId>());
+}
+
 void region_projection()
 {
     auto f = fixture();
@@ -331,7 +420,7 @@ void region_projection()
 int main(int argc, char** argv)
 {
     if (argc != 2 || std::string_view(argv[1]) != "tool_execution") { return 2; }
-    try { projection_and_operation(); region_projection(); }
+    try { projection_and_operation(); provider_acquisition(); region_projection(); }
     catch (const std::exception& error) { std::cerr << "Unexpected exception: " << error.what() << '\n'; return 1; }
     catch (...) { std::cerr << "Unexpected non-standard exception\n"; return 1; }
     std::cout << "tool_execution: " << checks << " checks, " << failures << " failures\n";

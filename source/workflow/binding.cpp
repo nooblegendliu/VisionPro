@@ -55,7 +55,7 @@ core::Result<std::monostate> validate_binding_shape(const Binding& binding)
     }
     std::set<MissingReason> reasons;
     for (const auto reason : binding.availability.accepted_absence) {
-        if ((reason != MissingReason::NotSelected && reason != MissingReason::Disabled)
+        if ((reason < MissingReason::NotSelected || reason > MissingReason::ConditionNotMet)
             || !reasons.insert(reason).second) { return fail("Accepted absence reasons must be recognized and unique."); }
     }
     for (const auto& source : binding.sources) {

@@ -1,5 +1,8 @@
 #include <visionpro/workflow/validation.hpp>
 #include <visionpro/core/schema_id_factory.hpp>
+#include "model_shape.hpp"
+#include "runtime_values.hpp"
+#include "validation_scope.hpp"
 #include "validation_values.hpp"
 
 #include <algorithm>
@@ -72,7 +75,13 @@ struct SourceType { DataType type; ValueSemantics semantics; };
 struct PortSchema {
     std::map<InputId, DataType> inputs;
     std::map<ParameterId, DataType> parameters;
-    std::map<OutputId, DataType> outputs;
+    struct Output {
+        DataType type;
+        bool required;
+        std::set<OutputAbsenceReason> allowed_absence;
+        bool operator==(const Output&) const = default;
+    };
+    std::map<OutputId, Output> outputs;
     std::set<ControlOutputId> controls;
     bool operator==(const PortSchema&) const = default;
 };
@@ -104,8 +113,19 @@ public:
     Validator(const Solution& solution, std::span<const ToolDescriptor> tools,
         std::span<const SchemaSupport> support) : solution_(solution), tools_(tools), support_(support) {}
     Result<ValidationIndex> run();
+    Result<std::vector<Diagnostic>> diagnose();
+    Result<ValidationIndex> selected(const RunRequest& request);
 private:
+    Check initialize();
     Check workflow(const Workflow& flow);
+    Check selected_workflow(const detail::Parents& ownership);
+    Check independent_node(const detail::Parents& ownership, const Node& value);
+    Check fixed_inputs(std::span<const InputDescriptor> declarations, const Node* target = nullptr);
+    void begin_workflow(const Workflow& flow);
+    void add_scope(Scope scope);
+    Check node_metadata(const Node& node);
+    Check check_control_endpoints(const ControlLink& link);
+    Check add_control_link(const ControlLink& link);
     Check node(const Node& value);
     Check public_interface(const PublicInterface& interface, DiagnosticLocation where);
     Check exports(const PublicInterface& interface, const std::vector<OutputMapping>& outputs,
@@ -128,6 +148,7 @@ private:
     Scope parent(NodeId node) const;
     ScopeDependencies& scope_index(Scope scope) { return index_.scopes.at(scopes_.at(scope)); }
     const ToolDescriptor* descriptor(const Node& node) const;
+    bool independent() const { return request_ && std::holds_alternative<NodeTarget>(request_->target()); }
     std::span<const InputDescriptor> inputs(const Node& node) const;
     std::span<const OutputDescriptor> outputs(const Node& node) const;
     std::span<const ControlOutputDescriptor> outlets(const Node& node) const;
@@ -135,11 +156,12 @@ private:
     std::span<const ToolDescriptor> tools_;
     std::span<const SchemaSupport> support_;
     const Workflow* flow_{nullptr};
+    const RunRequest* request_{nullptr};
     std::map<ToolTypeId, const ToolDescriptor*> tools_by_id_;
     Schemas schemas_;
     std::map<std::pair<SchemaId, std::uint32_t>, PortSchema> port_schemas_;
     ValidationIndex index_;
-    std::map<NodeId, NodeId> parents_;
+    detail::Parents parents_;
     std::map<Scope, std::size_t> scopes_;
     Graph control_;
     Graph combined_;
@@ -237,7 +259,10 @@ Check Validator::register_ports(SchemaId id, std::uint32_t version, std::span<co
     PortSchema shape;
     for (const auto& input : inputs) { shape.inputs.emplace(input.id, input.type); }
     for (const auto& parameter : parameters) { shape.parameters.emplace(parameter.id, parameter.type); }
-    for (const auto& output : outputs) { shape.outputs.emplace(output.id, output.type); }
+    for (const auto& output : outputs) {
+        shape.outputs.emplace(output.id, PortSchema::Output{output.type, output.required,
+            {output.allowed_absence.begin(), output.allowed_absence.end()}});
+    }
     for (const auto& control : controls) { shape.controls.insert(control.id); }
     const auto [it, inserted] = port_schemas_.emplace(std::pair{id, version}, shape);
     if (!inserted && it->second != shape) {
@@ -247,9 +272,8 @@ Check Validator::register_ports(SchemaId id, std::uint32_t version, std::span<co
     return std::monostate{};
 }
 
-Result<ValidationIndex> Validator::run()
+Check Validator::initialize()
 {
-    if (auto shape = validate_model_shape(solution_); const auto* failure = std::get_if<Diagnostic>(&shape)) { return *failure; }
     std::set<SchemaId> support_ids;
     for (const auto& support : support_) {
         if (!support_ids.insert(support.id).second || support.minimum_version == 0
@@ -308,57 +332,117 @@ Result<ValidationIndex> Validator::run()
             }
         }
     }
+    return std::monostate{};
+}
+
+Result<ValidationIndex> Validator::run()
+{
+    if (auto shape = validate_model_shape(solution_); const auto* failure = std::get_if<Diagnostic>(&shape)) { return *failure; }
+    if (auto setup = initialize(); const auto* failure = std::get_if<Diagnostic>(&setup)) { return *failure; }
     for (const auto& flow : solution_.workflows) {
-        flow_ = &flow;
         if (auto checked = workflow(flow); const auto* failure = std::get_if<Diagnostic>(&checked)) { return *failure; }
     }
-    return index_;
+    return std::move(index_);
+}
+
+Result<std::vector<Diagnostic>> Validator::diagnose()
+{
+    if (auto shape = validate_global_invariants(solution_); const auto* failure = std::get_if<Diagnostic>(&shape)) { return *failure; }
+    if (auto setup = initialize(); const auto* failure = std::get_if<Diagnostic>(&setup)) { return *failure; }
+    std::vector<Diagnostic> diagnostics;
+    if (auto layout = detail::validate_layouts(solution_); const auto* failure = std::get_if<Diagnostic>(&layout)) {
+        diagnostics.push_back(*failure);
+    }
+    for (const auto& flow : solution_.workflows) {
+        flow_ = &flow;
+        if (auto shape = contextualize(detail::validate_workflow_shape(flow), location());
+            const auto* failure = std::get_if<Diagnostic>(&shape)) {
+            diagnostics.push_back(*failure);
+            continue;
+        }
+        // A failed workflow must not add partially checked types to the report's catalog.
+        auto previous_types = schemas_;
+        auto previous_ports = port_schemas_;
+        if (auto checked = workflow(flow); const auto* failure = std::get_if<Diagnostic>(&checked)) {
+            diagnostics.push_back(*failure);
+            schemas_ = std::move(previous_types);
+            port_schemas_ = std::move(previous_ports);
+        }
+        index_.scopes.clear();
+    }
+    return diagnostics;
+}
+
+void Validator::begin_workflow(const Workflow& flow)
+{
+    flow_ = &flow;
+    parents_.clear(); scopes_.clear(); control_.clear(); combined_.clear();
+    for (const auto& link : flow.containment) { parents_.emplace(link.child, link.parent); }
+}
+
+void Validator::add_scope(Scope scope)
+{
+    scopes_.emplace(scope, index_.scopes.size());
+    index_.scopes.push_back({flow_->id, scope, {}, {}, {}});
+}
+
+Check Validator::node_metadata(const Node& node)
+{
+    if (const auto* group = std::get_if<GroupConfiguration>(&node.configuration)) {
+        return public_interface(group->interface, location(node.id));
+    }
+    const auto& configured = std::get<ToolConfiguration>(node.configuration);
+    const auto* tool = descriptor(node);
+    auto where = location(node.id); where.tool = configured.type;
+    if (!tool) { return error(ErrorCode::UnknownTool, "Node tool is not registered.", where); }
+    if (tool->config_version != configured.config_version) {
+        return error(ErrorCode::IncompatibleSchemaVersion, "Node configuration version does not match its tool.", where);
+    }
+    if (!support_.empty()) {
+        const auto it = std::ranges::find(support_, tool->schema.id, &SchemaSupport::id);
+        if (it == support_.end()) { return error(ErrorCode::IncompatibleSchemaVersion, "Tool Schema has no backend support declaration.", where); }
+        return contextualize(validate_schema_support(*tool, *it), where);
+    }
+    return std::monostate{};
+}
+
+Check Validator::check_control_endpoints(const ControlLink& link)
+{
+    auto where = location(link.target); where.control_link = link.id;
+    if (!find_node(*flow_, link.source) || !find_node(*flow_, link.target)) {
+        return error(ErrorCode::InvalidControlLink, "Control endpoints must exist in this workflow.", where);
+    }
+    if (parent(link.source) != parent(link.target)) {
+        return error(ErrorCode::ScopeViolation, "Control links cannot cross a Group boundary.", where);
+    }
+    return std::monostate{};
+}
+
+Check Validator::add_control_link(const ControlLink& link)
+{
+    auto where = location(link.target); where.control_link = link.id;
+    if (auto checked = contextualize(control_outlet(*find_node(*flow_, link.source), link.output), where);
+        failed(checked)) { return checked; }
+    if (path(control_, link.target, link.source)) {
+        return error(ErrorCode::ControlCycle, "Ordinary control links cannot form a cycle.", where);
+    }
+    control_[link.source].push_back(link.target);
+    scope_index(parent(link.source)).control_links.push_back(link);
+    return std::monostate{};
 }
 
 Check Validator::workflow(const Workflow& flow)
 {
-    parents_.clear(); scopes_.clear(); control_.clear(); combined_.clear();
-    for (const auto& link : flow.containment) { parents_.emplace(link.child, link.parent); }
-    const auto add_scope = [&](Scope scope) {
-        scopes_.emplace(scope, index_.scopes.size());
-        index_.scopes.push_back({flow.id, scope, {}, {}, {}});
-    };
+    begin_workflow(flow);
     add_scope({});
     if (auto checked = public_interface(flow.interface, location()); failed(checked)) { return checked; }
     for (const auto& node : flow.nodes) {
-        if (const auto* group = std::get_if<GroupConfiguration>(&node.configuration)) {
-            add_scope(node.id);
-            if (auto checked = public_interface(group->interface, location(node.id)); failed(checked)) { return checked; }
-        } else {
-            const auto& configured = std::get<ToolConfiguration>(node.configuration);
-            const auto* tool = descriptor(node);
-            auto where = location(node.id); where.tool = configured.type;
-            if (!tool) { return error(ErrorCode::UnknownTool, "Node tool is not registered.", where); }
-            if (tool->config_version != configured.config_version) {
-                return error(ErrorCode::IncompatibleSchemaVersion, "Node configuration version does not match its tool.", where);
-            }
-            if (!support_.empty()) {
-                const auto it = std::ranges::find(support_, tool->schema.id, &SchemaSupport::id);
-                if (it == support_.end()) { return error(ErrorCode::IncompatibleSchemaVersion, "Tool Schema has no backend support declaration.", where); }
-                if (auto checked = contextualize(validate_schema_support(*tool, *it), where); failed(checked)) { return checked; }
-            }
-        }
+        if (std::holds_alternative<GroupConfiguration>(node.configuration)) { add_scope(node.id); }
+        if (auto checked = node_metadata(node); failed(checked)) { return checked; }
     }
     for (const auto& link : flow.control_links) {
-        auto where = location(link.target); where.control_link = link.id;
-        const auto* from = find_node(flow, link.source);
-        if (!from || !find_node(flow, link.target)) {
-            return error(ErrorCode::InvalidControlLink, "Control endpoints must exist in this workflow.", where);
-        }
-        if (parent(link.source) != parent(link.target)) {
-            return error(ErrorCode::ScopeViolation, "Control links cannot cross a Group boundary.", where);
-        }
-        if (auto checked = contextualize(control_outlet(*from, link.output), where); failed(checked)) { return checked; }
-        if (path(control_, link.target, link.source)) {
-            return error(ErrorCode::ControlCycle, "Ordinary control links cannot form a cycle.", where);
-        }
-        control_[link.source].push_back(link.target);
-        scope_index(parent(link.source)).control_links.push_back(link);
+        if (auto checked = check_control_endpoints(link); failed(checked)) { return checked; }
+        if (auto checked = add_control_link(link); failed(checked)) { return checked; }
     }
     combined_ = control_;
     for (const auto& [scope, index] : scopes_) {
@@ -384,6 +468,101 @@ Check Validator::workflow(const Workflow& flow)
     return std::monostate{};
 }
 
+Result<ValidationIndex> Validator::selected(const RunRequest& request)
+{
+    if (auto setup = initialize(); const auto* failure = std::get_if<Diagnostic>(&setup)) { return *failure; }
+    request_ = &request;
+    const auto id = std::visit([](const auto& target) { return target.workflow; }, request.target());
+    const auto& flow = *find_workflow(solution_, id);
+    flow_ = &flow;
+    const auto ownership = detail::validate_containment(flow);
+    if (const auto* failure = std::get_if<Diagnostic>(&ownership)) {
+        return std::get<Diagnostic>(contextualize(*failure, location()));
+    }
+    begin_workflow(flow);
+    const auto& parents = std::get<detail::Parents>(ownership);
+    auto checked = independent() ? independent_node(parents, *find_node(flow, std::get<NodeTarget>(request.target()).node))
+                                 : selected_workflow(parents);
+    if (const auto* failure = std::get_if<Diagnostic>(&checked)) { return *failure; }
+    return std::move(index_);
+}
+
+Check Validator::selected_workflow(const detail::Parents& ownership)
+{
+    const auto& flow = *flow_;
+    add_scope({});
+    if (auto checked = contextualize(detail::validate_workflow_interface_shape(flow, ownership), location());
+        failed(checked)) { return checked; }
+    if (flow.entries.empty()) {
+        return error(ErrorCode::IncompleteExecutionScope, "A workflow execution plan requires an explicit entry.", location());
+    }
+    if (auto checked = public_interface(flow.interface, location()); failed(checked)) { return checked; }
+    if (auto checked = fixed_inputs(flow.interface.inputs); failed(checked)) { return checked; }
+
+    Graph candidates;
+    for (const auto& link : flow.control_links) { candidates[link.source].push_back(link.target); }
+    const auto selected_nodes = reachable(candidates, flow.entries);
+    auto& scope = scope_index({});
+    scope.reachable.assign(selected_nodes.begin(), selected_nodes.end());
+    std::vector<const ControlLink*> links;
+    for (const auto& link : flow.control_links) {
+        if (!selected_nodes.contains(link.target)) { continue; }
+        if (auto checked = check_control_endpoints(link); failed(checked)) { return checked; }
+        if (!selected_nodes.contains(link.source)) {
+            auto where = location(link.target); where.control_link = link.id;
+            return error(ErrorCode::IncompleteExecutionScope, "Reachable node has a control predecessor outside the explicit entry range.", where);
+        }
+        links.push_back(&link);
+    }
+    for (const auto& value : flow.nodes) {
+        if (!selected_nodes.contains(value.id)) { continue; }
+        const auto where = location(value.id);
+        if (std::holds_alternative<GroupConfiguration>(value.configuration)) {
+            return error(ErrorCode::MissingCapability, "Execution plans do not yet support Group execution.", where);
+        }
+        if (auto checked = contextualize(detail::validate_node_shape(flow, ownership, value), where);
+            failed(checked)) { return checked; }
+        if (auto checked = node_metadata(value); failed(checked)) { return checked; }
+    }
+    for (const auto* link : links) {
+        if (auto checked = add_control_link(*link); failed(checked)) { return checked; }
+    }
+    combined_ = control_;
+    for (const auto& value : flow.nodes) {
+        if (!selected_nodes.contains(value.id)) { continue; }
+        if (auto checked = contextualize(node(value), location(value.id)); failed(checked)) { return checked; }
+    }
+    return exports(flow.interface, flow.outputs, flow.control_exports, {});
+}
+
+Check Validator::independent_node(const detail::Parents& ownership, const Node& value)
+{
+    const auto where = location(value.id);
+    if (std::holds_alternative<GroupConfiguration>(value.configuration)) {
+        return error(ErrorCode::MissingCapability, "An independent plan currently requires a tool node.", where);
+    }
+    if (auto checked = contextualize(detail::validate_node_shape(*flow_, ownership, value, true), where);
+        failed(checked)) { return checked; }
+    if (auto checked = node_metadata(value); failed(checked)) { return checked; }
+    add_scope(parent(value.id));
+    scope_index(parent(value.id)).reachable.push_back(value.id);
+    if (auto checked = fixed_inputs(inputs(value), &value); failed(checked)) { return checked; }
+    return contextualize(node(value), where);
+}
+
+Check Validator::fixed_inputs(std::span<const InputDescriptor> declarations, const Node* target)
+{
+    for (const auto& declared : declarations) {
+        auto where = location(target ? Scope{target->id} : Scope{}); where.input = declared.id;
+        const auto& fixed = *request_->input(declared.id);
+        for (auto checked : {register_semantics(declared.semantics),
+            detail::validate_runtime_domain(fixed.value, solution_, declared.semantics, target ? descriptor(*target) : nullptr)}) {
+            if (failed(checked)) { return contextualize(std::move(checked), where); }
+        }
+    }
+    return std::monostate{};
+}
+
 Check Validator::control_outlet(const Node& source, const std::optional<ControlOutputId>& outlet)
 {
     if (outlet && std::ranges::find(outlets(source), *outlet, &ControlOutputDescriptor::id) == outlets(source).end()) {
@@ -393,10 +572,16 @@ Check Validator::control_outlet(const Node& source, const std::optional<ControlO
 }
 Result<SourceType> Validator::output(const OutputReference& ref, Scope scope)
 {
+    if (independent()) {
+        return error(ErrorCode::InputUnavailable, "An independent invocation cannot read an upstream result.");
+    }
     if (ref.workflow != flow_->id) { return error(ErrorCode::ScopeViolation, "Ordinary result references cannot cross workflows."); }
     const auto* source = find_node(*flow_, ref.node);
     if (!source) { return error(ErrorCode::UnknownTarget, "Referenced result node does not exist."); }
     if (parent(source->id) != scope) { return error(ErrorCode::ScopeViolation, "Result references must use the immediate scope's public node outputs."); }
+    if (request_ && !contains(scope_index(scope).reachable, source->id)) {
+        return error(ErrorCode::IncompleteExecutionScope, "A result reference cannot activate a producer outside the control entry range.");
+    }
     if (const auto* id = std::get_if<OutputId>(&ref.output)) {
         const auto ports = outputs(*source);
         const auto it = std::ranges::find(ports, *id, &OutputDescriptor::id);
@@ -417,6 +602,9 @@ Result<SourceType> Validator::source_type(const BindingSource& source, Scope sco
         if constexpr (std::is_same_v<T, ConfigValue>) { return SourceType{value.type(), detail::config_value_semantics(value)}; }
         else if constexpr (std::is_same_v<T, OutputReference>) { return output(value, scope); }
         else if constexpr (std::is_same_v<T, ScopedInputReference>) {
+            if (independent()) {
+                return error(ErrorCode::InputUnavailable, "An independent invocation has no enclosing public input values for subscriptions.");
+            }
             if (value.workflow != flow_->id || value.group != scope) {
                 return error(ErrorCode::ScopeViolation, "Public inputs must come from the immediate enclosing Workflow or Group.");
             }
@@ -559,6 +747,7 @@ Check Validator::node(const Node& value)
 {
     const auto* tool = descriptor(value);
     for (const auto& binding : value.bindings) {
+        if (independent() && std::holds_alternative<InputId>(binding.target)) { continue; }
         bool known = false;
         auto where = location(value.id);
         if (const auto* id = std::get_if<InputId>(&binding.target)) {
@@ -569,9 +758,11 @@ Check Validator::node(const Node& value)
         }
         if (!known) { return error(ErrorCode::UnknownTarget, "Binding target is not declared by this node.", where); }
     }
-    for (const auto& input : inputs(value)) { if (auto checked = target(value, input); failed(checked)) { return checked; } }
+    if (!independent()) {
+        for (const auto& input : inputs(value)) { if (auto checked = target(value, input); failed(checked)) { return checked; } }
+    }
     if (tool) {
-        if (tool->state) {
+        if (tool->state && !tool->state_parameters.initial_value) {
             if (auto checked = config(tool->state->initial_value, nullptr, nullptr, 0, nullptr, true); failed(checked)) {
                 auto where = location(value.id); where.tool = tool->id;
                 return contextualize(std::move(checked), where);
@@ -623,10 +814,10 @@ Check Validator::exports(const PublicInterface& interface, const std::vector<Out
         const auto* source = find_node(*flow_, it->source);
         if (!source) { return error(ErrorCode::UnknownTarget, "Control export source does not exist.", where); }
         if (parent(source->id) != scope) { return error(ErrorCode::ScopeViolation, "Control exports must originate in their immediate internal scope.", where); }
-        if (auto checked = contextualize(control_outlet(*source, it->source_output), where); failed(checked)) { return checked; }
         if (!contains(scope_index(scope).reachable, source->id)) {
             return error(ErrorCode::IncompleteExecutionScope, "Control export source is outside the explicit entry range.", where);
         }
+        if (auto checked = contextualize(control_outlet(*source, it->source_output), where); failed(checked)) { return checked; }
     }
     return std::monostate{};
 }
@@ -662,5 +853,12 @@ core::Result<core::DataType> system_field_type(SystemField field)
 core::Result<ValidationIndex> validate_solution(const Solution& solution,
     std::span<const core::ToolDescriptor> tools, std::span<const core::SchemaSupport> support)
 { return Validator(solution, tools, support).run(); }
+
+core::Result<std::vector<core::Diagnostic>> diagnose_solution(const Solution& solution,
+    std::span<const core::ToolDescriptor> tools)
+{ return Validator(solution, tools, {}).diagnose(); }
+
+core::Result<ValidationIndex> detail::validate_execution_scope(const RunRequest& request)
+{ return Validator(request.snapshot().solution(), request.snapshot().tools(), {}).selected(request); }
 
 } // namespace visionpro::workflow

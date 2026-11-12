@@ -119,13 +119,30 @@ struct DiagnosticLocation {
     std::optional<ControlLinkId> control_link;
 };
 
+enum class ExternalStatusDomain { Unknown, Call, Algorithm, Output, Resource, Judgement };
+enum class ExternalCodeMapping { Unmapped, Mapped };
+
+struct ExternalDiagnostic {
+    SchemaId provider;
+    std::string operation;
+    ExternalStatusDomain domain;
+    std::int64_t raw_code;
+    ExternalCodeMapping mapping{ExternalCodeMapping::Unmapped};
+    std::optional<SchemaId> provider_domain{};
+    std::optional<std::string> description{};
+    std::optional<std::string> backend_version{};
+};
+
 struct Diagnostic {
     ErrorCode code;
     Severity severity;
     DiagnosticLocation location;
     std::string message;
+    std::optional<ExternalDiagnostic> external{};
 
     [[nodiscard]] ErrorCategory category() const noexcept { return error_category(code); }
 };
+
+[[nodiscard]] bool is_valid_diagnostic(const Diagnostic& diagnostic) noexcept;
 
 } // namespace visionpro::core

@@ -1,5 +1,6 @@
 #include <visionpro/workflow/model.hpp>
 #include <visionpro/core/text.hpp>
+#include "model_shape.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -10,7 +11,7 @@
 namespace visionpro::workflow {
 namespace {
 using Check = core::Result<std::monostate>;
-using Parents = std::map<core::NodeId, core::NodeId>;
+using detail::Parents;
 core::Diagnostic error(core::ErrorCode code, std::string message)
 { return {code, core::Severity::Error, {}, std::move(message)}; }
 bool failed(const Check& checked) { return std::holds_alternative<core::Diagnostic>(checked); }
@@ -112,54 +113,75 @@ Check control_mappings(const PublicInterface& interface, const std::vector<Contr
     return std::monostate{};
 }
 
-Check workflow_shape(const Workflow& workflow)
+} // namespace
+
+namespace detail {
+
+core::Result<Parents> validate_containment(const Workflow& workflow)
+{ return parent_map(workflow); }
+
+Check validate_workflow_interface_shape(const Workflow& workflow, const Parents& parents)
 {
     if (!valid_name(workflow.name)) { return error(core::ErrorCode::InvalidModel, "Workflow names require nonempty UTF-8 without NUL."); }
-    auto ownership = parent_map(workflow);
-    if (const auto* failure = std::get_if<core::Diagnostic>(&ownership)) { return *failure; }
-    const auto& parents = std::get<Parents>(ownership);
     for (auto checked : {validate_public_interface(workflow.interface), mappings(workflow.interface, workflow.outputs),
         entry_check(workflow, parents, std::nullopt, workflow.entries), control_mappings(workflow.interface, workflow.control_exports)}) {
         if (failed(checked)) { return checked; }
     }
-    for (const auto& node : workflow.nodes) {
-        const auto with_node = [&](Check checked) {
-            if (auto* failure = std::get_if<core::Diagnostic>(&checked)) { failure->location.node = node.id; }
-            return checked;
-        };
-        if (!valid_name(node.name) || node.join != JoinPolicy::AllActivated) {
-            return with_node(error(core::ErrorCode::InvalidModel, "Node name or join policy is invalid."));
+    return std::monostate{};
+}
+
+Check validate_node_shape(const Workflow& workflow, const Parents& parents, const Node& node, bool independent)
+{
+    const auto with_node = [&](Check checked) {
+        if (auto* failure = std::get_if<core::Diagnostic>(&checked)) { failure->location.node = node.id; }
+        return checked;
+    };
+    if (!valid_name(node.name) || node.join != JoinPolicy::AllActivated) {
+        return with_node(error(core::ErrorCode::InvalidModel, "Node name or join policy is invalid."));
+    }
+    if (const auto* tool = std::get_if<ToolConfiguration>(&node.configuration)) {
+        if (tool->config_version == 0) { return with_node(error(core::ErrorCode::InvalidModel, "Tool configuration version must be positive.")); }
+    } else {
+        const auto& group = std::get<GroupConfiguration>(node.configuration);
+        for (auto checked : {validate_public_interface(group.interface), mappings(group.interface, group.outputs),
+            entry_check(workflow, parents, node.id, group.entries), control_mappings(group.interface, group.control_exports)}) {
+            if (failed(checked)) { return with_node(std::move(checked)); }
         }
-        if (const auto* tool = std::get_if<ToolConfiguration>(&node.configuration)) {
-            if (tool->config_version == 0) { return with_node(error(core::ErrorCode::InvalidModel, "Tool configuration version must be positive.")); }
-        } else {
-            const auto& group = std::get<GroupConfiguration>(node.configuration);
-            for (auto checked : {validate_public_interface(group.interface), mappings(group.interface, group.outputs),
-                entry_check(workflow, parents, node.id, group.entries), control_mappings(group.interface, group.control_exports)}) {
-                if (failed(checked)) { return with_node(std::move(checked)); }
-            }
+    }
+    std::set<BindingTarget> targets;
+    for (const auto& binding : node.bindings) {
+        if (independent && std::holds_alternative<core::InputId>(binding.target)) { continue; }
+        if (auto checked = validate_binding_shape(binding); failed(checked)) { return with_node(std::move(checked)); }
+        if (!targets.insert(binding.target).second) {
+            auto result = error(core::ErrorCode::InvalidBinding, "A node target cannot have two separately editable bindings.");
+            std::visit([&](auto id) {
+                if constexpr (std::is_same_v<decltype(id), core::InputId>) { result.location.input = id; }
+                else { result.location.parameter = id; }
+            }, binding.target);
+            return with_node(std::move(result));
         }
-        std::set<BindingTarget> targets;
-        for (const auto& binding : node.bindings) {
-            if (auto checked = validate_binding_shape(binding); failed(checked)) { return with_node(std::move(checked)); }
-            if (!targets.insert(binding.target).second) {
-                auto result = error(core::ErrorCode::InvalidBinding, "A node target cannot have two separately editable bindings.");
-                std::visit([&](auto id) {
-                    if constexpr (std::is_same_v<decltype(id), core::InputId>) { result.location.input = id; }
-                    else { result.location.parameter = id; }
-                }, binding.target);
-                return with_node(std::move(result));
-            }
-        }
-        std::set<core::SchemaId> slots;
-        for (const auto& resource : node.resources) {
-            if (!slots.insert(resource.slot).second) { return with_node(error(core::ErrorCode::InvalidModel, "Node resource slots must be unique.")); }
-            if (auto checked = core::validate_resource_reference(resource.resource); failed(checked)) { return with_node(std::move(checked)); }
-        }
+    }
+    std::set<core::SchemaId> slots;
+    for (const auto& resource : node.resources) {
+        if (!slots.insert(resource.slot).second) { return with_node(error(core::ErrorCode::InvalidModel, "Node resource slots must be unique.")); }
+        if (auto checked = core::validate_resource_reference(resource.resource); failed(checked)) { return with_node(std::move(checked)); }
     }
     return std::monostate{};
 }
-} // namespace
+
+Check validate_workflow_shape(const Workflow& workflow)
+{
+    auto ownership = validate_containment(workflow);
+    if (const auto* failure = std::get_if<core::Diagnostic>(&ownership)) { return *failure; }
+    const auto& parents = std::get<Parents>(ownership);
+    if (auto checked = validate_workflow_interface_shape(workflow, parents); failed(checked)) { return checked; }
+    for (const auto& node : workflow.nodes) {
+        if (auto checked = validate_node_shape(workflow, parents, node); failed(checked)) { return checked; }
+    }
+    return std::monostate{};
+}
+
+} // namespace detail
 
 const Workflow* find_workflow(const Solution& solution, const core::WorkflowId& id) noexcept
 {
@@ -235,7 +257,7 @@ Check validate_public_interface(const PublicInterface& interface)
     return std::monostate{};
 }
 
-Check validate_model_shape(const Solution& solution)
+Check validate_global_invariants(const Solution& solution)
 {
     const auto contextualize = [&](Check checked) {
         if (auto* failure = std::get_if<core::Diagnostic>(&checked)) { failure->location.solution = solution.id; }
@@ -265,7 +287,6 @@ Check validate_model_shape(const Solution& solution)
                 result.location.control_link = link.id; return with_workflow(std::move(result));
             }
         }
-        if (auto checked = workflow_shape(workflow); failed(checked)) { return with_workflow(std::move(checked)); }
     }
     for (auto checked : {core::validate_resource_catalog(solution.resources),
         core::validate_global_variable_definitions(solution.variables), core::validate_queue_definitions(solution.queues)}) {
@@ -276,24 +297,43 @@ Check validate_model_shape(const Solution& solution)
         if (!coordinates.insert(frame.id).second) { return contextualize(error(core::ErrorCode::DuplicateIdentity, "Coordinate identity is duplicated.")); }
         if (auto checked = core::validate_coordinate_frame(frame); failed(checked)) { return contextualize(std::move(checked)); }
     }
+    return std::monostate{};
+}
+
+Check detail::validate_layouts(const Solution& solution)
+{
     std::set<core::WorkflowId> layouts;
     for (const auto& layout : solution.layouts) {
         const auto* workflow = find_workflow(solution, layout.workflow);
         if (!workflow || !layouts.insert(layout.workflow).second) {
             auto result = error(core::ErrorCode::InvalidModel, "Each layout must identify one existing workflow.");
-            result.location.workflow = layout.workflow; return contextualize(std::move(result));
+            result.location.solution = solution.id; result.location.workflow = layout.workflow;
+            return result;
         }
         std::set<core::NodeId> placements;
         for (const auto& placement : layout.nodes) {
             if (!find_node(*workflow, placement.node) || !placements.insert(placement.node).second
                 || !std::isfinite(placement.x) || !std::isfinite(placement.y)) {
                 auto result = error(core::ErrorCode::InvalidModel, "Placements require unique existing nodes and finite coordinates.");
-                result.location.workflow = layout.workflow; result.location.node = placement.node;
-                return contextualize(std::move(result));
+                result.location.solution = solution.id; result.location.workflow = layout.workflow; result.location.node = placement.node;
+                return result;
             }
         }
     }
     return std::monostate{};
+}
+
+Check validate_model_shape(const Solution& solution)
+{
+    if (auto checked = validate_global_invariants(solution); failed(checked)) { return checked; }
+    for (const auto& workflow : solution.workflows) {
+        if (auto checked = detail::validate_workflow_shape(workflow); auto* failure = std::get_if<core::Diagnostic>(&checked)) {
+            failure->location.solution = solution.id;
+            failure->location.workflow = workflow.id;
+            return checked;
+        }
+    }
+    return detail::validate_layouts(solution);
 }
 
 } // namespace visionpro::workflow

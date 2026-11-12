@@ -14,8 +14,8 @@ struct SnapshotIdentity {
     auto operator<=>(const SnapshotIdentity&) const = default;
 };
 
-// Owns a detached configuration revision and tool metadata, not an ExecutionPlan
-// or loaded resource bytes. A snapshot alone never certifies an executable graph.
+// Owns a detached configuration revision and tool metadata. Capture requires
+// global invariants, but retains local drafts for diagnostics and scoped planning.
 class ConfigSnapshot final {
 public:
     ConfigSnapshot(const ConfigSnapshot&) noexcept = default;
