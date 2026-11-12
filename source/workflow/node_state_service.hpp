@@ -44,6 +44,7 @@ public:
     [[nodiscard]] core::Result<std::shared_ptr<InvocationStateLease>> acquire(
         const core::InvocationContext& context, const Node& node, bool isolated, core::ToolInstance& instance);
     [[nodiscard]] core::Result<std::monostate> reset(core::WorkflowId workflow, core::NodeId node);
+    void clear() noexcept;
 
 private:
     struct StateVersion {

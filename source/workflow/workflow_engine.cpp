@@ -4,6 +4,7 @@
 #include <visionpro/workflow/execution_plan.hpp>
 #include "control_schedule.hpp"
 #include "node_state_service.hpp"
+#include "observation_hub.hpp"
 
 #include <algorithm>
 #include <condition_variable>
@@ -24,6 +25,14 @@ Diagnostic error(ErrorCode code, std::string message, const RunRequest& request,
     location.solution = request.snapshot().solution().id;
     location.workflow = std::visit([](const auto& target) { return target.workflow; }, request.target());
     location.node = node;
+    return {code, Severity::Error, std::move(location), std::move(message)};
+}
+
+Diagnostic query_error(ErrorCode code, const RunIdentity& run, const InvocationKey& invocation, std::string message)
+{
+    DiagnosticLocation location;
+    location.workflow = run.workflow;
+    location.node = invocation.node;
     return {code, Severity::Error, std::move(location), std::move(message)};
 }
 
@@ -141,8 +150,9 @@ enum class CallDecision { Waiting, Advance, Stop, Cancel };
 class EngineRun final : public RunControl {
 public:
     EngineRun(const RunRequest& request, WorkflowRunId id, detail::ControlSchedule schedule,
-        const std::shared_ptr<SchedulerEvents>& events)
-        : RunControl(request, id), wakeup_(std::make_shared<RunWakeup>(events)), schedule_(std::move(schedule)),
+        const std::shared_ptr<SchedulerEvents>& events, const std::shared_ptr<detail::ObservationHub>& observers)
+        : RunControl(request, id), wakeup_(std::make_shared<RunWakeup>(events)), observers_(observers),
+          schedule_(std::move(schedule)),
           remaining_(schedule_.nodes().size()), eligible_(remaining_), results_(identity().snapshot.session)
     {
         progress_.nodes.reserve(remaining_);
@@ -325,6 +335,7 @@ public:
         eligible_[index].reset();
         progress_.nodes[index].status = status;
         --remaining_;
+        publish(RunObservationKind::ResultPublished, status, result.data().identity);
         if (status == ExecutionStatus::Succeeded) { schedule_.source_ready(index); }
         else { stop(status); }
         finish_if_done();
@@ -379,6 +390,7 @@ public:
     {
         const std::lock_guard lock(mutex_);
         progress_.quiescent = true;
+        publish(RunObservationKind::RunQuiescent, progress_.status);
         changed_.notify_all();
     }
 
@@ -439,12 +451,19 @@ private:
     {
         if (remaining_ != 0 || terminal(progress_.status)) { return; }
         progress_.status = stopping_.value_or(ExecutionStatus::Succeeded);
+        publish(RunObservationKind::RunCompleted, progress_.status);
         changed_.notify_all();
+    }
+
+    void publish(RunObservationKind kind, ExecutionStatus status, std::optional<ResultIdentity> result = {}) noexcept
+    {
+        if (const auto observers = observers_.lock()) { observers->publish(identity(), kind, status, result); }
     }
 
     mutable std::mutex mutex_;
     std::condition_variable changed_;
     const std::shared_ptr<RunWakeup> wakeup_;
+    const std::weak_ptr<detail::ObservationHub> observers_;
     detail::ControlSchedule schedule_;
     RunProgress progress_;
     bool cancel_requested_{false};
@@ -658,18 +677,29 @@ WorkStep execute_step(Work& work, InvocationResourceProvider* resources, detail:
 } // namespace
 
 struct WorkflowEngine::Impl {
-    Impl(SolutionSessionId id, const ToolRegistry& tools, std::shared_ptr<InvocationResourceProvider> provider)
+    Impl(SolutionSessionId id, const ToolRegistry& tools, std::shared_ptr<InvocationResourceProvider> provider,
+        WorkflowEngineOptions options)
         : session(id), registry(tools), resources(std::move(provider)), capabilities(profile(resources.get())),
+          history(options.completed_run_limit),
           worker([this] { work_loop(); }) {}
 
-    ~Impl()
+    ~Impl() { static_cast<void>(close()); }
+
+    Result<std::monostate> close()
     {
+        if (worker_engine == this) {
+            return Diagnostic{ErrorCode::InvalidState, Severity::Error, {}, "Cannot wait for session closure on its workflow worker."};
+        }
         {
             const std::lock_guard lock(events->mutex);
-            stopping = true;
+            if (!stopping) {
+                stopping = true;
+                observers->close();
+                events->changed.notify_one();
+            }
         }
-        events->changed.notify_one();
-        worker.join();
+        std::call_once(joined, [this] { worker.join(); });
+        return std::monostate{};
     }
 
     RunSubmission submit(const RunRequest& request, WorkflowId workflow)
@@ -686,20 +716,22 @@ struct WorkflowEngine::Impl {
         const std::lock_guard lock(events->mutex);
         // Planning does not reserve a slot. Another submit may have won it.
         if (auto refusal = check_slot(request, workflow)) { return std::move(*refusal); }
-        const auto next = runs.next();
+        const auto next = last_admitted ? RuntimeIdFactory::next(*last_admitted)
+                                        : RuntimeIdFactory::from_value<WorkflowRunId>(1);
         if (const auto* failure = std::get_if<Diagnostic>(&next)) { return RunRejected{*failure}; }
-        auto run = std::make_shared<EngineRun>(plan.request(), std::get<WorkflowRunId>(next), std::move(schedule), events);
+        auto run = std::make_shared<EngineRun>(plan.request(), std::get<WorkflowRunId>(next), std::move(schedule), events, observers);
         auto handle = RunHandle::from_accepted(run);
         if (auto* failure = std::get_if<Diagnostic>(&handle)) { return RunRejected{std::move(*failure)}; }
 
         auto work = std::make_unique<Work>(std::move(plan), run);
-        const auto slot = active.emplace(workflow, run->identity()).first;
+        const auto slot = active.emplace(workflow, run).first;
         try {
             admitted.push_back(std::move(work));
         } catch (...) {
             active.erase(slot);
             throw;
         }
+        last_admitted = run->identity().run;
         events->changed.notify_one();
         return std::get<RunHandle>(std::move(handle));
     }
@@ -716,6 +748,35 @@ struct WorkflowEngine::Impl {
         }
         return states.reset(target.workflow, target.node);
     }
+
+    Result<std::optional<NodeResult>> lookup_result(const RunIdentity& run, const InvocationKey& invocation) const
+    {
+        const auto mismatch = [&] {
+            return query_error(ErrorCode::ResultIdentityMismatch, run, invocation,
+                "Result lookup requires an exact run and invocation from this session.");
+        };
+        if (run.snapshot.session != session || invocation.workflow_run != run.run) { return mismatch(); }
+        std::shared_ptr<EngineRun> backend;
+        {
+            const std::lock_guard lock(events->mutex);
+            const auto in_flight = std::ranges::find_if(active, [&](const auto& slot) {
+                return slot.second->identity().run == run.run;
+            });
+            if (in_flight != active.end()) {
+                backend = in_flight->second;
+            } else if (const auto retained = std::ranges::find_if(history, [&](const auto& item) {
+                return item && item->identity().run == run.run;
+            }); retained != history.end()) {
+                backend = *retained;
+            } else if (last_admitted && run.run <= *last_admitted) {
+                return query_error(ErrorCode::ResultRetired, run, invocation, "Run results are outside the session history.");
+            }
+        }
+        if (!backend || backend->identity() != run) { return mismatch(); }
+        return std::get<RunHandle>(RunHandle::from_accepted(std::move(backend))).lookup(invocation);
+    }
+
+    Result<RunObservation> observe(std::size_t capacity) { return observers->subscribe(capacity); }
 
     const SolutionSessionId session;
     const ToolRegistry registry;
@@ -742,7 +803,7 @@ private:
             return RunRejected{error(ErrorCode::InvalidRunRequest, "The workflow engine is draining accepted work.", request)};
         }
         const auto slot = active.find(workflow);
-        if (slot != active.end()) { return RunBusy{slot->second}; }
+        if (slot != active.end()) { return RunBusy{slot->second->identity()}; }
         return std::nullopt;
     }
 
@@ -770,13 +831,21 @@ private:
             admitted.erase(entry);
         }
         finished.reset(); // Destruction and backend cleanup stay outside scheduler locks.
-        const std::lock_guard lock(events->mutex);
-        active.erase(run->identity().workflow);
-        run->mark_quiescent();
+        std::shared_ptr<EngineRun> evicted;
+        {
+            const std::lock_guard lock(events->mutex);
+            if (!history.empty()) {
+                evicted = std::exchange(history[history_cursor], run);
+                if (++history_cursor == history.size()) { history_cursor = 0; }
+            }
+            active.erase(run->identity().workflow);
+            run->mark_quiescent();
+        }
     }
 
     void work_loop()
     {
+        worker_engine = this;
         while (const auto ready = take_ready()) {
             const auto entry = *ready;
             auto& work = **entry;
@@ -797,16 +866,29 @@ private:
             if (next == WorkStep::Finished) { retire(entry); }
             else if (next == WorkStep::Ready) { work.run->wakeup()->request(); }
         }
+        states.clear();
+        std::vector<std::shared_ptr<EngineRun>> retained;
+        {
+            const std::lock_guard lock(events->mutex);
+            retained.swap(history);
+        }
+        retained.clear();
+        resources.reset();
     }
 
-    const std::shared_ptr<InvocationResourceProvider> resources;
+    inline static thread_local const Impl* worker_engine{nullptr};
+    std::shared_ptr<InvocationResourceProvider> resources;
     const ExecutionCapabilities capabilities;
     const std::shared_ptr<SchedulerEvents> events{std::make_shared<SchedulerEvents>()};
+    const std::shared_ptr<detail::ObservationHub> observers{std::make_shared<detail::ObservationHub>()};
     bool stopping{false};
-    IdSequence<WorkflowRunId> runs;
-    std::map<WorkflowId, RunIdentity> active;
+    std::optional<WorkflowRunId> last_admitted;
+    std::map<WorkflowId, std::shared_ptr<EngineRun>> active;
     WorkList admitted;
     detail::NodeStateService states;
+    std::vector<std::shared_ptr<EngineRun>> history;
+    std::size_t history_cursor{0};
+    std::once_flag joined;
     std::thread worker;
 };
 
@@ -814,13 +896,13 @@ WorkflowEngine::WorkflowEngine(std::unique_ptr<Impl> impl) : impl_(std::move(imp
 WorkflowEngine::~WorkflowEngine() = default;
 
 core::Result<std::unique_ptr<WorkflowEngine>> WorkflowEngine::create(const core::ToolRegistry& registry,
-    std::shared_ptr<InvocationResourceProvider> resources)
+    std::shared_ptr<InvocationResourceProvider> resources, WorkflowEngineOptions options)
 {
     try {
         auto session = IdFactory::generate<SolutionSessionId>();
         if (const auto* failure = std::get_if<Diagnostic>(&session)) { return *failure; }
         return std::unique_ptr<WorkflowEngine>{new WorkflowEngine(std::make_unique<Impl>(
-            std::get<SolutionSessionId>(session), registry, std::move(resources)))};
+            std::get<SolutionSessionId>(session), registry, std::move(resources), options))};
     } catch (...) {
         return Diagnostic{ErrorCode::ExecutionBoundaryFailure, Severity::Error, {}, "Could not start the workflow worker."};
     }
@@ -850,6 +932,34 @@ core::Result<std::monostate> WorkflowEngine::reset_node_state(const NodeTarget& 
         location.node = target.node;
         return Diagnostic{ErrorCode::ExecutionBoundaryFailure, Severity::Error, std::move(location),
             "Node state reset raised an unexpected exception."};
+    }
+}
+
+core::Result<std::optional<NodeResult>> WorkflowEngine::lookup_result(
+    const RunIdentity& run, const InvocationKey& invocation) const
+{
+    try {
+        return impl_->lookup_result(run, invocation);
+    } catch (...) {
+        return query_error(ErrorCode::ExecutionBoundaryFailure, run, invocation, "Session result lookup raised an unexpected exception.");
+    }
+}
+
+core::Result<RunObservation> WorkflowEngine::observe(std::size_t capacity)
+{
+    try {
+        return impl_->observe(capacity);
+    } catch (...) {
+        return Diagnostic{ErrorCode::ExecutionBoundaryFailure, Severity::Error, {}, "Could not create a run observation subscription."};
+    }
+}
+
+core::Result<std::monostate> WorkflowEngine::close()
+{
+    try {
+        return impl_->close();
+    } catch (...) {
+        return Diagnostic{ErrorCode::ExecutionBoundaryFailure, Severity::Error, {}, "Could not drain and close the workflow engine."};
     }
 }
 

@@ -5,11 +5,13 @@ add_library(visionpro_workflow STATIC
     copy.cpp
     run.cpp
     run_handle.cpp
+    run_observation.cpp
     tool_execution.cpp
     execution_plan.cpp
     control_schedule.cpp
     node_state_service.cpp
     workflow_engine.cpp
+    workflow_session.cpp
     validation.cpp
     validation_values.cpp
     runtime_values.cpp

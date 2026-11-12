@@ -200,4 +200,10 @@ Result<std::monostate> NodeStateService::reset(WorkflowId workflow, NodeId node)
     return std::monostate{};
 }
 
+void NodeStateService::clear() noexcept
+{
+    const std::lock_guard lock(mutex_);
+    versions_.clear();
+}
+
 } // namespace visionpro::workflow::detail

@@ -28,6 +28,8 @@ public:
     [[nodiscard]] const Solution& solution() const noexcept;
     [[nodiscard]] std::span<const core::ToolDescriptor> tools() const noexcept;
     [[nodiscard]] const core::ToolDescriptor* find_tool(const core::ToolTypeId& type) const noexcept;
+    // Copies retain the exact captured revision, including its detached storage.
+    [[nodiscard]] bool same_capture(const ConfigSnapshot& other) const noexcept { return storage_ == other.storage_; }
 private:
     struct Storage;
     explicit ConfigSnapshot(std::shared_ptr<const Storage> storage) : storage_(std::move(storage)) {}
