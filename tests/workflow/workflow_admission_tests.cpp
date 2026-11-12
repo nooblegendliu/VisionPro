@@ -383,13 +383,6 @@ void linear_scope_boundary()
     flow.nodes.back().bindings.front().sources = {
         ScopedInputReference{flow.id, {}, key<InputId>("value"), {}}};
     const auto snapshot = fixture.capture(fixture.solution);
-    const auto independent = take(RunRequest::create(snapshot, NodeTarget{flow.id, flow.nodes.back().id},
-        {{key<InputId>("value"), DataValue::integer(7)}}, manual()));
-    const auto unsupported = fixture.engine->submit(independent);
-    const auto* refusal = std::get_if<RunRejected>(&unsupported);
-    check(refusal && refusal->diagnostic.code == ErrorCode::MissingCapability,
-        "The linear workflow service rejects independent execution before it calls any tool.");
-
     const auto run = accepted(fixture.engine->submit(request(snapshot, 9)));
     const auto progress = quiescence(run);
     check(progress.nodes.size() == 2 && progress.nodes.front().status == ExecutionStatus::Skipped
@@ -398,6 +391,17 @@ void linear_scope_boundary()
     check(progress.nodes.back().status == ExecutionStatus::Skipped
         && progress.nodes.back().skip_reason == NodeSkipReason::UpstreamClosed && !progress.nodes.back().invocation
         && fixture.calls->created == 0, "A closed unconditional predecessor cannot activate the next node.");
+
+    const auto independent = take(RunRequest::create(snapshot, NodeTarget{flow.id, flow.nodes.back().id},
+        {{key<InputId>("value"), DataValue::integer(7)}}, manual()));
+    const auto isolated = accepted(fixture.engine->submit(independent));
+    fixture.calls->cleanup.await(1, "The independent invocation did not reach cleanup.");
+    busy(fixture.engine->submit(request(snapshot, 9)), isolated.identity());
+    fixture.calls->cleanup.open();
+    const auto isolated_progress = quiescence(isolated);
+    check(isolated_progress.nodes.size() == 1 && fixture.calls->created == 1 && fixture.calls->cleaned == 1,
+        "The independent call creates only its target and releases the flow slot after cleanup.");
+    check_output(isolated, isolated_progress, 9);
 }
 } // namespace
 

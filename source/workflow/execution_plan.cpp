@@ -45,8 +45,10 @@ Result<std::monostate> check_tool(const ToolExecutionConfiguration& configuratio
     if (data.tool.execution.mode == ToolExecutionMode::Asynchronous && !capabilities.asynchronous) {
         return unsupported(where, "The execution profile does not support asynchronous tools.");
     }
-    if ((configuration.effective_state() || data.tool.execution.effects == ToolEffects::State)
-        && !capabilities.node_state) {
+    if (data.tool.execution.effects == ToolEffects::State && !configuration.effective_state()) {
+        return unsupported(where, "A stateful tool requires a declared node state definition.");
+    }
+    if (configuration.effective_state() && !capabilities.node_state) {
         return unsupported(where, "The execution profile does not provide a node state service.");
     }
     for (const auto& resource : data.resources) {
@@ -77,7 +79,7 @@ core::Result<ExecutionPlan> ExecutionPlan::create(const RunRequest& request, con
     if (request.trigger().kind == TriggerKind::Continuous || request.trigger().kind == TriggerKind::External) {
         return unsupported(where, "Only manual and debug triggers can be planned.");
     }
-    if (request.debug_state() == DebugStatePolicy::Active) {
+    if (request.debug_state() == DebugStatePolicy::Active && !capabilities.node_state) {
         return unsupported(where, "Independent access to active state requires state service arbitration.");
     }
     auto validated = detail::validate_execution_scope(request);

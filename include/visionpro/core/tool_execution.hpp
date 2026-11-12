@@ -45,6 +45,28 @@ struct ToolInvocationIdentity {
     AttemptId attempt;
     auto operator<=>(const ToolInvocationIdentity&) const = default;
 };
+
+namespace detail { struct InvocationState; }
+// One invocation's access to initialized state. Writes stop at logical
+// completion, and reads remain available through backend cleanup.
+class ToolStateAccess {
+public:
+    virtual ~ToolStateAccess() = default;
+    [[nodiscard]] virtual const NodeStateKey& key() const noexcept = 0;
+    [[nodiscard]] virtual const ToolInvocationIdentity& identity() const noexcept = 0;
+    [[nodiscard]] virtual Result<DataValue> read() const = 0;
+    [[nodiscard]] virtual Result<std::monostate> write(const DataValue& value) = 0;
+private:
+    friend class InvocationCompletion;
+    friend class InvocationOperation;
+    friend struct detail::InvocationState;
+    // Implemented by the state service. These hooks must not reenter the
+    // operation. Sealing closes writes, and finish revokes backend access.
+    virtual void seal() noexcept = 0;
+    virtual void finish() noexcept = 0;
+    std::atomic<bool> started_{false};
+};
+
 struct FixedToolInput { InputId id; DataValue value; };
 struct FixedInvocationParameter { ParameterId id; DataValue value; };
 using ToolValueTarget = std::variant<InputId, ParameterId>;
@@ -78,6 +100,8 @@ struct InvocationContextData {
     std::vector<FixedInvocationParameter> parameters;
     std::vector<ResolvedRegionInput> regions;
     std::vector<InvocationResourceLease> resources;
+    // Attached by the state service after preparation and initialization.
+    std::shared_ptr<ToolStateAccess> state{};
 };
 class InvocationContext final {
 public:
@@ -108,7 +132,6 @@ struct ToolCompletion {
 [[nodiscard]] Result<std::monostate> validate_tool_completion(const InvocationContext& context,
     const ToolCompletion& result);
 
-namespace detail { struct InvocationState; }
 class InvocationOperation;
 class InvocationControl;
 class ToolInstanceFactory;
@@ -151,6 +174,10 @@ public:
     [[nodiscard]] const ToolExecutionConfiguration& configuration() const noexcept { return configuration_; }
 protected:
     explicit ToolInstance(ToolExecutionConfiguration configuration) : configuration_(std::move(configuration)) {}
+    // The state service invokes this once per state domain and generation,
+    // with the prepared inputs but without a state access lease.
+    [[nodiscard]] virtual Result<DataValue> initialize_state(const InvocationContext&, const DataValue& initial)
+    { return initial; }
     // Returning ToolCompletion promises physical exit. Asynchronous work first
     // registers control and retains completion; its returned control must match.
     [[nodiscard]] virtual Result<InvocationStart> begin(std::shared_ptr<const InvocationContext> context,
@@ -160,6 +187,7 @@ private:
     friend class InvocationCompletion;
     friend struct detail::InvocationState;
     friend Result<std::shared_ptr<ToolInstance>> create_tool_instance(ToolInstanceFactory&, const ToolExecutionConfiguration&);
+    friend Result<DataValue> initialize_tool_state(ToolInstance&, const InvocationContext&, const DataValue&);
     ToolExecutionConfiguration configuration_;
     std::atomic<std::size_t> active_{0};
     std::atomic<bool> issued_{false};
@@ -172,6 +200,8 @@ public:
 };
 [[nodiscard]] Result<std::shared_ptr<ToolInstance>> create_tool_instance(ToolInstanceFactory& factory,
     const ToolExecutionConfiguration& configuration);
+[[nodiscard]] Result<DataValue> initialize_tool_state(ToolInstance& instance, const InvocationContext& context,
+    const DataValue& initial);
 
 struct InvocationProgress {
     std::optional<ToolCompletion> completion;

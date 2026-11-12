@@ -78,6 +78,31 @@ template<class Value> bool unresolved_region(const Value& value)
     }
     return false;
 }
+Check validate_state_access(const InvocationContextData& context)
+{
+    const auto& definition = context.configuration.effective_state();
+    if (!definition) { return error(ErrorCode::InvalidState, "State access requires a fixed state definition."); }
+    const auto& access = *context.state;
+    const auto& key = access.key();
+    const auto& identity = context.identity;
+    if (access.identity() != identity || key.node != identity.invocation.node) {
+        return error(ErrorCode::ResultIdentityMismatch, "State access must match the exact invocation identity and node.");
+    }
+    if (auto checked = validate_node_state(*definition, {key, StateInitialization::NotInitialized, {}, {}});
+        failed(checked)) { return checked; }
+    const bool matches = std::visit([&](const auto& domain) {
+        using Domain = std::decay_t<decltype(domain)>;
+        if constexpr (std::is_same_v<Domain, InvocationStateDomain>) {
+            return domain.invocation == SessionInvocationKey{identity.session, identity.invocation};
+        } else if constexpr (std::is_same_v<Domain, WorkflowRunStateDomain>) {
+            return domain.session == identity.session && domain.run == identity.invocation.workflow_run;
+        } else {
+            return domain.session == identity.session;
+        }
+    }, key.domain);
+    if (!matches) { return error(ErrorCode::ResultIdentityMismatch, "State domain must belong to this session and invocation."); }
+    return std::monostate{};
+}
 Check completion_check(const InvocationContext& context, const ToolCompletion& result)
 {
     const auto& invocation = context.data();
@@ -239,6 +264,9 @@ Result<InvocationContext> InvocationContext::create(const InvocationContextData&
         || data.identity.invocation.node != configuration.node) {
         return fail(error(ErrorCode::InvalidValue, "Invocation identity must match the fixed configuration's session, snapshot and node."));
     }
+    if (data.state) {
+        if (auto checked = validate_state_access(data); const auto* failure = std::get_if<Diagnostic>(&checked)) { return fail(*failure); }
+    }
     const auto values = [&](const auto& declarations, const auto& actual) -> Check {
         using Id = decltype(actual.front().id);
         std::set<Id> seen;
@@ -385,6 +413,7 @@ struct InvocationState {
         owned_control.reset();
         const std::weak_ptr<ToolInstance> remaining_instance = owned_instance;
         owned_instance.reset();
+        if (const auto& access = owned_context->data().state) { access->finish(); }
         owned_context.reset();
         // If another owner keeps the instance, retain its serialized slot
         // through lease cleanup as well.
@@ -421,6 +450,38 @@ Result<std::shared_ptr<ToolInstance>> create_tool_instance(ToolInstanceFactory& 
     }
 }
 
+Result<DataValue> initialize_tool_state(ToolInstance& instance, const InvocationContext& context, const DataValue& initial)
+{
+    const auto& fixed = context.data().configuration;
+    const auto fail = [&](Diagnostic diagnostic) -> Result<DataValue> { return contextualize(std::move(diagnostic), fixed.data()); };
+    const auto& definition = fixed.effective_state();
+    if (&instance.configuration().data() != &fixed.data() || !definition || context.data().state) {
+        return fail(error(ErrorCode::InvalidState, "State initialization requires the exact prepared stateful configuration and no active state access."));
+    }
+    if (!same_constant(initial, definition->initial_value)) {
+        return fail(error(ErrorCode::InvalidState, "State initialization must start from the configured initial value."));
+    }
+    try {
+        auto result = instance.initialize_state(context, initial);
+        if (const auto* failure = std::get_if<Diagnostic>(&result)) {
+            if (!is_valid_diagnostic(*failure) || failure->severity != Severity::Error) {
+                return fail(error(ErrorCode::InvalidState, "Tool state initialization returned an invalid failure diagnostic."));
+            }
+            return fail(*failure);
+        }
+        const auto& value = std::get<DataValue>(result);
+        if (value.type() != definition->schema) {
+            return fail(error(ErrorCode::TypeMismatch, "Initialized state must match the declared state schema."));
+        }
+        if (unresolved_region(value)) {
+            return fail(error(ErrorCode::InvalidState, "Initialized state cannot retain unresolved ROI inheritance."));
+        }
+        return result;
+    } catch (...) {
+        return fail(error(ErrorCode::ExecutionBoundaryFailure, "Tool state initialization threw across its execution boundary."));
+    }
+}
+
 Result<std::monostate> InvocationCompletion::register_control(std::shared_ptr<InvocationControl> control) const
 {
     std::lock_guard lock(state_->mutex);
@@ -440,6 +501,7 @@ Result<std::monostate> InvocationCompletion::complete(const ToolCompletion& resu
         if (state->completion || state->exited) { return error(ErrorCode::InvalidState, "Invocation completion is accepted only once, before physical exit."); }
         if (auto checked = validate_tool_completion(*state->context, result); failed(checked)) { return checked; }
         state->completion = result; // Detach caller-owned containers; DataValue owns immutable nested payloads.
+        if (const auto& access = state->context->data().state) { access->seal(); }
         listener = state->take_wakeup(InvocationWaitTarget::LogicalCompletion);
         state->changed.notify_all();
     }
@@ -469,7 +531,8 @@ Result<InvocationOperation> InvocationOperation::start(std::shared_ptr<ToolInsta
     if (!instance || &instance->configuration().data() != &configuration) {
         return fail(error(ErrorCode::InvalidState, "Invocation instance is not bound to this fixed configuration."));
     }
-    if (context.data().configuration.effective_state() || configuration.tool.execution.effects == ToolEffects::State) {
+    const auto& access = context.data().state;
+    if (!access && (context.data().configuration.effective_state() || configuration.tool.execution.effects == ToolEffects::State)) {
         return fail(error(ErrorCode::MissingCapability, "Stateful invocation requires a typed state service and access lease."));
     }
     auto state = std::make_shared<detail::InvocationState>(context.data().identity);
@@ -479,6 +542,9 @@ Result<InvocationOperation> InvocationOperation::start(std::shared_ptr<ToolInsta
         if (!instance->active_.compare_exchange_strong(expected, 1)) { return fail(error(ErrorCode::InvalidState, "Serialized instance still has an invocation before physical exit.")); }
     } else { instance->active_.fetch_add(1); }
     state->instance = instance;
+    if (access && access->started_.exchange(true)) {
+        return fail(error(ErrorCode::InvalidState, "State access can be used by only one invocation operation."));
+    }
     InvocationCompletion completion{state};
     const auto expose = [&] {
         instance.reset();
@@ -504,8 +570,10 @@ Result<InvocationOperation> InvocationOperation::start(std::shared_ptr<ToolInsta
             std::lock_guard lock(state->mutex);
             // No operation is exposed before begin returns. Callback completion
             // during startup is provisional and cannot hide a startup failure.
+            const bool already_sealed = state->completion.has_value();
             state->completion = ToolCompletion{context.data().identity, ToolCompletionStatus::Failed,
                 ToolJudgement::NotEvaluated, {}, {diagnostic}};
+            if (!already_sealed && access) { access->seal(); }
             registered = state->registered; exited = state->exited || state->exiting;
             state->changed.notify_all();
         }

@@ -8,6 +8,7 @@ add_library(visionpro_workflow STATIC
     tool_execution.cpp
     execution_plan.cpp
     control_schedule.cpp
+    node_state_service.cpp
     workflow_engine.cpp
     validation.cpp
     validation_values.cpp

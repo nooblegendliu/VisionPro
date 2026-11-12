@@ -3,6 +3,7 @@
 #include <visionpro/core/runtime_id_factory.hpp>
 #include <visionpro/workflow/execution_plan.hpp>
 #include "control_schedule.hpp"
+#include "node_state_service.hpp"
 
 #include <algorithm>
 #include <condition_variable>
@@ -278,7 +279,7 @@ public:
     }
 
     CallDecision accept_completion(std::size_t index, const PreparedInvocation& invocation,
-        std::optional<Result<NodeResult>> projected)
+        detail::InvocationStateLease* state, std::optional<Result<NodeResult>> projected)
     {
         const std::lock_guard lock(mutex_);
         // Eligibility, cancellation, publication and the successor's control
@@ -294,6 +295,7 @@ public:
         if (stopped) { projected = terminal_record(invocation, ToolCompletionStatus::Cancelled); }
         if (!projected) { return CallDecision::Waiting; }
         if (auto* failure = std::get_if<Diagnostic>(&*projected)) {
+            if (state) { state->settle(false); }
             fail_step(index, std::move(*failure));
             return CallDecision::Stop;
         }
@@ -313,11 +315,13 @@ public:
         progress_.diagnostics.reserve(progress_.diagnostics.size() + diagnostics.size());
         if (auto committed = results_.insert(request().snapshot(), result);
             auto* failure = std::get_if<Diagnostic>(&committed)) {
+            if (state) { state->settle(false); }
             fail_step(index, std::move(*failure));
             return CallDecision::Stop;
         }
-        for (auto& diagnostic : diagnostics) { progress_.diagnostics.push_back(std::move(diagnostic)); }
         const auto status = result.data().status;
+        if (state) { state->settle(status == ExecutionStatus::Succeeded); }
+        for (auto& diagnostic : diagnostics) { progress_.diagnostics.push_back(std::move(diagnostic)); }
         eligible_[index].reset();
         progress_.nodes[index].status = status;
         --remaining_;
@@ -482,6 +486,7 @@ Result<NodeResult> failed_call(const RunRequest& request, const PreparedInvocati
 
 struct ActiveCall {
     PreparedInvocation invocation;
+    std::shared_ptr<detail::InvocationStateLease> state{};
     std::optional<InvocationOperation> operation{};
     CallDecision decision{CallDecision::Waiting};
 };
@@ -514,7 +519,7 @@ bool settle_call(EngineRun& run, std::size_t index, ActiveCall& call)
                 projected = std::move(result);
             }
         }
-        call.decision = run.accept_completion(index, call.invocation, std::move(projected));
+        call.decision = run.accept_completion(index, call.invocation, call.state.get(), std::move(projected));
     }
     if (call.decision == CallDecision::Cancel) {
         call.decision = CallDecision::Stop;
@@ -547,7 +552,27 @@ void settle_notified(Work& work)
     }
 }
 
-void start_node(Work& work, std::size_t index, InvocationResourceProvider* resources)
+Result<InvocationOperation> launch_call(ActiveCall& call, std::shared_ptr<ToolInstance> instance,
+    const RunRequest& request, detail::NodeStateService& states)
+{
+    auto& invocation = call.invocation;
+    const auto& configuration = invocation.context.data().configuration.data();
+    const auto& flow = *find_workflow(invocation.snapshot.solution(), configuration.workflow);
+    const auto& node = *find_node(flow, configuration.node);
+    auto acquired = states.acquire(invocation.context, node, request.debug_state() == DebugStatePolicy::Isolated, *instance);
+    if (auto* failure = std::get_if<Diagnostic>(&acquired)) { return std::move(*failure); }
+    call.state = std::get<std::shared_ptr<detail::InvocationStateLease>>(std::move(acquired));
+    if (call.state) {
+        auto data = invocation.context.data();
+        data.state = call.state;
+        auto fixed = InvocationContext::create(data);
+        if (auto* failure = std::get_if<Diagnostic>(&fixed)) { return std::move(*failure); }
+        invocation.context = std::get<InvocationContext>(std::move(fixed));
+    }
+    return InvocationOperation::start(std::move(instance), invocation.context);
+}
+
+void start_node(Work& work, std::size_t index, InvocationResourceProvider* resources, detail::NodeStateService& states)
 {
     auto& run = *work.run;
     const auto& request = work.plan.request();
@@ -586,7 +611,7 @@ void start_node(Work& work, std::size_t index, InvocationResourceProvider* resou
     const auto [entry, inserted] = work.active_calls.emplace(index, ActiveCall{std::move(*invocation)});
     if (!inserted) { throw std::logic_error("The node already owns an active invocation."); }
     auto& call = entry->second;
-    const auto& identity = call.invocation.context.data().identity;
+    const auto identity = call.invocation.context.data().identity;
     const auto& wakeup = run.wakeup();
     wakeup->expect(identity);
     if (!run.start_call(index, identity, std::move(trace))) {
@@ -594,10 +619,10 @@ void start_node(Work& work, std::size_t index, InvocationResourceProvider* resou
         work.active_calls.erase(entry);
         return;
     }
-    auto started = InvocationOperation::start(std::get<std::shared_ptr<ToolInstance>>(std::move(created)), call.invocation.context);
+    auto started = launch_call(call, std::get<std::shared_ptr<ToolInstance>>(std::move(created)), request, states);
     if (auto* failure = std::get_if<Diagnostic>(&started)) {
         auto result = failed_call(request, call.invocation, std::move(*failure));
-        static_cast<void>(run.accept_completion(index, call.invocation, std::move(result)));
+        static_cast<void>(run.accept_completion(index, call.invocation, call.state.get(), std::move(result)));
         wakeup->forget(identity);
         work.active_calls.erase(entry);
         return;
@@ -610,17 +635,18 @@ void start_node(Work& work, std::size_t index, InvocationResourceProvider* resou
     const auto* failure = std::get_if<Diagnostic>(&exit);
     if (!failure) { failure = std::get_if<Diagnostic>(&completion); }
     if (failure) {
-        call.decision = run.accept_completion(index, call.invocation, failed_call(request, call.invocation, *failure));
+        call.decision = run.accept_completion(index, call.invocation, call.state.get(),
+            failed_call(request, call.invocation, *failure));
         wakeup->signal(identity, InvocationWaitTarget::LogicalCompletion);
     }
 }
 
-WorkStep execute_step(Work& work, InvocationResourceProvider* resources)
+WorkStep execute_step(Work& work, InvocationResourceProvider* resources, detail::NodeStateService& states)
 {
     auto& run = *work.run;
     run.begin_step();
     settle_notified(work);
-    if (const auto ready = run.take_ready()) { start_node(work, *ready, resources); }
+    if (const auto ready = run.take_ready()) { start_node(work, *ready, resources, states); }
     if (run.has_ready() || (run.stopping() && std::ranges::any_of(work.active_calls,
         [](const auto& entry) { return entry.second.decision == CallDecision::Waiting; }))) {
         return WorkStep::Ready;
@@ -678,6 +704,19 @@ struct WorkflowEngine::Impl {
         return std::get<RunHandle>(std::move(handle));
     }
 
+    Result<std::monostate> reset_node_state(const NodeTarget& target)
+    {
+        const std::lock_guard lock(events->mutex);
+        if (stopping || active.contains(target.workflow)) {
+            DiagnosticLocation location;
+            location.workflow = target.workflow;
+            location.node = target.node;
+            return Diagnostic{ErrorCode::InvalidState, Severity::Error, std::move(location),
+                "State reset requires an idle workflow slot."};
+        }
+        return states.reset(target.workflow, target.node);
+    }
+
     const SolutionSessionId session;
     const ToolRegistry registry;
 
@@ -689,6 +728,7 @@ private:
         ExecutionCapabilities supported;
         supported.asynchronous = true;
         supported.control_graph = true;
+        supported.node_state = true;
         if (provider) {
             const auto kinds = provider->kinds();
             supported.resource_leases.assign(kinds.begin(), kinds.end());
@@ -741,7 +781,7 @@ private:
             const auto entry = *ready;
             auto& work = **entry;
             auto next = WorkStep::Finished;
-            try { next = execute_step(work, resources.get()); }
+            try { next = execute_step(work, resources.get(), states); }
             catch (...) {
                 work.run->unexpected_failure();
                 if (!work.active_calls.empty()) {
@@ -766,6 +806,7 @@ private:
     IdSequence<WorkflowRunId> runs;
     std::map<WorkflowId, RunIdentity> active;
     WorkList admitted;
+    detail::NodeStateService states;
     std::thread worker;
 };
 
@@ -793,14 +834,22 @@ RunSubmission WorkflowEngine::submit(const RunRequest& request)
         if (request.snapshot().identity().session != session()) {
             return RunRejected{error(ErrorCode::ResultIdentityMismatch, "The request snapshot belongs to another session.", request)};
         }
-        const auto* target = std::get_if<WorkflowTarget>(&request.target());
-        if (!target) {
-            return RunRejected{error(ErrorCode::MissingCapability, "Independent node execution requires an independent-run service.",
-                request, std::get<NodeTarget>(request.target()).node)};
-        }
-        return impl_->submit(request, target->workflow);
+        return impl_->submit(request, std::visit([](const auto& target) { return target.workflow; }, request.target()));
     } catch (...) {
         return RunRejected{error(ErrorCode::ExecutionBoundaryFailure, "Workflow submission raised an unexpected exception.", request)};
+    }
+}
+
+core::Result<std::monostate> WorkflowEngine::reset_node_state(const NodeTarget& target)
+{
+    try {
+        return impl_->reset_node_state(target);
+    } catch (...) {
+        DiagnosticLocation location;
+        location.workflow = target.workflow;
+        location.node = target.node;
+        return Diagnostic{ErrorCode::ExecutionBoundaryFailure, Severity::Error, std::move(location),
+            "Node state reset raised an unexpected exception."};
     }
 }
 

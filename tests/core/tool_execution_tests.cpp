@@ -139,6 +139,138 @@ struct AsyncInstance final : ToolInstance {
         return InvocationStart{AsynchronousInvocation{control}};
     }
 };
+struct ProbeStateAccess final : ToolStateAccess {
+    ProbeStateAccess(ToolInvocationIdentity identity, NodeStateKey key)
+        : call(std::move(identity)), state_key(std::move(key)) {}
+
+    const NodeStateKey& key() const noexcept override { return state_key; }
+    const ToolInvocationIdentity& identity() const noexcept override { return call; }
+    Result<DataValue> read() const override { return DataValue::integer(0); }
+    Result<std::monostate> write(const DataValue&) override { return std::monostate{}; }
+
+    const ToolInvocationIdentity call;
+    const NodeStateKey state_key;
+    std::weak_ptr<ToolInstance> instance;
+    int seals{0};
+    int finishes{0};
+    bool instance_live_at_finish{false};
+private:
+    void seal() noexcept override { ++seals; }
+    void finish() noexcept override
+    {
+        ++finishes;
+        instance_live_at_finish = !instance.expired();
+    }
+};
+
+struct InitInstance final : ToolInstance {
+    using Initializer = std::function<Result<DataValue>(const InvocationContext&, const DataValue&)>;
+    InitInstance(ToolExecutionConfiguration configuration, Initializer initialize)
+        : ToolInstance(std::move(configuration)), initialize(std::move(initialize)) {}
+private:
+    Result<DataValue> initialize_state(const InvocationContext& context, const DataValue& initial) override
+    { return initialize(context, initial); }
+    Result<InvocationStart> begin(std::shared_ptr<const InvocationContext>, InvocationCompletion) override
+    { return artificial_error(); }
+
+    Initializer initialize;
+};
+
+void state_execution_boundary()
+{
+    auto data = configured();
+    data.tool.execution.mode = ToolExecutionMode::Asynchronous;
+    data.tool.state = NodeStateDefinition{DataType::integer(), ConfigValue::integer(7), StateScope::WorkflowRun,
+        StateResetPolicy::DomainStart, StateCompatibilityPolicy::PreserveCompatible,
+        StateMutationTiming::OnResultAccepted, StateConcurrencyPolicy::Serialized};
+    const auto configuration = take(ToolExecutionConfiguration::create(data));
+    auto values = context_data(configuration);
+    const auto prepared = take(InvocationContext::create(values));
+    const auto identity = values.identity;
+    const NodeStateKey state_key{identity.invocation.node, 1,
+        WorkflowRunStateDomain{identity.session, identity.invocation.workflow_run}};
+    const auto initial = DataValue::integer(7);
+    int calls = 0;
+    InitInstance initialized{configuration, [&](const auto& context, const auto& value) -> Result<DataValue> {
+        ++calls;
+        check(context.data().identity == identity && !context.data().state && value == initial,
+            "Init receives fixed invocation data and the configured initial value before state access.");
+        return DataValue::integer(9);
+    }};
+    rejects(initialize_tool_state(initialized, prepared, DataValue::integer(8)), ErrorCode::InvalidState,
+        "Init cannot replace the configured initial value on entry.");
+    check(take(initialize_tool_state(initialized, prepared, initial)) == DataValue::integer(9) && calls == 1,
+        "A valid Init can produce an updated value with the exact state type.");
+    InitInstance wrong_type{configuration, [](const auto&, const auto&) -> Result<DataValue> { return DataValue::boolean(false); }};
+    rejects(initialize_tool_state(wrong_type, prepared, initial), ErrorCode::TypeMismatch,
+        "The Init result must have the declared state type.");
+    InitInstance typed_failure{configuration, [](const auto&, const auto&) -> Result<DataValue> { return artificial_error(); }};
+    rejects(initialize_tool_state(typed_failure, prepared, initial), ErrorCode::InvalidValue,
+        "The Init boundary preserves a valid backend error.");
+    InitInstance throwing{configuration, [](const auto&, const auto&) -> Result<DataValue> { throw 42; }};
+    rejects(initialize_tool_state(throwing, prepared, initial), ErrorCode::ExecutionBoundaryFailure,
+        "The Init boundary translates exceptions to diagnostics.");
+
+    auto wrong_call = identity;
+    wrong_call.attempt = count<AttemptId>(2);
+    values.state = std::make_shared<ProbeStateAccess>(wrong_call, state_key);
+    rejects(InvocationContext::create(values), ErrorCode::ResultIdentityMismatch,
+        "An access lease for another attempt cannot be attached.");
+    auto wrong_key = state_key;
+    wrong_key.domain = WorkflowRunStateDomain{identity.session, count<WorkflowRunId>(2)};
+    values.state = std::make_shared<ProbeStateAccess>(identity, wrong_key);
+    rejects(InvocationContext::create(values), ErrorCode::ResultIdentityMismatch,
+        "A workflow-run state domain cannot come from another run.");
+    wrong_key = state_key;
+    wrong_key.domain = SessionStateDomain{identity.session};
+    values.state = std::make_shared<ProbeStateAccess>(identity, wrong_key);
+    rejects(InvocationContext::create(values), ErrorCode::InvalidState,
+        "The state domain kind must match the configured lifetime.");
+    wrong_key = state_key;
+    wrong_key.generation = 0;
+    values.state = std::make_shared<ProbeStateAccess>(identity, wrong_key);
+    rejects(InvocationContext::create(values), ErrorCode::InvalidState,
+        "A state access lease must identify a positive generation.");
+
+    const auto access = std::make_shared<ProbeStateAccess>(identity, state_key);
+    values.state = access;
+    const auto context = take(InvocationContext::create(values));
+    rejects(initialize_tool_state(initialized, context, initial), ErrorCode::InvalidState,
+        "The initialization boundary does not accept an already attached state lease.");
+    const auto driver = std::make_shared<Driver>();
+    auto instance = std::make_shared<AsyncInstance>(configuration, driver);
+    access->instance = instance;
+    const auto operation = take(InvocationOperation::start(std::move(instance), context));
+    auto wrong = completed(context);
+    wrong.identity = wrong_call;
+    rejects(driver->completion->complete(wrong), ErrorCode::InvalidValue,
+        "An invalid callback cannot close the state write window.");
+    check(access->seals == 0 && access->finishes == 0, "An invalid callback leaves state access open.");
+    take(driver->completion->complete(completed(context)));
+    check(access->seals == 1 && access->finishes == 0 && !operation.physically_exited(),
+        "The accepted backend completion seals state writes and retains access for cleanup.");
+    rejects(InvocationOperation::start(std::make_shared<AsyncInstance>(configuration, driver), context), ErrorCode::InvalidState,
+        "An access lease cannot be reused by another operation even with the same identity.");
+    take(driver->completion->mark_exited());
+    check(access->finishes == 1 && !access->instance_live_at_finish && operation.physically_exited(),
+        "State access is revoked after instance destruction and before physical exit is published.");
+
+    for (int behavior : {2, 5}) {
+        const auto pending_access = std::make_shared<ProbeStateAccess>(identity, state_key);
+        values.state = pending_access;
+        const auto pending = take(InvocationContext::create(values));
+        const auto partial = std::make_shared<Driver>();
+        const auto failed = take(InvocationOperation::start(std::make_shared<AsyncInstance>(configuration, partial, behavior), pending));
+        const auto progress = failed.poll();
+        check(progress.completion && progress.completion->status == ToolCompletionStatus::Failed
+            && pending_access->seals == 1 && pending_access->finishes == 0,
+            "Startup failure seals once, including when it replaces provisional completion.");
+        take(partial->completion->mark_exited());
+        check(pending_access->finishes == 1 && failed.physically_exited(),
+            "A partially started invocation keeps its lease until backend exit.");
+    }
+}
+
 struct ProbeLease final : ResourceLease {
     ProbeLease(ResourceReference reference, std::function<void()> destroyed = {})
         : ResourceLease(std::move(reference)), destroyed(std::move(destroyed)) {}
@@ -307,7 +439,7 @@ void tool_execution()
     const auto state_configuration = take(ToolExecutionConfiguration::create(state_data));
     rejects(InvocationOperation::start(std::make_shared<SyncInstance>(state_configuration),
         take(InvocationContext::create(context_data(state_configuration)))), ErrorCode::MissingCapability,
-        "stateful invocation explicitly requires the later typed state lease service");
+        "stateful invocation explicitly requires a typed state access lease");
 
     auto roi_data = configured(); roi_data.tool.inputs[0].type = DataType::region2d();
     const auto roi_configuration = take(ToolExecutionConfiguration::create(roi_data));
@@ -470,7 +602,7 @@ void tool_execution()
 
 int main()
 {
-    try { tool_execution(); }
+    try { tool_execution(); state_execution_boundary(); }
     catch (const std::exception& error) { std::cerr << "Unexpected exception: " << error.what() << '\n'; return 1; }
     catch (...) { std::cerr << "Unexpected non-standard exception\n"; return 1; }
     std::cout << "tool_execution: " << checks << " checks, " << failures << " failures\n";
