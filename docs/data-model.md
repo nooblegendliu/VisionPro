@@ -1329,9 +1329,8 @@ S3.6 通过模拟适配验证各域的成功码、未知原码和分范围耗时
 输出声明命名、覆盖及容量。`validate_resource_reference(ref, catalog)` 检查目录身份唯一性、类别与版本，
 不按名称补配或静默改版本。
 
-当前路径检查为词法校验，不访问文件、不解析符号链接、不验证实际摘要，也不连接设备或创建输出。
-目录序列的真实文件集合、命名根存在性、句柄租约和加载后内容锁定由后续 infrastructure 负责。
-方案保存/加载及 JSON 编码尚未实现，结构可持久化不等于已有序列化入口。
+core 的路径检查为词法校验。S3.7 的 infrastructure 负责文件系统定位、实际摘要验证和只读文件租约。
+目录序列的采集、设备连接和输出写入按各自后续阶段接入。
 
 ### 10.2 格式与加载
 
@@ -1352,6 +1351,40 @@ S3.6 通过模拟适配验证各域的成功码、未知原码和分范围耗时
 未知内容只能作为不解释的兼容载荷保留，不能借此绕过已知核心模型或运行值的强类型校验。
 损坏或无法可靠解码的文件加载失败，不替换当前有效方案。
 兼容性诊断不能借“降级”静默删除内容；迁移须显式处理版本与结果。
+
+#### 10.2.1 S3.7 清单与加载接口
+
+方案目录下的 `solution.json` 采用 UTF-8。根字段 `format` 为 `visionpro.solution`，`format_version` 为整数 1。
+`id` 使用 UUID，`revision` 使用无符号十进制字符串。`workflows`、`resources`、`variables`、`queues`、
+`coordinates` 和 `layouts` 分别保存对应定义和顺序。节点的 `configuration.kind` 区分 `tool` 与 `group`。
+工具类型和 `config_version` 独立于清单版本。状态策略与初值保存在节点的参数绑定中。
+`control_links`、`containment` 与节点 `bindings` 分别表达控制、包含和数据关系。
+
+Schema 的 `kind` 使用固定文本。Record 和 Enum 另存 Schema ID、版本和成员，List 和 Optional 另存元素类型。
+配置值统一用 `type` 和 `value` 包装。例如 `{"type":{"kind":"int64"},"value":"-9223372036854775808"}`。
+List 的空值用空数组，Optional None 用 `null`，Some 包含完整的类型化元素。Binary 用偶数位十六进制字符串，写出使用小写。
+资源版本、容量、索引等 64 位量或平台尺寸同样使用十进制字符串。有限浮点数使用 JSON 数字。
+Image 和 RasterMask 可以出现在 Schema 中，运行像素由调用上下文持有。
+
+[solution_file.hpp](../include/visionpro/infrastructure/solution_file.hpp) 提供以下入口。
+
+| 入口 | 契约 |
+|---|---|
+| `load_solution` | 从绝对方案目录加载。损坏 JSON、重复键、错误类型、未知格式或无法解释的变体返回失败。已知格式的局部诊断保留在 `SolutionDocument` |
+| `write_new_solution` | 校验待写模型并生成新清单。已存在的目标返回 SolutionAlreadyExists。编辑已加载的配置时传入来源文档，保留兼容性检查 |
+| `open_solution_execution` | 建立带文件资源提供方的快照和引擎。提交时检查所选范围及其资源。其他流程的局部诊断保留在文档中 |
+| `load_and_activate_solution` | 完整候选通过文件和会话校验后才交给 WorkflowSession 切换。失败时原活动配置仍可使用 |
+
+已知对象的未知字段按 JSON Pointer 报告，文档提供已知内容供查看，保存及执行入口返回 UnsupportedSolutionContent。
+未知格式版本返回 UnsupportedSolutionFormat。S3.7 的另存只发布清单，调用方先准备目标目录中的托管文件。
+清单在目标目录同卷写完后以无覆盖方式重命名发布。覆盖保存与资源发布事务在 §10.4。
+
+[file_resources.hpp](../include/visionpro/infrastructure/file_resources.hpp) 将方案相对路径、命名根和绝对路径解析为原生路径。
+命名根由调用方以绝对路径提供。托管文件按规范化路径检查目录边界，包括链接重定向。
+托管和 SnapshotLocked 文件在加载时读入并核对 SHA-256，租约复用已持有的只读字节。
+PerInvocation 文件在受理前检查路径，调用时读入并校验可选摘要。文件消失或固定摘要不符时提供带资源 ID 的诊断。
+作用域预检覆盖已声明的资源引用，运行中形成的动态值继续由绑定和租约的运行检查处理。
+序列、设备和输出位置的配置可往返，当前租约服务负责普通文件字节。
 
 ### 10.3 流程/Group 导入导出
 
@@ -1481,7 +1514,7 @@ S2.3 的验证覆盖定义和运行记录校验，实际 Init、重置与访问�
 S3.1 通过 `ToolDescriptor.state_parameters` 将状态初值映射到同类型的 SnapshotBuild 参数，
 将寿命域和重置策略映射到 SnapshotBuild Enum 的可选成员。工具元数据校验每个可选成员都有唯一合法的策略。
 `ToolExecutionConfiguration::effective_state()` 固定本节点选择，未映射的字段沿用类型级状态定义。
-同一工具类型可配置不同初值和每轮/会话策略。节点绑定保存可编辑选择，S3.7 验证选择往返。
+同一工具类型可配置不同初值和每轮/会话策略。S3.7 已验证这些节点绑定写入清单后可恢复。
 
 脚本与逻辑工具复用 ToolDescriptor 和 Binding：
 已解析输入进入工具，输出经类型校验后作为普通节点结果发布。
@@ -1565,6 +1598,6 @@ C01–C10 的对象边界、身份、类型、绑定、图像/ROI、控制图、
 2026-10-27，S1 状态为**文档审查通过，相关能力尚未实现**；
 逐项结论见 [development.md 的 S1 文档审查记录](development.md#81-s1-文档审查记录)。
 2026-11-09，S2 模型与绑定范围通过整体验收，见 [development.md §8.10](development.md#810-s27-与-s2-整体验收记录)。
-S3.1–S3.6 的接口、执行、异步生命周期、分路、状态及会话验证记录见 [development.md §8.12–§8.17](development.md#812-s31-实现与验证记录)。
-S3.7 及后续阶段按各自范围验收。
+S3.1–S3.7 的接口、运行、会话及文件方案验证记录见 [development.md §8.12–§8.18](development.md#812-s31-实现与验证记录)。
+S3.8 及后续阶段按各自范围验收。
 实施中新增决策应回写对应职责文档并补充验收依据。

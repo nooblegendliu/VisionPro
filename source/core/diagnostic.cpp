@@ -53,6 +53,9 @@ ErrorCategory error_category(ErrorCode code) noexcept
     case ErrorCode::DependencyCycle:
     case ErrorCode::ControlOrderConflict:
     case ErrorCode::IncompleteExecutionScope:
+    case ErrorCode::InvalidSolutionManifest:
+    case ErrorCode::UnsupportedSolutionFormat:
+    case ErrorCode::UnsupportedSolutionContent:
         return ErrorCategory::Structure;
     case ErrorCode::IdentityExhausted:
     case ErrorCode::InvalidNodeResult:
@@ -98,6 +101,8 @@ ErrorCategory error_category(ErrorCode code) noexcept
     case ErrorCode::ResourceKindMismatch:
     case ErrorCode::ResourceVersionMismatch:
     case ErrorCode::InvalidPath:
+    case ErrorCode::SolutionIoFailure:
+    case ErrorCode::SolutionAlreadyExists:
         return ErrorCategory::Resource;
     }
     return ErrorCategory::Unknown;
@@ -179,6 +184,11 @@ std::string_view error_code_name(ErrorCode code) noexcept
     case ErrorCode::InvalidRunHandle: return "InvalidRunHandle";
     case ErrorCode::ExecutionBoundaryFailure: return "ExecutionBoundaryFailure";
     case ErrorCode::IdGenerationFailed: return "IdGenerationFailed";
+    case ErrorCode::SolutionIoFailure: return "SolutionIoFailure";
+    case ErrorCode::InvalidSolutionManifest: return "InvalidSolutionManifest";
+    case ErrorCode::UnsupportedSolutionFormat: return "UnsupportedSolutionFormat";
+    case ErrorCode::UnsupportedSolutionContent: return "UnsupportedSolutionContent";
+    case ErrorCode::SolutionAlreadyExists: return "SolutionAlreadyExists";
     }
     return "UnknownErrorCode";
 }

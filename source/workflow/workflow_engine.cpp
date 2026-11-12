@@ -704,13 +704,19 @@ struct WorkflowEngine::Impl {
 
     RunSubmission submit(const RunRequest& request, WorkflowId workflow)
     {
+        std::shared_ptr<InvocationResourceProvider> provider;
         {
             const std::lock_guard lock(events->mutex);
             if (auto refusal = check_slot(request, workflow)) { return std::move(*refusal); }
+            provider = resources;
         }
         auto planned = ExecutionPlan::create(request, registry, capabilities);
         if (auto* failure = std::get_if<Diagnostic>(&planned)) { return RunRejected{std::move(*failure)}; }
         auto plan = std::get<ExecutionPlan>(std::move(planned));
+        if (provider) {
+            auto checked = provider->preflight(plan);
+            if (auto* failure = std::get_if<Diagnostic>(&checked)) { return RunRejected{std::move(*failure)}; }
+        }
         detail::ControlSchedule schedule(plan);
 
         const std::lock_guard lock(events->mutex);

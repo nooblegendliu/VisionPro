@@ -48,7 +48,7 @@ struct WorkflowSession::Impl {
     Impl(const ToolRegistry& tools, std::shared_ptr<InvocationResourceProvider> provider, WorkflowEngineOptions delivery)
         : registry(tools), resources(std::move(provider)), options(delivery) {}
 
-    Result<ConfigSnapshot> activate(const Solution& candidate)
+    Result<ConfigSnapshot> activate(const Solution& candidate, std::shared_ptr<InvocationResourceProvider> provider)
     {
         {
             const std::lock_guard lock(mutex);
@@ -58,7 +58,7 @@ struct WorkflowSession::Impl {
         const FinishOperation finish{*this};
         auto validated = validate_candidate(candidate, registry);
         if (auto* failure = std::get_if<Diagnostic>(&validated)) { return std::move(*failure); }
-        auto created = WorkflowEngine::create(registry, resources, options);
+        auto created = WorkflowEngine::create(registry, provider ? std::move(provider) : resources, options);
         if (auto* failure = std::get_if<Diagnostic>(&created)) { return std::move(*failure); }
         auto replacement = std::get<std::unique_ptr<WorkflowEngine>>(std::move(created));
         const auto version = std::get<ConfigSnapshotId>(RuntimeIdFactory::from_value<ConfigSnapshotId>(1));
@@ -166,7 +166,13 @@ core::Result<std::unique_ptr<WorkflowSession>> WorkflowSession::create(const Too
 
 core::Result<ConfigSnapshot> WorkflowSession::activate(const Solution& candidate)
 {
-    try { return impl_->activate(candidate); }
+    return activate(candidate, {});
+}
+
+core::Result<ConfigSnapshot> WorkflowSession::activate(const Solution& candidate,
+    std::shared_ptr<InvocationResourceProvider> provider)
+{
+    try { return impl_->activate(candidate, std::move(provider)); }
     catch (...) { return error(ErrorCode::ExecutionBoundaryFailure, "Could not prepare or activate the solution candidate.", candidate.id); }
 }
 

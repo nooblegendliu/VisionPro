@@ -11,7 +11,7 @@ VisionPro 是一个采用 C++20、Qt、OpenCV 和 CMake 的桌面视觉算法软
 
 ## 当前状态
 
-S1 文档审查和 S2 核心模型与绑定验收已通过。S3.6 已接通结果保留、可注销观察通知及内存会话切换与关闭。下一阶段为 S3.7 配置格式、资源解析与诊断加载。
+S1 文档审查和 S2 核心模型与绑定验收已通过。S3.7 已接通文件方案往返、资源解析和诊断加载。下一阶段为 S3.8 保存事务与故障保护。
 
 - 已建立初始目录、开发规则及基础设计文档。
 - 已确定 C++20、Qt、OpenCV、CMake 技术栈。
@@ -33,6 +33,7 @@ S1 文档审查和 S2 核心模型与绑定验收已通过。S3.6 已接通结�
 - S3.4 的执行器按控制边到达与关闭调度无环流程，支持 AllActivated 汇合、命名出口零选与多选，并按本轮绑定就绪推进兄弟分路。见 [S3.4 实现与验证](docs/development.md#815-s34-实现与验证记录)。
 - S3.5 的执行器支持每轮重置、跨轮累计、显式重置及单节点独立调用。调试默认使用隔离状态。见 [S3.5 实现与验证](docs/development.md#816-s35-实现与验证记录)。
 - S3.6 支持精确查询已保留的运行结果、按容量读取观察通知，并在旧会话排空后启用校验通过的内存方案。见 [S3.6 实现与验证](docs/development.md#817-s36-实现与验证记录)。
+- S3.7 支持版本化 `solution.json`、固定文件资源的 SHA-256 校验与字节保留，以及带诊断打开已知格式的草稿。见 [S3.7 实现与验证](docs/development.md#818-s37-实现与验证记录)。
 
 ## 设计基线与当前重点
 
@@ -97,15 +98,15 @@ GUI 和无 GUI 入口共用运行请求及结果接口，第三方 SDK 的名称
 逻辑上划分应用层、核心层与能力层，具体模块映射见 [architecture.md](docs/architecture.md)。
 首批工具按类型静态注册，动态插件后置。
 
-S3.6 在 Windows x64、MSVC 19.51、CMake/CTest 4.4.0 环境完成 Release 验证，74 项 CTest 全部通过。
-复现步骤见 [S3.6 Release 构建与测试](docs/development.md#313-s36-release-构建与测试命令)。
+S3.7 在 Windows x64、MSVC 19.51、CMake/CTest 4.4.0 环境完成 Release 验证，77 项 CTest 全部通过。
+复现步骤见 [S3.7 Release 构建与测试](docs/development.md#314-s37-release-构建与测试命令)。
 Qt、OpenCV 的版本和获取方式在相应模块接入前确定。
 
 ## 开发阶段
 
 1. 基础模型与契约设计：文档审查通过。
 2. 核心模型与绑定验证。S2.1–S2.7 完成，Debug/Release 及全部 S2 必需子范围通过。
-3. 无 GUI 执行与配置往返验证。S3.1–S3.6 已完成，S3.7–S3.9 待实现。
+3. 无 GUI 执行与配置往返验证。S3.1–S3.7 已完成，S3.8–S3.9 待实现。
 4. 无 GUI 视觉闭环。
 5. 基础可视化界面。
 6. 完整循环、多流程并行、触发、共享服务及工业接入。
@@ -132,9 +133,9 @@ Qt、OpenCV 的版本和获取方式在相应模块接入前确定。
 
 ## 构建与运行
 
-当前 [CMake 配置](CMakeLists.txt) 构建无 GUI 的 `visionpro_core`、`visionpro_workflow` 和测试程序，
+当前 [CMake 配置](CMakeLists.txt) 构建无 GUI 的 `visionpro_core`、`visionpro_workflow`、`visionpro_infrastructure` 和测试程序，
 不需要 Qt、OpenCV 或厂商 SDK。UUID 生成后端当前使用 Windows CNG，其他平台后端尚未实现。
-库入口可激活并执行内存方案，见 [S3.6 结果交付与会话生命周期](docs/data-model.md#410-s36-结果交付与会话生命周期)。命令行入口在 S3.9 接入。
+库入口可加载文件方案、按目标执行或激活会话，见 [S3.7 清单与加载接口](docs/data-model.md#1021-s37-清单与加载接口)。命令行入口在 S3.9 接入。
 
 ## 文档导航
 

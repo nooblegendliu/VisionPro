@@ -33,6 +33,10 @@ public:
     // Candidate validation leaves the old session available. A successful
     // replacement stops admission and drains the old engine before publishing.
     [[nodiscard]] core::Result<ConfigSnapshot> activate(const Solution& candidate);
+    // Candidate-owned resources are used for the new engine. A null provider
+    // uses the session's default provider.
+    [[nodiscard]] core::Result<ConfigSnapshot> activate(const Solution& candidate,
+        std::shared_ptr<InvocationResourceProvider> provider);
     [[nodiscard]] WorkflowSessionProgress inspect() const;
     [[nodiscard]] RunSubmission submit(const RunRequest& request) override;
     [[nodiscard]] core::Result<RunObservation> observe(std::size_t capacity = 32);

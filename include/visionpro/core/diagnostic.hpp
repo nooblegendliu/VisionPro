@@ -88,6 +88,11 @@ enum class ErrorCode : std::uint32_t {
     InvalidRunHandle = 1901,
     ExecutionBoundaryFailure = 1902,
     IdGenerationFailed = 2001,
+    SolutionIoFailure = 2101,
+    InvalidSolutionManifest = 2102,
+    UnsupportedSolutionFormat = 2103,
+    UnsupportedSolutionContent = 2104,
+    SolutionAlreadyExists = 2105,
 };
 
 enum class ErrorCategory { Unknown, Structure, Parameter, Resource, Runtime };

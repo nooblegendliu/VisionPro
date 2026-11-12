@@ -5,6 +5,8 @@
 
 namespace visionpro::workflow {
 
+class ExecutionPlan;
+
 struct TargetResolution { BindingTarget target; BindingResolution resolution; };
 struct PreparedInvocation {
     ConfigSnapshot snapshot;
@@ -25,6 +27,9 @@ public:
     virtual ~InvocationResourceProvider() = default;
     // Resource kinds available to the execution planner.
     [[nodiscard]] virtual std::span<const core::ResourceKind> kinds() const noexcept = 0;
+    // Read-only checks for the selected execution scope, before admission.
+    [[nodiscard]] virtual core::Result<std::monostate> preflight(const ExecutionPlan&) const
+    { return std::monostate{}; }
     // Called once per configured slot after all bindings resolve.
     [[nodiscard]] virtual core::Result<std::shared_ptr<const core::ResourceLease>> acquire(
         const core::ToolExecutionConfiguration& configuration, const core::ToolResourceBinding& binding) = 0;
