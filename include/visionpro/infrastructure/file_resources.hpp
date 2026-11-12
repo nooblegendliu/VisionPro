@@ -22,10 +22,12 @@ public:
     [[nodiscard]] std::span<const std::byte> bytes() const noexcept { return *bytes_; }
 private:
     friend class FileResourceProvider;
+    struct FilePin;
     FileResourceLease(core::ResourceReference reference, std::filesystem::path path,
-        std::shared_ptr<const std::vector<std::byte>> bytes);
+        std::shared_ptr<const std::vector<std::byte>> bytes, bool managed);
     std::filesystem::path path_;
     std::shared_ptr<const std::vector<std::byte>> bytes_;
+    std::shared_ptr<const FilePin> pin_;
 };
 
 class FileResourceProvider final : public workflow::InvocationResourceProvider {

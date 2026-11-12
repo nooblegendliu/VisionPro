@@ -1,13 +1,13 @@
 #include <visionpro/infrastructure/file_resources.hpp>
 #include <visionpro/workflow/execution_plan.hpp>
 
+#include "managed_cleanup.hpp"
+#include "solution_storage.hpp"
+
 #include <windows.h>
-#include <bcrypt.h>
 
 #include <algorithm>
 #include <array>
-#include <fstream>
-#include <limits>
 #include <map>
 #include <set>
 #include <tuple>
@@ -31,13 +31,38 @@ struct ResourcePaths {
     std::map<SchemaId, fs::path> roots;
 };
 
+Result<ResourcePaths> resource_paths(const fs::path& directory, std::span<const NamedResourceRoot> roots)
+{
+    if (!directory.is_absolute()) {
+        return error(ErrorCode::InvalidPath, "Solution directory must be an explicit absolute path.");
+    }
+    std::error_code io;
+    auto base = fs::canonical(directory, io);
+    if (io || !fs::is_directory(base, io) || io) {
+        return error(ErrorCode::InvalidPath, "Solution directory must name an existing directory.");
+    }
+    ResourcePaths paths{std::move(base), {}};
+    for (const auto& root : roots) {
+        if (!root.directory.is_absolute()) {
+            return error(ErrorCode::InvalidPath, "Named resource roots must be explicit absolute paths.");
+        }
+        if (!paths.roots.emplace(root.id, root.directory).second) {
+            return error(ErrorCode::DuplicateIdentity, "Named resource root is configured more than once.");
+        }
+    }
+    return paths;
+}
+
+fs::path utf8_path(std::string_view spelling)
+{ return fs::path(std::u8string(spelling.begin(), spelling.end())); }
+
 Result<fs::path> absolute_path(const ResourcePath& declaration, const ResourcePaths& paths, bool managed)
 {
     if (auto checked = validate_resource_path(declaration, managed);
         const auto* invalid = std::get_if<Diagnostic>(&checked)) { return *invalid; }
     auto spelling = declaration.path;
     std::ranges::replace(spelling, '\\', '/');
-    fs::path path{std::u8string(spelling.begin(), spelling.end())};
+    auto path = utf8_path(spelling);
     if (declaration.base == PathBase::Absolute) {
         if (path.is_absolute()) { return path; }
         return error(ErrorCode::InvalidPath, "Absolute resource path requires an explicit filesystem root.");
@@ -102,41 +127,11 @@ bool same_file(const FileDeclaration& left, const FileDeclaration& right)
         && left.revision == right.revision && left.managed == right.managed && left.locked == right.locked;
 }
 
-struct Sha256Handles {
-    BCRYPT_ALG_HANDLE algorithm{};
-    BCRYPT_HASH_HANDLE hash{};
-
-    ~Sha256Handles()
-    {
-        if (hash) { BCryptDestroyHash(hash); }
-        if (algorithm) { BCryptCloseAlgorithmProvider(algorithm, 0); }
-    }
-};
-
-Check check_digest(std::span<std::byte> bytes, std::string_view expected)
+Check check_digest(std::span<const std::byte> bytes, std::string_view expected)
 {
-    const auto failure = [] {
-        return error(ErrorCode::ExecutionBoundaryFailure, "Windows CNG could not compute the resource SHA-256 digest.");
-    };
-    Sha256Handles handles;
-    if (BCryptOpenAlgorithmProvider(&handles.algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0) != 0
-        || BCryptCreateHash(handles.algorithm, &handles.hash, nullptr, 0, nullptr, 0, 0) != 0) { return failure(); }
-    while (!bytes.empty()) {
-        const auto count = std::min<std::size_t>(bytes.size(), std::numeric_limits<ULONG>::max());
-        if (BCryptHashData(handles.hash, reinterpret_cast<PUCHAR>(bytes.data()), static_cast<ULONG>(count), 0) != 0) {
-            return failure();
-        }
-        bytes = bytes.subspan(count);
-    }
-    std::array<UCHAR, 32> hash{};
-    if (BCryptFinishHash(handles.hash, hash.data(), static_cast<ULONG>(hash.size()), 0) != 0) { return failure(); }
-    constexpr std::string_view hex = "0123456789abcdef";
-    std::array<char, 64> digest{};
-    for (std::size_t index = 0; index < hash.size(); ++index) {
-        digest[2 * index] = hex[hash[index] >> 4];
-        digest[2 * index + 1] = hex[hash[index] & 0xf];
-    }
-    if (!std::ranges::equal(digest, expected, [](char actual, char wanted) {
+    auto digest = detail::sha256(bytes);
+    if (auto* failure = std::get_if<Diagnostic>(&digest)) { return std::move(*failure); }
+    if (!std::ranges::equal(std::get<std::string>(digest), expected, [](char actual, char wanted) {
         return actual == (wanted >= 'A' && wanted <= 'F' ? static_cast<char>(wanted + ('a' - 'A')) : wanted);
     })) {
         return error(ErrorCode::ResourceVersionMismatch, "File resource SHA-256 does not match its declared content.");
@@ -144,38 +139,264 @@ Check check_digest(std::span<std::byte> bytes, std::string_view expected)
     return std::monostate{};
 }
 
+class NativeFile final {
+public:
+    explicit NativeFile(HANDLE handle) noexcept : handle_(handle) {}
+    NativeFile(const NativeFile&) = delete;
+    NativeFile& operator=(const NativeFile&) = delete;
+    ~NativeFile() { if (valid()) { CloseHandle(handle_); } }
+
+    [[nodiscard]] bool valid() const noexcept { return handle_ != INVALID_HANDLE_VALUE; }
+    [[nodiscard]] HANDLE get() const noexcept { return handle_; }
+
+private:
+    HANDLE handle_;
+};
+
+bool missing_file(DWORD code) noexcept
+{ return code == ERROR_FILE_NOT_FOUND || code == ERROR_PATH_NOT_FOUND || code == ERROR_DELETE_PENDING; }
+
+bool file_in_use(DWORD code) noexcept
+{ return code == ERROR_SHARING_VIOLATION || code == ERROR_LOCK_VIOLATION || code == ERROR_USER_MAPPED_FILE; }
+
+Diagnostic file_error(ErrorCode code, std::string_view action, std::string_view path, DWORD native_error)
+{
+    return error(code, std::string(action) + ": " + std::string(path)
+        + " (Win32 error " + std::to_string(native_error) + ").");
+}
+
 struct FileContents {
     fs::path path;
     std::shared_ptr<const std::vector<std::byte>> bytes;
 };
+
+struct FileReadFailure {
+    Diagnostic diagnostic;
+    DWORD native_error{};
+};
+
+std::variant<std::vector<std::byte>, FileReadFailure> read_bytes(HANDLE handle, std::string_view path)
+{
+    const auto read_error = [&](std::string_view action, DWORD code) {
+        return FileReadFailure{file_error(ErrorCode::InvalidResource, action, path, code), code};
+    };
+    LARGE_INTEGER length{};
+    if (!GetFileSizeEx(handle, &length)) { return read_error("Could not read the resource size", GetLastError()); }
+    std::vector<std::byte> bytes;
+    if (length.QuadPart < 0 || static_cast<std::uintmax_t>(length.QuadPart) > bytes.max_size()) {
+        return FileReadFailure{error(ErrorCode::SizeOverflow, "File resource exceeds addressable storage: " + std::string(path))};
+    }
+    bytes.resize(static_cast<std::size_t>(length.QuadPart));
+    constexpr std::size_t chunk_size = 1 << 20;
+    std::size_t offset = 0;
+    while (offset != bytes.size()) {
+        const auto count = static_cast<DWORD>(std::min(bytes.size() - offset, chunk_size));
+        DWORD read = 0;
+        if (!ReadFile(handle, bytes.data() + offset, count, &read, nullptr)) {
+            return read_error("Could not read the resource", GetLastError());
+        }
+        if (read == 0) { return read_error("Resource ended before its recorded size", ERROR_HANDLE_EOF); }
+        offset += read;
+    }
+    std::byte extra{};
+    DWORD read = 0;
+    if (!ReadFile(handle, &extra, 1, &read, nullptr)) {
+        const auto code = GetLastError();
+        if (code != ERROR_HANDLE_EOF) { return read_error("Could not check the resource end", code); }
+    } else if (read != 0) {
+        return FileReadFailure{error(ErrorCode::InvalidResource, "File resource changed size during reading: " + std::string(path))};
+    }
+    return bytes;
+}
 
 Result<FileContents> read_file(const FileDeclaration& file, const ResourcePaths& paths)
 {
     auto located = existing_path(file.path, paths, file.managed);
     if (const auto* invalid = std::get_if<Diagnostic>(&located)) { return *invalid; }
     auto path = std::get<fs::path>(std::move(located));
-    std::ifstream input(path, std::ios::binary | std::ios::ate);
-    const auto length = static_cast<std::streamoff>(input.tellg());
-    if (length < 0) { return error(ErrorCode::InvalidResource, "Cannot open file resource: " + file.path.path); }
-    std::vector<std::byte> bytes;
-    const auto size = static_cast<std::uintmax_t>(length);
-    if (size > bytes.max_size() || size > static_cast<std::uintmax_t>(std::numeric_limits<std::streamsize>::max())) {
-        return error(ErrorCode::SizeOverflow, "File resource exceeds addressable storage: " + file.path.path);
+    NativeFile handle(CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        nullptr, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, nullptr));
+    if (!handle.valid()) {
+        const auto code = GetLastError();
+        return file_error(missing_file(code) ? ErrorCode::ResourceNotFound : ErrorCode::InvalidResource,
+            "Could not open the resource", file.path.path, code);
     }
-    bytes.resize(static_cast<std::size_t>(size));
-    input.seekg(0);
-    if (!bytes.empty()) {
-        input.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
-    }
-    if (!input || input.peek() != std::char_traits<char>::eof() || input.bad()) {
-        return error(ErrorCode::InvalidResource, "File resource could not be read at a consistent size: " + file.path.path);
-    }
+    auto contents = read_bytes(handle.get(), file.path.path);
+    if (auto* failure = std::get_if<FileReadFailure>(&contents)) { return std::move(failure->diagnostic); }
+    auto bytes = std::get<std::vector<std::byte>>(std::move(contents));
     if (file.digest) {
         if (auto checked = check_digest(bytes, *file.digest); const auto* invalid = std::get_if<Diagnostic>(&checked)) {
             return *invalid;
         }
     }
     return FileContents{std::move(path), std::make_shared<const std::vector<std::byte>>(std::move(bytes))};
+}
+
+using ProtectedFiles = std::set<fs::path>;
+
+Result<std::optional<fs::path>> referenced_path(const ResourcePath& path, const ResourcePaths& paths,
+    bool managed = false, bool directory = false)
+{
+    if (path.named_root && !paths.roots.contains(*path.named_root)) {
+        return error(ErrorCode::ResourceNotFound, "Cannot check references through an unconfigured named root: "
+            + std::string(path.named_root->text()));
+    }
+    auto resolved = existing_path(path, paths, managed, directory);
+    if (auto* invalid = std::get_if<Diagnostic>(&resolved)) {
+        if (invalid->code == ErrorCode::ResourceNotFound) { return std::optional<fs::path>{}; }
+        return std::move(*invalid);
+    }
+    return std::optional<fs::path>{std::get<fs::path>(std::move(resolved))};
+}
+
+Check protect_file(ProtectedFiles& files, const ResourcePath& path, const ResourcePaths& paths, bool managed = false)
+{
+    auto resolved = referenced_path(path, paths, managed);
+    if (auto* invalid = std::get_if<Diagnostic>(&resolved)) { return std::move(*invalid); }
+    if (auto& file = std::get<std::optional<fs::path>>(resolved)) { files.insert(std::move(*file)); }
+    return std::monostate{};
+}
+
+Check protect_sequence(ProtectedFiles& files, const DirectorySelection& selection, const ResourcePaths& paths)
+{
+    auto resolved = referenced_path(selection.directory, paths, false, true);
+    if (auto* invalid = std::get_if<Diagnostic>(&resolved)) { return std::move(*invalid); }
+    const auto& directory = std::get<std::optional<fs::path>>(resolved);
+    if (!directory) { return std::monostate{}; }
+    const auto search_path = *directory / utf8_path(selection.filename_pattern);
+    WIN32_FIND_DATAW entry{};
+    struct Search {
+        HANDLE handle;
+        ~Search() { if (handle != INVALID_HANDLE_VALUE) { FindClose(handle); } }
+    } search{FindFirstFileW(search_path.c_str(), &entry)};
+    const auto search_error = [&](DWORD code) {
+        return file_error(ErrorCode::InvalidPath, "Could not check selected sequence files", selection.directory.path, code);
+    };
+    if (search.handle == INVALID_HANDLE_VALUE) {
+        const auto code = GetLastError();
+        if (missing_file(code)) { return std::monostate{}; }
+        return search_error(code);
+    }
+    do {
+        if ((entry.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
+            files.insert(*directory / entry.cFileName);
+        }
+    } while (FindNextFileW(search.handle, &entry));
+    const auto code = GetLastError();
+    if (code != ERROR_NO_MORE_FILES) { return search_error(code); }
+    return std::monostate{};
+}
+
+Result<ProtectedFiles> protected_managed_files(const Solution& solution, const ResourcePaths& paths)
+{
+    ProtectedFiles files;
+    for (const auto& resource : solution.resources) {
+        if (const auto* managed = std::get_if<ManagedResource>(&resource.location)) {
+            auto checked = protect_file(files, managed->path, paths, true);
+            if (auto* invalid = std::get_if<Diagnostic>(&checked)) { return std::move(*invalid); }
+        }
+    }
+    return files;
+}
+
+Check protect_external_files(ProtectedFiles& files, const Solution& solution, const ResourcePaths& paths)
+{
+    for (const auto& resource : solution.resources) {
+        if (const auto* external = std::get_if<ExternalFileResource>(&resource.location)) {
+            auto checked = protect_file(files, external->path, paths);
+            if (auto* invalid = std::get_if<Diagnostic>(&checked)) { return std::move(*invalid); }
+        } else if (const auto* sequence = std::get_if<ImageSequenceResource>(&resource.location)) {
+            if (const auto* selection = std::get_if<DirectorySelection>(&sequence->selection)) {
+                auto checked = protect_sequence(files, *selection, paths);
+                if (auto* invalid = std::get_if<Diagnostic>(&checked)) { return std::move(*invalid); }
+            } else {
+                for (const auto& path : std::get<std::vector<ResourcePath>>(sequence->selection)) {
+                    auto checked = protect_file(files, path, paths);
+                    if (auto* invalid = std::get_if<Diagnostic>(&checked)) { return std::move(*invalid); }
+                }
+            }
+        }
+    }
+    return std::monostate{};
+}
+
+Result<bool> aliases_protected_file(const fs::path& path, const ProtectedFiles& files)
+{
+    if (files.contains(path)) { return true; }
+    for (const auto& protected_path : files) {
+        std::error_code io;
+        if (fs::equivalent(path, protected_path, io)) { return true; }
+        if (io && io != std::errc::no_such_file_or_directory && io != std::errc::not_a_directory) {
+            return error(ErrorCode::InvalidPath, "Cannot compare the old file to a protected resource path.");
+        }
+    }
+    return false;
+}
+
+Diagnostic cleanup_issue(Severity severity, std::string message)
+{ return {ErrorCode::SolutionCleanupFailure, severity, {}, std::move(message)}; }
+
+enum class CleanupOutcome { Unchanged, Deferred, Removed };
+
+Result<CleanupOutcome> cleanup_io(std::string_view action, std::string_view path, DWORD code)
+{
+    if (missing_file(code)) { return CleanupOutcome::Unchanged; }
+    if (file_in_use(code)) { return CleanupOutcome::Deferred; }
+    return file_error(ErrorCode::SolutionCleanupFailure, action, path, code);
+}
+
+Result<CleanupOutcome> remove_verified_version(const ManagedResource& managed, const ResourcePaths& paths)
+{
+    auto located = absolute_path(managed.path, paths, true);
+    if (auto* invalid = std::get_if<Diagnostic>(&located)) {
+        return cleanup_issue(Severity::Error, std::move(invalid->message));
+    }
+    const auto& declared = std::get<fs::path>(located);
+    auto component = paths.directory;
+    const auto relative = declared.lexically_relative(paths.directory);
+    if (relative.empty()) {
+        return cleanup_issue(Severity::Error, "Could not check confinement of old managed file: " + managed.path.path);
+    }
+    for (const auto& name : relative) {
+        component /= name;
+        const auto attributes = GetFileAttributesW(component.c_str());
+        if (attributes == INVALID_FILE_ATTRIBUTES) {
+            return cleanup_io("Could not inspect old managed file", managed.path.path, GetLastError());
+        }
+        if ((attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
+            return cleanup_issue(Severity::Warning, "Old managed path traverses a reparse point: " + managed.path.path);
+        }
+    }
+    // A single handle verifies content and disposes of the verified file.
+    // Existing invocation pins prevent this handle from obtaining DELETE access.
+    NativeFile file(CreateFileW(declared.c_str(), GENERIC_READ | DELETE, FILE_SHARE_READ,
+        nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_SEQUENTIAL_SCAN, nullptr));
+    if (!file.valid()) {
+        return cleanup_io("Could not open old managed file for cleanup", managed.path.path, GetLastError());
+    }
+    FILE_ATTRIBUTE_TAG_INFO info{};
+    if (!GetFileInformationByHandleEx(file.get(), FileAttributeTagInfo, &info, sizeof(info))) {
+        return cleanup_io("Could not inspect opened managed file", managed.path.path, GetLastError());
+    }
+    if (GetFileType(file.get()) != FILE_TYPE_DISK
+        || (info.FileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) != 0) {
+        return cleanup_issue(Severity::Warning, "Old managed path must identify a regular file: " + managed.path.path);
+    }
+    auto bytes = read_bytes(file.get(), managed.path.path);
+    if (auto* failure = std::get_if<FileReadFailure>(&bytes)) {
+        if (file_in_use(failure->native_error)) { return CleanupOutcome::Deferred; }
+        return cleanup_issue(Severity::Error, std::move(failure->diagnostic.message));
+    }
+    auto checked = check_digest(std::get<std::vector<std::byte>>(bytes), managed.sha256);
+    if (const auto* invalid = std::get_if<Diagnostic>(&checked)) {
+        return cleanup_issue(Severity::Error, "Could not verify obsolete managed content for " + managed.path.path
+            + ": " + invalid->message);
+    }
+    FILE_DISPOSITION_INFO disposition{TRUE};
+    if (!SetFileInformationByHandle(file.get(), FileDispositionInfo, &disposition, sizeof(disposition))) {
+        return cleanup_io("Could not delete verified old managed file", managed.path.path, GetLastError());
+    }
+    return CleanupOutcome::Removed;
 }
 
 Check probe(const ResourceDefinition& resource, const ResourcePaths& paths)
@@ -384,10 +605,25 @@ struct FileResourceProvider::Storage {
     std::vector<Diagnostic> diagnostics;
 };
 
+struct FileResourceLease::FilePin {
+    explicit FilePin(const fs::path& path)
+        : handle(CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+            nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr))
+    {}
+    NativeFile handle;
+};
+
 FileResourceLease::FileResourceLease(core::ResourceReference reference, fs::path path,
-    std::shared_ptr<const std::vector<std::byte>> bytes)
+    std::shared_ptr<const std::vector<std::byte>> bytes, bool managed)
     : ResourceLease(std::move(reference)), path_(std::move(path)), bytes_(std::move(bytes))
-{}
+{
+    if (managed) {
+        // A loaded snapshot can still supply frozen bytes when the source file
+        // has already disappeared. Only an acquired lease pins the disk file.
+        auto pin = std::make_shared<const FilePin>(path_);
+        if (pin->handle.valid()) { pin_ = std::move(pin); }
+    }
+}
 
 FileResourceProvider::FileResourceProvider(std::shared_ptr<const Storage> storage) : storage_(std::move(storage)) {}
 
@@ -401,23 +637,9 @@ Result<std::shared_ptr<FileResourceProvider>> FileResourceProvider::create(const
     try {
         if (auto checked = validate_resource_catalog(solution.resources);
             const auto* invalid = std::get_if<Diagnostic>(&checked)) { return fail(*invalid); }
-        if (!solution_directory.is_absolute()) {
-            return fail(error(ErrorCode::InvalidPath, "Solution directory must be an explicit absolute path."));
-        }
-        std::error_code io;
-        auto base = fs::canonical(solution_directory, io);
-        if (io || !fs::is_directory(base, io) || io) {
-            return fail(error(ErrorCode::InvalidPath, "Solution directory must name an existing directory."));
-        }
-        auto storage = std::make_shared<Storage>(Storage{solution.id, {std::move(base), {}}, {}, {}});
-        for (const auto& root : roots) {
-            if (!root.directory.is_absolute()) {
-                return fail(error(ErrorCode::InvalidPath, "Named resource roots must be explicit absolute paths."));
-            }
-            if (!storage->paths.roots.emplace(root.id, root.directory).second) {
-                return fail(error(ErrorCode::DuplicateIdentity, "Named resource root is configured more than once."));
-            }
-        }
+        auto paths = resource_paths(solution_directory, roots);
+        if (auto* invalid = std::get_if<Diagnostic>(&paths)) { return fail(std::move(*invalid)); }
+        auto storage = std::make_shared<Storage>(Storage{solution.id, std::get<ResourcePaths>(std::move(paths)), {}, {}});
         const auto report = [&](Diagnostic failure, const ResourceId& resource) {
             failure.location.solution = solution.id;
             failure.location.resource = resource;
@@ -521,10 +743,80 @@ Result<std::shared_ptr<const ResourceLease>> FileResourceProvider::acquire(
         if (const auto* invalid = std::get_if<Diagnostic>(&contents)) { return fail(*invalid); }
         auto captured = std::get<FileContents>(std::move(contents));
         return std::shared_ptr<const ResourceLease>(
-            new FileResourceLease(binding.resource, std::move(captured.path), std::move(captured.bytes)));
+            new FileResourceLease(binding.resource, std::move(captured.path), std::move(captured.bytes), file->managed));
     } catch (...) {
         return fail(error(ErrorCode::ExecutionBoundaryFailure, "Could not read file resource for invocation."));
     }
+}
+
+Check detail::verify_managed_resource(const ManagedResource& resource, const fs::path& directory)
+{
+    auto paths = resource_paths(directory, {});
+    if (auto* invalid = std::get_if<Diagnostic>(&paths)) { return std::move(*invalid); }
+    const FileDeclaration file{resource.path, resource.sha256, resource.revision, true, true};
+    auto verified = read_file(file, std::get<ResourcePaths>(paths));
+    if (auto* invalid = std::get_if<Diagnostic>(&verified)) { return std::move(*invalid); }
+    return std::monostate{};
+}
+
+SolutionCleanupReport detail::cleanup_managed_versions(const Solution& previous, const Solution& current,
+    const fs::path& directory, std::span<const NamedResourceRoot> roots)
+{
+    SolutionCleanupReport report;
+    const auto record = [&](Diagnostic issue, std::optional<ResourceId> resource) {
+        if (issue.severity == Severity::Warning) { ++report.deferred; }
+        issue.location.solution = previous.id;
+        issue.location.resource = std::move(resource);
+        report.diagnostics.push_back(std::move(issue));
+    };
+    auto resolved = resource_paths(directory, roots);
+    if (auto* invalid = std::get_if<Diagnostic>(&resolved)) {
+        record(cleanup_issue(Severity::Error, std::move(invalid->message)), std::nullopt);
+        return report;
+    }
+    const auto& paths = std::get<ResourcePaths>(resolved);
+    const auto retained_managed = protected_managed_files(current, paths);
+    ProtectedFiles retained_external{paths.directory / solution_manifest_name, paths.directory / package_lock_name};
+    std::optional<Check> external_check;
+    const auto remove = [&](const ManagedResource& managed) -> Result<CleanupOutcome> {
+        auto candidate = referenced_path(managed.path, paths, true);
+        if (auto* invalid = std::get_if<Diagnostic>(&candidate)) {
+            return cleanup_issue(Severity::Error, std::move(invalid->message));
+        }
+        const auto& path = std::get<std::optional<fs::path>>(candidate);
+        if (!path) { return CleanupOutcome::Unchanged; }
+        const auto deferred = [&](const Diagnostic& cause) {
+            return cleanup_issue(Severity::Warning, "Could not establish that the old managed file is unreferenced: "
+                + managed.path.path + ". " + cause.message);
+        };
+        if (const auto* invalid = std::get_if<Diagnostic>(&retained_managed)) { return deferred(*invalid); }
+        auto still_managed = aliases_protected_file(*path, std::get<ProtectedFiles>(retained_managed));
+        if (const auto* invalid = std::get_if<Diagnostic>(&still_managed)) { return deferred(*invalid); }
+        if (std::get<bool>(still_managed)) { return CleanupOutcome::Unchanged; }
+        if (!external_check) {
+            external_check = protect_external_files(retained_external, previous, paths);
+            if (std::holds_alternative<std::monostate>(*external_check)) {
+                external_check = protect_external_files(retained_external, current, paths);
+            }
+        }
+        if (const auto* invalid = std::get_if<Diagnostic>(&*external_check)) { return deferred(*invalid); }
+        auto external = aliases_protected_file(*path, retained_external);
+        if (const auto* invalid = std::get_if<Diagnostic>(&external)) { return deferred(*invalid); }
+        if (std::get<bool>(external)) {
+            return cleanup_issue(Severity::Warning, "Old managed file is shared with an external resource or package metadata: "
+                + managed.path.path);
+        }
+        return remove_verified_version(managed, paths);
+    };
+    for (const auto& resource : previous.resources) {
+        const auto* managed = std::get_if<ManagedResource>(&resource.location);
+        if (!managed) { continue; }
+        auto outcome = remove(*managed);
+        if (auto* failure = std::get_if<Diagnostic>(&outcome)) { record(std::move(*failure), resource.id); }
+        else if (std::get<CleanupOutcome>(outcome) == CleanupOutcome::Removed) { ++report.removed; }
+        else if (std::get<CleanupOutcome>(outcome) == CleanupOutcome::Deferred) { ++report.deferred; }
+    }
+    return report;
 }
 
 } // namespace visionpro::infrastructure

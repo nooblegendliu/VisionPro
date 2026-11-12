@@ -7,5 +7,13 @@ target_link_libraries(visionpro_solution_file_tests PRIVATE visionpro_infrastruc
 add_test(NAME infrastructure.file_resource_execution COMMAND visionpro_solution_file_tests execution)
 add_test(NAME infrastructure.solution_diagnostic_loading COMMAND visionpro_solution_file_tests diagnostics)
 
+add_executable(visionpro_solution_save_tests solution_save_tests.cpp)
+target_compile_definitions(visionpro_solution_save_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_link_libraries(visionpro_solution_save_tests PRIVATE visionpro_infrastructure visionpro_build_options Threads::Threads)
+add_test(NAME infrastructure.solution_save_failures COMMAND visionpro_solution_save_tests failures)
+add_test(NAME infrastructure.solution_save_conflict COMMAND visionpro_solution_save_tests conflict)
+add_test(NAME infrastructure.solution_save_cleanup COMMAND visionpro_solution_save_tests cleanup)
+
 set_tests_properties(infrastructure.solution_roundtrip infrastructure.file_resource_execution
-    infrastructure.solution_diagnostic_loading PROPERTIES TIMEOUT 30)
+    infrastructure.solution_diagnostic_loading infrastructure.solution_save_failures
+    infrastructure.solution_save_conflict infrastructure.solution_save_cleanup PROPERTIES TIMEOUT 30)

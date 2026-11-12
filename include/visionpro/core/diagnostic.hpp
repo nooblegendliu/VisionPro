@@ -93,6 +93,8 @@ enum class ErrorCode : std::uint32_t {
     UnsupportedSolutionFormat = 2103,
     UnsupportedSolutionContent = 2104,
     SolutionAlreadyExists = 2105,
+    SolutionSaveConflict = 2106,
+    SolutionCleanupFailure = 2107,
 };
 
 enum class ErrorCategory { Unknown, Structure, Parameter, Resource, Runtime };

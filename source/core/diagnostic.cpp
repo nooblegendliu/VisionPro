@@ -103,6 +103,8 @@ ErrorCategory error_category(ErrorCode code) noexcept
     case ErrorCode::InvalidPath:
     case ErrorCode::SolutionIoFailure:
     case ErrorCode::SolutionAlreadyExists:
+    case ErrorCode::SolutionSaveConflict:
+    case ErrorCode::SolutionCleanupFailure:
         return ErrorCategory::Resource;
     }
     return ErrorCategory::Unknown;
@@ -189,6 +191,8 @@ std::string_view error_code_name(ErrorCode code) noexcept
     case ErrorCode::UnsupportedSolutionFormat: return "UnsupportedSolutionFormat";
     case ErrorCode::UnsupportedSolutionContent: return "UnsupportedSolutionContent";
     case ErrorCode::SolutionAlreadyExists: return "SolutionAlreadyExists";
+    case ErrorCode::SolutionSaveConflict: return "SolutionSaveConflict";
+    case ErrorCode::SolutionCleanupFailure: return "SolutionCleanupFailure";
     }
     return "UnknownErrorCode";
 }

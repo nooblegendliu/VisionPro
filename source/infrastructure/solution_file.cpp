@@ -3,12 +3,9 @@
 #include <visionpro/workflow/validation.hpp>
 
 #include "solution_codec.hpp"
-
-#include <windows.h>
+#include "solution_storage.hpp"
 
 #include <algorithm>
-#include <fstream>
-#include <limits>
 #include <set>
 
 namespace visionpro::infrastructure {
@@ -28,25 +25,6 @@ Diagnostic unknown_content(const SolutionDocument& document)
 {
     return error(ErrorCode::UnsupportedSolutionContent,
         "The loaded solution contains unknown manifest fields.", document.solution().id);
-}
-
-Result<std::string> read_manifest(const fs::path& manifest)
-{
-    if (!fs::is_regular_file(manifest)) {
-        return error(ErrorCode::SolutionIoFailure, "The solution directory requires a regular solution.json file.");
-    }
-    const auto size = fs::file_size(manifest);
-    std::string text;
-    if (size > text.max_size() || size > static_cast<std::uintmax_t>(std::numeric_limits<std::streamsize>::max())) {
-        return error(ErrorCode::SolutionIoFailure, "The manifest exceeds the supported file size.");
-    }
-    text.resize(static_cast<std::size_t>(size));
-    std::ifstream input(manifest, std::ios::binary);
-    if (!input || !input.read(text.data(), static_cast<std::streamsize>(size))
-        || input.peek() != std::char_traits<char>::eof() || input.bad()) {
-        return error(ErrorCode::SolutionIoFailure, "Could not read the complete solution manifest.");
-    }
-    return text;
 }
 
 void diagnose_tool_support(const Solution& solution, const ToolRegistry& registry, std::vector<Diagnostic>& diagnostics)
@@ -102,20 +80,9 @@ Result<std::monostate> publish_manifest(const fs::path& directory, const std::st
         return error(ErrorCode::SolutionIoFailure, "Could not reserve the temporary manifest directory.");
     }
     const TemporaryManifest temporary{std::move(staging), std::move(file)};
-    {
-        std::ofstream output(temporary.file, std::ios::binary);
-        output.write(text.data(), static_cast<std::streamsize>(text.size()));
-        output.close();
-        if (!output) { return error(ErrorCode::SolutionIoFailure, "Could not write the complete temporary manifest."); }
-    }
-    // The same-volume rename must fail if another writer created the target.
-    if (!MoveFileExW(temporary.file.c_str(), manifest.c_str(), 0)) {
-        const auto native_error = GetLastError();
-        if (native_error == ERROR_FILE_EXISTS || native_error == ERROR_ALREADY_EXISTS || manifest_exists(manifest)) { return exists(); }
-        return error(ErrorCode::SolutionIoFailure, "Could not publish a new solution manifest. Win32 error "
-            + std::to_string(native_error) + ".");
-    }
-    return std::monostate{};
+    auto written = detail::write_staged_file(temporary.file, std::as_bytes(std::span{text.data(), text.size()}));
+    if (auto* failure = std::get_if<Diagnostic>(&written)) { return std::move(*failure); }
+    return detail::publish_file(temporary.file, manifest, false);
 }
 
 } // namespace
@@ -128,9 +95,11 @@ core::Result<SolutionDocument> load_solution(const fs::path& directory, const To
             return error(ErrorCode::InvalidPath, "The solution directory must be absolute.");
         }
         auto base = fs::canonical(directory);
-        auto bytes = read_manifest(base / solution_manifest_name);
+        const auto manifest = base / solution_manifest_name;
+        auto bytes = detail::read_manifest(manifest);
         if (auto* failure = std::get_if<Diagnostic>(&bytes)) { return std::move(*failure); }
-        const auto json = detail::parse_manifest(std::get<std::string>(bytes));
+        const auto& text = std::get<std::string>(bytes);
+        const auto json = detail::parse_manifest(text);
         std::vector<Diagnostic> diagnostics;
         auto solution = detail::decode_solution(detail::Reader{json, diagnostics});
         const bool complete = diagnostics.empty();
@@ -144,7 +113,19 @@ core::Result<SolutionDocument> load_solution(const fs::path& directory, const To
         auto provider = std::get<std::shared_ptr<FileResourceProvider>>(std::move(resolved));
         const auto resource_diagnostics = provider->diagnostics();
         diagnostics.insert(diagnostics.end(), resource_diagnostics.begin(), resource_diagnostics.end());
-        return SolutionDocument{std::move(solution), std::move(base), std::move(diagnostics), complete, std::move(provider)};
+
+        // A concurrent save can retire old files after replacing the
+        // manifest. Publish only a capture that matches the revision read
+        // after fixed resource bytes were acquired.
+        auto confirmed = detail::read_manifest(manifest);
+        if (auto* failure = std::get_if<Diagnostic>(&confirmed)) { return std::move(*failure); }
+        if (std::get<std::string>(confirmed) != text) {
+            return error(ErrorCode::SolutionSaveConflict, "The manifest changed while its resources were being loaded.", solution.id);
+        }
+        auto digest = detail::sha256(std::as_bytes(std::span{text.data(), text.size()}));
+        if (auto* failure = std::get_if<Diagnostic>(&digest)) { return std::move(*failure); }
+        return SolutionDocument{std::move(solution), std::move(base), std::move(diagnostics), complete, std::move(provider),
+            std::get<std::string>(std::move(digest)), roots};
     } catch (detail::CodecError& failure) {
         return std::move(failure.diagnostic);
     } catch (const detail::Json::parse_error& failure) {
@@ -168,9 +149,6 @@ core::Result<std::monostate> write_new_solution(const fs::path& directory, const
         auto checked = validate_model_shape(solution);
         if (auto* failure = std::get_if<Diagnostic>(&checked)) { return std::move(*failure); }
         const auto text = detail::serialize_manifest(detail::encode_solution(solution));
-        if (text.size() > static_cast<std::uintmax_t>(std::numeric_limits<std::streamsize>::max())) {
-            return error(ErrorCode::SolutionIoFailure, "The encoded manifest exceeds the supported file size.", solution.id);
-        }
         return publish_manifest(directory, text);
     } catch (detail::CodecError& failure) {
         return std::move(failure.diagnostic);

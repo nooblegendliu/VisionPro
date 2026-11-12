@@ -6,6 +6,8 @@ add_library(visionpro_infrastructure STATIC
     solution_codec.cpp
     file_resources.cpp
     solution_file.cpp
+    solution_storage.cpp
+    solution_save.cpp
 )
 add_library(visionpro::infrastructure ALIAS visionpro_infrastructure)
 
