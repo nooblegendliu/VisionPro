@@ -74,18 +74,21 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 
 # ------------------------------------------------------------------
-# 4. 核心库与无 GUI 测试
+# 4. 核心库、无 GUI 应用与测试
 # ------------------------------------------------------------------
 find_package(Threads REQUIRED)
 add_subdirectory(source/core)
 add_subdirectory(source/workflow)
 add_subdirectory(source/infrastructure)
+add_subdirectory(source/tools)
+add_subdirectory(source/app)
 
 include(CTest)
 if(BUILD_TESTING)
     add_subdirectory(tests/core)
     add_subdirectory(tests/workflow)
     add_subdirectory(tests/infrastructure)
+    add_subdirectory(tests/app)
 endif()
 
 # ------------------------------------------------------------------
@@ -99,6 +102,7 @@ set(VISIONPRO_PROJECT_DOCUMENTS
     "${PROJECT_SOURCE_DIR}/docs/architecture.md"
     "${PROJECT_SOURCE_DIR}/docs/data-model.md"
     "${PROJECT_SOURCE_DIR}/docs/development.md"
+    "${PROJECT_SOURCE_DIR}/docs/s3-acceptance.md"
 )
 
 add_custom_target(
@@ -123,5 +127,6 @@ message(STATUS "OpenCV          : Not configured")
 message(STATUS "Core library    : visionpro_core")
 message(STATUS "Workflow library: visionpro_workflow")
 message(STATUS "Infrastructure  : visionpro_infrastructure")
+message(STATUS "Headless CLI    : visionpro_cli")
 message(STATUS "Tests           : ${BUILD_TESTING}")
 message(STATUS "=============================================")

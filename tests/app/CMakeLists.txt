@@ -1,0 +1,12 @@
+add_executable(visionpro_cli_tests cli_tests.cpp)
+target_compile_definitions(visionpro_cli_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_include_directories(visionpro_cli_tests SYSTEM PRIVATE "${PROJECT_SOURCE_DIR}/third_party/nlohmann_json/include")
+target_link_libraries(visionpro_cli_tests PRIVATE visionpro_infrastructure visionpro_build_options)
+if(MINGW)
+    target_link_options(visionpro_cli_tests PRIVATE -municode)
+endif()
+add_dependencies(visionpro_cli_tests visionpro_cli)
+
+add_test(NAME app.cli_roundtrip COMMAND visionpro_cli_tests $<TARGET_FILE:visionpro_cli> roundtrip)
+add_test(NAME app.cli_diagnostics COMMAND visionpro_cli_tests $<TARGET_FILE:visionpro_cli> diagnostics)
+set_tests_properties(app.cli_roundtrip app.cli_diagnostics PROPERTIES TIMEOUT 60)

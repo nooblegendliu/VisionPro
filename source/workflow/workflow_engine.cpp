@@ -156,6 +156,7 @@ public:
           remaining_(schedule_.nodes().size()), eligible_(remaining_), results_(identity().snapshot.session)
     {
         progress_.nodes.reserve(remaining_);
+        progress_.call_order.reserve(remaining_);
         for (const auto& node : schedule_.nodes()) { progress_.nodes.push_back({node}); }
         apply_skips();
     }
@@ -266,13 +267,21 @@ public:
         schedule_.wait_for_data(index);
     }
 
-    bool start_call(std::size_t index, const ToolInvocationIdentity& invocation, std::vector<RunBindingTrace> bindings)
+    bool start_call(std::size_t index, const InvocationContext& context, std::vector<RunBindingTrace> bindings)
     {
+        const auto& invocation = context.data().identity;
+        std::vector<RunResourceTrace> resources;
+        resources.reserve(context.data().resources.size());
+        for (const auto& resource : context.data().resources) {
+            resources.push_back({resource.slot, resource.lease->reference()});
+        }
         const std::lock_guard lock(mutex_);
         observe_cancellation();
         if (stopping_ || terminal(progress_.status)) { return false; }
         auto& node = progress_.nodes[index];
+        progress_.call_order.push_back(node.node);
         node.bindings = std::move(bindings);
+        node.resources = std::move(resources);
         node.invocation = invocation.invocation;
         node.status = ExecutionStatus::Running;
         eligible_[index] = invocation;
@@ -633,7 +642,7 @@ void start_node(Work& work, std::size_t index, InvocationResourceProvider* resou
     const auto identity = call.invocation.context.data().identity;
     const auto& wakeup = run.wakeup();
     wakeup->expect(identity);
-    if (!run.start_call(index, identity, std::move(trace))) {
+    if (!run.start_call(index, call.invocation.context, std::move(trace))) {
         wakeup->forget(identity);
         work.active_calls.erase(entry);
         return;

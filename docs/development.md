@@ -22,8 +22,9 @@ Release 验证及交接见 [§8.12](#812-s31-实现与验证记录) 和 [§8.13]
 2026-11-12 完成 S3.6 结果交付、通知与会话生命周期。验证记录见 [§8.17](#817-s36-实现与验证记录)。
 2026-11-12 完成 S3.7 配置格式、资源解析与诊断加载。验证记录见 [§8.18](#818-s37-实现与验证记录)。
 2026-11-12 完成 S3.8 保存事务与故障保护。验证记录见 [§8.19](#819-s38-实现与验证记录)。
+2026-11-12 完成 S3.9 命令行闭环及 S3 整体验收。验证记录见 [§8.20](#820-s39-与-s3-整体验收记录)。
 参考资料复核记录见 §8.11。[§6](#6-第三阶段实施与验证) 保留 S3.1–S3.9 的任务、依赖和退出条件。
-当前 Release 命令见 §3.15，既有构建命令保留在 §3.1–§3.14。
+当前 Debug 和 Release 命令见 §3.16，既有构建命令保留在 §3.1–§3.15。
 
 开发顺序以 [requirements.md](requirements.md) 为准：
 
@@ -31,7 +32,7 @@ Release 验证及交接见 [§8.12](#812-s31-实现与验证记录) 和 [§8.13]
 |---|---|
 | 1. 基础模型与契约设计 | 文档审查通过；历史审查记录见 §8.1–§8.3 |
 | 2. 核心模型与绑定验证 | S2.1–S2.7 完成；14 项必需子范围和 Debug/Release 验证通过，整体记录见 §8.10 |
-| 3. 无 GUI 执行与配置往返验证 | S3.1–S3.8 完成并通过 Release 验证。S3.9 接续命令行入口与整体验收 |
+| 3. 无 GUI 执行与配置往返验证 | S3.1–S3.9 完成。Debug 和 Release 各 82/82 项通过，26 项 S3 必验范围全部通过 |
 | 4. 无 GUI 视觉闭环 | 使用少量真实 OpenCV 工具及固定图像验证结果 |
 | 5. 基础可视化界面 | 复用核心服务，验证界面方案与无 GUI 执行一致 |
 | 6. 后续能力 | 完整循环、多流程并行、触发、共享服务、设备及扩展工具 |
@@ -409,6 +410,51 @@ ctest --test-dir out/build/s38-release -C Release --output-on-failure --no-tests
 
 验收覆盖和运行记录见 [§8.19](#819-s38-实现与验证记录)。
 
+### 3.16 S3.9 构建与命令行验证
+
+在仓库根目录 PowerShell 中构建并运行两套测试。
+
+```powershell
+cmake -S . -B out/build/s39 -G "Visual Studio 18 2026" -A x64 -DBUILD_TESTING=ON
+cmake --build out/build/s39 --config Release --parallel 1
+ctest --test-dir out/build/s39 -C Release --output-on-failure --no-tests=error --output-log out/build/s39/ctest-release.log
+cmake --build out/build/s39 --config Debug --parallel 1
+ctest --test-dir out/build/s39 -C Debug --output-on-failure --no-tests=error --output-log out/build/s39/ctest-debug.log
+```
+
+单独复现保存前后的命令行闭环和故障路径。
+
+```powershell
+ctest --test-dir out/build/s39 -C Release -R '^app\.cli_' --output-on-failure --no-tests=error
+& .\out\build\s39\source\app\Release\visionpro_cli.exe --help
+```
+
+`run` 通过方案目录下的 `solution.json` 和流程 UUID 选中执行目标。重复 `--input <端口 ID>=<值>` 提供本次公开输入，
+按 Schema 读取 Bool、Int64、Float64 和 String，省略的输入由请求按方案定义处理。`run` 等待实际退出，输出本轮 JSON 摘要。
+`save` 使用 S3.8 事务提交原方案配置的新修订，并返回清理报告。下一次 `run` 重新读取磁盘配置。
+两种命令都接受 `--root <命名根 ID>=<目录>`，支持相对路径和带空格的路径，路径带空格时用引号包住整个参数值。
+
+```powershell
+$cli = '.\out\build\s39\source\app\Release\visionpro_cli.exe'
+& $cli run --solution $manifest --workflow $workflowId --input 'offset=7'
+& $cli save --solution $manifest
+& $cli run --solution $manifest --workflow $workflowId --input 'offset=7'
+```
+
+`$manifest` 和 `$workflowId` 使用实际方案的文件路径和流程 UUID。`offset=7` 对应验收夹具的公开 Int64 输入。
+成功退出码为 `0`，参数错误为 `2`，其他失败为 `1`。诊断 JSON 写入 stderr，已受理的失败运行也在 stdout 保留终态摘要。
+摘要字段见 [data-model.md §4.11](data-model.md#411-s39-命令行运行摘要)，实测记录见 [§8.20](#820-s39-与-s3-整体验收记录)。
+
+命令行静态注册下列模拟工具，配置版本均为 1。
+
+| 工具类型 ID | 输入与结果 |
+|---|---|
+| `visionpro.sim.file_byte` | Binary 资源槽 `payload`，输出文件首字节 `value`（Int64） |
+| `visionpro.sim.add` | Int64 输入 `left`、`right`，输出 `value`（Int64） |
+| `visionpro.sim.select` | Int64 输入 `mask`（0–3），按位 1、2 选择 `left`、`right` 控制出口 |
+| `visionpro.sim.collect` | 从多个 Int64 节点输出收集 `values`，按绑定顺序输出 `List<Int64>` |
+| `visionpro.sim.deliver` | 接收并输出单个 `List<Int64>` 值 `values`，模拟交付 |
+
 ## 4. 第一阶段验证
 
 2026-10-27 已按以下检查项完成文档审查，结果见 [§8.1](#81-s1-文档审查记录) 和 [§8.2](#82-s1-场景定义逐项审查)。
@@ -555,7 +601,7 @@ S2 结束前须同时满足：
 S3 交付可通过无 GUI 入口加载、执行、追溯并保存方案的运行服务，
 范围以 [requirements.md §5](requirements.md#5-第三阶段无-gui-执行与配置往返验证) 为准。
 先以内存配置调用模拟工具，证明绑定、调度、结果和生命周期一致，再加入配置往返。
-以下为 2026-11-11 确定的实施计划。S3.1–S3.8 验证记录见 §8.12–§8.19，S3.9 待实现。
+以下为 2026-11-11 确定的实施计划。S3.1–S3.9 的验证记录见 §8.12–§8.20。
 
 采用单工作线程就绪调度、每流程 maxInFlight=1、重复启动返回 Busy、默认 FailFast，
 无自动重试或隐式排队；检测 NG 不等于技术失败，槽位保留至实际退出和清理完成。
@@ -694,6 +740,7 @@ S3.8 首个后端以 Windows 本地文件系统验证提交保证，不提前承
 
 下表覆盖 [requirements.md §9](requirements.md#9-验收场景与阶段矩阵c10) 中全部包含 S3 的 26 项场景。
 仅验收各场景的 S3 子范围；A14 等纯后续场景不提前计入。表中落点为计划，不是现有测试名称或通过证据。
+实测结果及对应测试见 [S3 整体验收矩阵](s3-acceptance.md#场景证据)。
 
 | 场景 | 主要落点 | S3 必须验证的内容 |
 |---|---|---|
@@ -1437,4 +1484,25 @@ CTest **80/80** 项通过，包含 3 项保存事务测试和 77 项回归。
 保存用 `LockFileEx` 独占包目录锁文件的字节范围，在同一锁内复核摘要，再用 `MoveFileExW` 同卷替换清单。
 对非协作写入的检测截至替换前最后一次比较。断电恢复和网络共享属于后续后端验证范围。 [LockFileEx](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-lockfileex)、[MoveFileExW](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-movefileexw)
 
-接口、版本分配和清理重试见 [data-model.md §10.4.1](data-model.md#1041-s38-保存与清理接口)。S3.9 接续命令行入口和第三阶段整体验收。
+接口、版本分配和清理重试见 [data-model.md §10.4.1](data-model.md#1041-s38-保存与清理接口)。
+
+### 8.20 S3.9 与 S3 整体验收记录
+
+2026-11-12 在基于 `0c7fab5` 的工作区验证 S3.9。环境为 Windows x64、本地固定 NTFS、
+Visual Studio Professional 2026、MSBuild 18.7.8、MSVC 19.51.36248.0、Windows SDK 10.0.26100.0 和 CMake/CTest 4.4.0。
+复现命令见 [§3.16](#316-s39-构建与命令行验证)。
+Debug 和 Release 均完成全量构建，CTest 各 **82/82** 项通过，包含 2 项新增命令行用例及 80 项回归。
+`out/build/s39/` 保存 `build-debug.log`、`build-release.log`、`ctest-debug.log`、`ctest-release.log` 及两个配置的 `LastTest` 日志。
+
+| CTest 入口 | 固定夹具及结果 | 每种配置的检查数 |
+|---|---|---|
+| `app.cli_roundtrip` | 独立 CLI 进程加载含中文和空格路径的方案。托管字节 `abc` 提供 97，公开输入 `offset=7` 与保存的常量共同产生五路交付 `[104, 99, 100, 101, 102]`。11 条控制边全部到达，汇合与模拟交付各调用一次。条件掩码 3、1、0 分别交付 `[11, 22]`、`[11]` 和跳过汇合与交付。`save` 将修订 12 提交为 13；新进程重新加载后，同一输入的输出、来源关系、派发顺序、控制边和关闭原因全部一致 | 269 通过 |
+| `app.cli_diagnostics` | 核对帮助、参数错误、缺必填输入与数字越界。已受理的加法溢出运行报告 `Failed` 和 `FailFast`，保留终态摘要。未知字段拒绝覆盖保存并保留原清单及资源。损坏清单与缺失资源返回可定位诊断 | 21 通过 |
+
+回归用例 `workflow.sibling_dependencies` 验证控制就绪的消费者等待实际生产者，并在追溯中排在生产者之后，25 项检查通过。
+用 `dumpbin /DEPENDENTS` 检查 Release 命令行程序，直接依赖为 Windows 系统库和 MSVC 运行库。
+
+两套通过日志均覆盖验收矩阵引用的 41 个测试入口和 S2 的 48 个回归入口。**S3 的 26 项必验子范围全部通过**。
+场景、行为和测试入口见 [S3 整体验收矩阵](s3-acceptance.md#场景证据)。
+
+S4 复用静态注册、无 GUI 命令行装配、运行快照和文件方案存储，接续本地图像、二值化、Blob 分析及结果判断的真实算法验证。

@@ -473,6 +473,8 @@ void sibling_dependencies()
     check(!completed_run.quiescent && fixture.driver->starts(uuid<NodeId>(producer)) == 1
         && fixture.driver->starts(uuid<NodeId>(consumer)) == 1,
         "The accepted sibling result wakes the consumer while the producer still awaits exit.");
+    check(completed_run.call_order == std::vector{uuid<NodeId>(), uuid<NodeId>(gate), uuid<NodeId>(producer), uuid<NodeId>(consumer)},
+        "Dispatch order places the data-ready consumer after its producer, even though it was considered earlier.");
     check(output(run, completed_run, consumer, "value") == DataValue::integer(41),
         "The consumer uses the accepted sibling reading.");
     const auto& bindings = node_progress(completed_run, consumer).bindings;

@@ -14,6 +14,10 @@ struct RunBindingTrace {
     BindingTarget target;
     std::vector<SourceTrace> sources;
 };
+struct RunResourceTrace {
+    core::SchemaId slot;
+    core::ResourceReference reference;
+};
 struct RunNodeProgress {
     core::NodeId node;
     ExecutionStatus status{ExecutionStatus::Pending};
@@ -21,6 +25,7 @@ struct RunNodeProgress {
     std::optional<core::InvocationKey> invocation{};
     std::optional<NodeSkipReason> skip_reason{};
     std::vector<RunBindingTrace> bindings{};
+    std::vector<RunResourceTrace> resources{}; // References from leases acquired for the call.
 };
 
 enum class ControlLinkStatus { Pending, Arrived, Closed };
@@ -40,6 +45,7 @@ struct RunProgress {
     std::vector<core::Diagnostic> diagnostics;
     std::vector<RunNodeProgress> nodes{}; // In planned control order when reported by the backend.
     std::vector<RunControlLinkProgress> control_links{};
+    std::vector<core::NodeId> call_order{}; // Actual dispatch order, after input and lease preparation.
 };
 struct RunWaitResult { RunWaitOutcome outcome; RunProgress progress; };
 

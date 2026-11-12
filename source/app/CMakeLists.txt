@@ -1,0 +1,7 @@
+add_executable(visionpro_cli main.cpp run_summary.cpp)
+target_include_directories(visionpro_cli SYSTEM PRIVATE "${PROJECT_SOURCE_DIR}/third_party/nlohmann_json/include")
+target_compile_definitions(visionpro_cli PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_link_libraries(visionpro_cli PRIVATE visionpro_simulation_tools visionpro_infrastructure visionpro_build_options)
+if(MINGW)
+    target_link_options(visionpro_cli PRIVATE -municode)
+endif()

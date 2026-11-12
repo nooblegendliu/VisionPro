@@ -11,7 +11,7 @@ VisionPro 是一个采用 C++20、Qt、OpenCV 和 CMake 的桌面视觉算法软
 
 ## 当前状态
 
-S1 文档审查和 S2 核心模型与绑定验收已通过。S3.8 已接通文件方案的保存事务、并发冲突检测及资源清理。下一阶段为 S3.9 无 GUI 入口与整体验收。
+S1 文档审查、S2 核心模型与绑定及 S3 无 GUI 执行与配置往返均已通过验收。下一阶段为 S4 无 GUI 视觉闭环。
 
 - 已建立初始目录、开发规则及基础设计文档。
 - 已确定 C++20、Qt、OpenCV、CMake 技术栈。
@@ -35,6 +35,7 @@ S1 文档审查和 S2 核心模型与绑定验收已通过。S3.8 已接通文�
 - S3.6 支持精确查询已保留的运行结果、按容量读取观察通知，并在旧会话排空后启用校验通过的内存方案。见 [S3.6 实现与验证](docs/development.md#817-s36-实现与验证记录)。
 - S3.7 支持版本化 `solution.json`、固定文件资源的 SHA-256 校验与字节保留，以及带诊断打开已知格式的草稿。见 [S3.7 实现与验证](docs/development.md#818-s37-实现与验证记录)。
 - S3.8 在本地 NTFS 支持覆盖保存。提交前故障保留旧方案，协作保存者可检测修订冲突，运行持有的旧资源在退出后可重试清理。见 [S3.8 实现与验证](docs/development.md#819-s38-实现与验证记录)。
+- S3.9 提供无 GUI 的 `visionpro_cli`。五路汇合与条件分支在磁盘方案保存前后的结果、数据来源和控制行为一致。见 [S3.9 验收记录](docs/development.md#820-s39-与-s3-整体验收记录)。
 
 ## 设计基线与当前重点
 
@@ -99,15 +100,15 @@ GUI 和无 GUI 入口共用运行请求及结果接口，第三方 SDK 的名称
 逻辑上划分应用层、核心层与能力层，具体模块映射见 [architecture.md](docs/architecture.md)。
 首批工具按类型静态注册，动态插件后置。
 
-S3.8 在 Windows x64、MSVC 19.51、CMake/CTest 4.4.0 环境完成 Release 验证，80 项 CTest 全部通过。
-复现步骤见 [S3.8 Release 构建与测试](docs/development.md#315-s38-release-构建与测试命令)。
+S3.9 在 Windows x64、MSVC 19.51、CMake/CTest 4.4.0 环境完成 Debug 和 Release 验证，各 82/82 项 CTest 通过。
+复现步骤见 [S3.9 构建与命令行验证](docs/development.md#316-s39-构建与命令行验证)。
 Qt、OpenCV 的版本和获取方式在相应模块接入前确定。
 
 ## 开发阶段
 
 1. 基础模型与契约设计：文档审查通过。
 2. 核心模型与绑定验证。S2.1–S2.7 完成，Debug/Release 及全部 S2 必需子范围通过。
-3. 无 GUI 执行与配置往返验证。S3.1–S3.8 已完成，S3.9 待实现。
+3. 无 GUI 执行与配置往返验证。S3.1–S3.9 完成，26 项必验子范围全部通过。
 4. 无 GUI 视觉闭环。
 5. 基础可视化界面。
 6. 完整循环、多流程并行、触发、共享服务及工业接入。
@@ -134,9 +135,10 @@ Qt、OpenCV 的版本和获取方式在相应模块接入前确定。
 
 ## 构建与运行
 
-当前 [CMake 配置](CMakeLists.txt) 构建无 GUI 的 `visionpro_core`、`visionpro_workflow`、`visionpro_infrastructure` 和测试程序，
+当前 [CMake 配置](CMakeLists.txt) 构建无 GUI 的 `visionpro_cli`、核心与存储库和测试程序，
 不需要 Qt、OpenCV 或厂商 SDK。UUID 生成后端当前使用 Windows CNG，其他平台后端尚未实现。
-库入口可加载文件方案、按目标执行、激活会话或提交保存。命令行入口在 S3.9 接入。见 [清单与加载接口](docs/data-model.md#1021-s37-清单与加载接口) 和 [保存与清理接口](docs/data-model.md#1041-s38-保存与清理接口)。
+`visionpro_cli run` 接受 `solution.json`、流程 UUID 与本次输入，实际退出后输出 JSON 追溯摘要。
+`visionpro_cli save` 提交方案的新修订。见 [命令行用法与闭环复现](docs/development.md#316-s39-构建与命令行验证)。
 
 ## 文档导航
 
@@ -147,4 +149,5 @@ Qt、OpenCV 的版本和获取方式在相应模块接入前确定。
 - [SDK 指南补充的设计取舍](docs/architecture.md#12-sdk-指南补充的设计取舍)
 - [核心数据模型与 C01–C10 契约](docs/data-model.md)
 - [S2 实施顺序、首批任务与验收覆盖](docs/development.md#5-第二阶段实施与验证)
+- [S3 整体验收矩阵](docs/s3-acceptance.md#场景证据)
 - [开发与验证](docs/development.md)
