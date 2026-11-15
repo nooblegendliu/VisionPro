@@ -9,8 +9,8 @@
 - 同一方案可在不启动 GUI 时加载和执行，支撑测试、自动化和后续现场集成。
 
 本文落实 C01–C10 设计基线；当前已实现 S2.1–S2.4 的核心领域类型、方案/关系模型、
-配置快照、类型化请求、结果记录与复制重映射；S2.5 图/绑定静态校验已完成并通过 Debug/Release 验证。
-S2.6 会话内结果访问和绑定解析已通过 Debug/Release 验证，S3 接通调度、准入、提交、取消与文件存储。
+配置快照、类型化请求、结果记录与复制重映射；S2.5 图/绑定静态校验已完成并通过 Release 验证。
+S2.6 会话内结果访问和绑定解析已通过 Release 验证，S3 接通调度、准入、提交、取消与文件存储。
 核心对象与契约以 [data-model.md](data-model.md) 为准；
 手册依据、设计理由及阶段验收以 [requirements.md](requirements.md) 为准。
 架构不得把早期调度、算法或存储后端的能力限制写成永久模型约束。
@@ -204,6 +204,26 @@ JSON 类型只出现在存储模块内部。稳定 ID、三类关系和可持久
 
 `run` 等待已受理运行实际退出，再按本轮调用键查询结果。摘要使用引擎实际记录的派发顺序、绑定来源、资源租约引用及控制边状态。
 `save` 通过同一加载入口取得基线并调用保存事务。命令和验收夹具见 [development.md §3.16](development.md#316-s39-构建与命令行验证)。
+
+### 2.11 S4.1 可选视觉工具
+
+`visionpro_vision_tools` 位于 `source/tools/vision/`，在启用 `VISIONPRO_WITH_OPENCV` 时构建，并私有链接 OpenCV。
+工具元数据与适配检查使用 core 的类型，OpenCV 的头文件和 `cv::Mat` 留在视觉实现与工具测试内部。
+app 把模拟和视觉工具提供的 `ToolRegistration` 组合成一个 `ToolRegistry`。四个视觉 Schema 已可独立校验，
+各工具在具备真实实例工厂后进入运行目录。构建和部署见 [development.md §3.17](development.md#317-s41-release-构建与验证)。
+
+### 2.12 S4.2 图像桥接与文件读取
+
+`visionpro_vision_tools` 私有依赖 `visionpro_infrastructure` 的 `FileResourceLease`。`read_file` 在工作线程通过固定字节解码，
+把只读 Image 输出提交给现有执行器。图像桥接集中转换像素布局，并复用 `ImageHandle` 发布独立输出和保留空间元数据。
+app 的图像摘要读取类型化 `ImageFrame`。构建和测试见 [development.md §3.18](development.md#318-s42-release-构建与验证)。
+
+### 2.13 S4.3 ROI、继承与掩膜求值
+
+视觉模块的 `evaluate_roi` 使用 `InvocationContextData::regions` 的冻结定义和本次 `mask` 租约，在当前目标图像生成成员掩膜。
+几何、采样和方向变换由工具模块负责。执行器的 `RunBindingTrace::regions` 记录已解析的定义、来源路径及调用身份。
+`RoiEvaluation` 持有实际成员、分层方向和掩膜来源。S4.4 的 `visionpro.image.threshold` 使用同一求值结果与 OpenCV 桥接，
+一次发布独立二值图、展开的 `Region2D` 和成员掩膜。CLI 摘要读取这些类型化输出与冻结生产者身份。
 
 ## 3. 依赖方向
 

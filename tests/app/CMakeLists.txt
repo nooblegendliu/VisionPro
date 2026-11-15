@@ -10,3 +10,15 @@ add_dependencies(visionpro_cli_tests visionpro_cli)
 add_test(NAME app.cli_roundtrip COMMAND visionpro_cli_tests $<TARGET_FILE:visionpro_cli> roundtrip)
 add_test(NAME app.cli_diagnostics COMMAND visionpro_cli_tests $<TARGET_FILE:visionpro_cli> diagnostics)
 set_tests_properties(app.cli_roundtrip app.cli_diagnostics PROPERTIES TIMEOUT 60)
+
+if(VISIONPRO_WITH_OPENCV)
+    add_executable(visionpro_image_summary_tests image_summary_tests.cpp ../../source/app/run_summary.cpp)
+    target_include_directories(visionpro_image_summary_tests PRIVATE "${PROJECT_SOURCE_DIR}/source/app")
+    target_include_directories(visionpro_image_summary_tests SYSTEM PRIVATE "${PROJECT_SOURCE_DIR}/third_party/nlohmann_json/include")
+    target_link_libraries(visionpro_image_summary_tests PRIVATE visionpro_vision_tools visionpro_infrastructure visionpro_build_options)
+    add_test(NAME app.vision_image_summary COMMAND visionpro_image_summary_tests)
+    set_tests_properties(app.vision_image_summary PROPERTIES TIMEOUT 30)
+    set_tests_properties(app.cli_roundtrip app.cli_diagnostics app.vision_image_summary PROPERTIES
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:opencv_core>"
+    )
+endif()

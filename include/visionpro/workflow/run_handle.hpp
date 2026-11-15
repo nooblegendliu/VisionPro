@@ -13,6 +13,8 @@ enum class NodeSkipReason { Disabled, UpstreamClosed, FailFast, RunCancelled, Ru
 struct RunBindingTrace {
     BindingTarget target;
     std::vector<SourceTrace> sources;
+    // Frozen expressions and exact producer identities from successful resolution.
+    std::vector<ResolvedRegionReference> regions{};
 };
 struct RunResourceTrace {
     core::SchemaId slot;

@@ -1,5 +1,8 @@
 #include "run_summary.hpp"
 #include "simulation.hpp"
+#ifdef VISIONPRO_WITH_OPENCV
+#include "vision/vision_tools.hpp"
+#endif
 
 #include <visionpro/core/id_factory.hpp>
 #include <visionpro/core/schema_id_factory.hpp>
@@ -39,7 +42,11 @@ constexpr auto usage =
     "visionpro_cli run --solution <solution.json> --workflow <uuid> [--input <id>=<value>]... [--root <id>=<directory>]...\n"
     "visionpro_cli save --solution <solution.json> [--root <id>=<directory>]...\n"
     "Inputs follow the workflow's public Bool, Int64, Float64 and String schemas.\n"
+#ifdef VISIONPRO_WITH_OPENCV
+    "The installed catalog contains the VisionPro simulation tools, visionpro.image.read_file and visionpro.image.threshold.\n";
+#else
     "The installed catalog contains the VisionPro simulation tools.\n";
+#endif
 
 std::string utf8(std::wstring_view text)
 {
@@ -201,6 +208,17 @@ int run(const Arguments& args, const SolutionDocument& document, const ToolRegis
     return 1;
 }
 
+Result<ToolRegistry> make_tool_registry()
+{
+    auto registrations = tools::simulation_registrations();
+#ifdef VISIONPRO_WITH_OPENCV
+    for (auto& registration : tools::vision::registrations()) {
+        registrations.push_back(std::move(registration));
+    }
+#endif
+    return ToolRegistry::create(registrations);
+}
+
 int execute(std::span<wchar_t*> args)
 {
     if (args.size() == 1 && std::wstring_view(args.front()) == L"--help") {
@@ -209,7 +227,7 @@ int execute(std::span<wchar_t*> args)
     }
     try {
         const auto options = parse_arguments(args);
-        auto registered = tools::make_simulation_registry();
+        auto registered = make_tool_registry();
         if (const auto* failure = std::get_if<Diagnostic>(&registered)) { return report_failure("registry", *failure); }
         const auto& registry = std::get<ToolRegistry>(registered);
         auto loaded = load_solution(options.manifest.parent_path(), registry, options.roots);

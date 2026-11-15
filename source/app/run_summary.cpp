@@ -1,5 +1,6 @@
 #include "run_summary.hpp"
 
+#include <algorithm>
 #include <stdexcept>
 
 namespace visionpro::app {
@@ -126,6 +127,102 @@ std::string_view name(ResourceKind kind)
     return "Unknown";
 }
 
+std::string_view name(PixelDepth depth)
+{
+    switch (depth) {
+    case PixelDepth::UInt8: return "UInt8";
+    case PixelDepth::UInt16: return "UInt16";
+    case PixelDepth::Float32: return "Float32";
+    case PixelDepth::Float64: return "Float64";
+    }
+    return "Unknown";
+}
+
+std::string_view name(ChannelOrder order)
+{
+    switch (order) {
+    case ChannelOrder::Mono: return "Mono";
+    case ChannelOrder::RGB: return "RGB";
+    case ChannelOrder::BGR: return "BGR";
+    case ChannelOrder::RGBA: return "RGBA";
+    case ChannelOrder::BGRA: return "BGRA";
+    }
+    return "Unknown";
+}
+
+std::string_view name(MeasurementUnit unit)
+{
+    switch (unit) {
+    case MeasurementUnit::Unspecified: return "Unspecified";
+    case MeasurementUnit::Dimensionless: return "Dimensionless";
+    case MeasurementUnit::Pixel: return "Pixel";
+    case MeasurementUnit::Millimetre: return "Millimetre";
+    case MeasurementUnit::Second: return "Second";
+    case MeasurementUnit::Radian: return "Radian";
+    case MeasurementUnit::Degree: return "Degree";
+    }
+    return "Unknown";
+}
+
+std::string_view name(TransformModel model)
+{
+    switch (model) {
+    case TransformModel::Similarity: return "Similarity";
+    case TransformModel::Affine: return "Affine";
+    case TransformModel::Projective: return "Projective";
+    case TransformModel::Calibrated: return "Calibrated";
+    }
+    return "Unknown";
+}
+
+std::string_view name(RegionBoundaryPolicy policy)
+{
+    switch (policy) {
+    case RegionBoundaryPolicy::Reject: return "Reject";
+    case RegionBoundaryPolicy::Intersect: return "Intersect";
+    case RegionBoundaryPolicy::Fill: return "Fill";
+    }
+    return "Unknown";
+}
+
+std::string_view name(EmptyRegionPolicy policy)
+{
+    switch (policy) {
+    case EmptyRegionPolicy::Error: return "Error";
+    case EmptyRegionPolicy::ValidEmptyOutput: return "ValidEmptyOutput";
+    }
+    return "Unknown";
+}
+
+std::string_view name(RegionFillMode mode)
+{
+    switch (mode) {
+    case RegionFillMode::Constant: return "Constant";
+    case RegionFillMode::Replicate: return "Replicate";
+    case RegionFillMode::Reflect: return "Reflect";
+    }
+    return "Unknown";
+}
+
+std::string_view name(MaskSampling sampling)
+{
+    switch (sampling) {
+    case MaskSampling::None: return "None";
+    case MaskSampling::Nearest: return "Nearest";
+    case MaskSampling::Linear: return "Linear";
+    }
+    return "Unknown";
+}
+
+std::string_view name(MaskValueMode mode)
+{
+    switch (mode) {
+    case MaskValueMode::NonZero: return "NonZero";
+    case MaskValueMode::AtLeastThreshold: return "AtLeastThreshold";
+    }
+    return "Unknown";
+}
+
 std::string_view name(SystemField field)
 {
     switch (field) {
@@ -150,6 +247,15 @@ std::string_view name(Severity severity)
 template<class Enum> json optional_name(const std::optional<Enum>& value)
 { return value ? json(name(*value)) : json(nullptr); }
 
+json diagnostic_path_json(std::span<const DiagnosticPathStep> path)
+{
+    return array_json(path, [](const DiagnosticPathStep& step) {
+        return std::visit(Overload{
+            [](const FieldId& field) { return json{{"field", id_text(field)}}; },
+            [](DiagnosticElementIndex index) { return json{{"index", index.value}}; }}, step);
+    });
+}
+
 json diagnostic_json(const Diagnostic& diagnostic)
 {
     const auto& source = diagnostic.location;
@@ -170,13 +276,7 @@ json diagnostic_json(const Diagnostic& diagnostic)
     locate("queue", source.queue);
     locate("region", source.region);
     locate("control_link", source.control_link);
-    if (!source.path.empty()) {
-        location["path"] = array_json(source.path, [](const DiagnosticPathStep& step) {
-            return std::visit(Overload{
-                [](const FieldId& field) { return json{{"field", id_text(field)}}; },
-                [](DiagnosticElementIndex index) { return json{{"index", index.value}}; }}, step);
-        });
-    }
+    if (!source.path.empty()) { location["path"] = diagnostic_path_json(source.path); }
     json result{{"code", error_code_name(diagnostic.code)}, {"severity", name(diagnostic.severity)},
         {"message", diagnostic.message}, {"location", std::move(location)}};
     if (const auto& external = diagnostic.external) {
@@ -210,6 +310,77 @@ json resource_json(const ResourceReference& reference)
 {
     return {{"resource", id_text(reference.id)}, {"kind", name(reference.kind)},
         {"revision", reference.revision ? json(std::to_string(*reference.revision)) : json(nullptr)}};
+}
+
+json transform_json(const std::optional<Transform2D>& transform)
+{
+    if (!transform) { return nullptr; }
+    const auto& value = *transform;
+    json result{{"from", id_text(value.from)}, {"to", id_text(value.to)},
+        {"from_unit", name(value.from_unit)}, {"to_unit", name(value.to_unit)}, {"model", name(value.model)}, {"matrix", value.matrix},
+        {"calibration", value.calibration ? resource_json(*value.calibration) : json(nullptr)}, {"valid_domain", nullptr}};
+    if (const auto& domain = value.valid_domain) {
+        result["valid_domain"] = {{"minimum_x", domain->minimum_x}, {"maximum_x", domain->maximum_x},
+            {"minimum_y", domain->minimum_y}, {"maximum_y", domain->maximum_y}};
+    }
+    return result;
+}
+
+json mask_mapping_json(const MaskMapping& mapping)
+{
+    return {{"target_frame", id_text(mapping.target_frame)}, {"target_width", mapping.target_width},
+        {"target_height", mapping.target_height}, {"sampling", name(mapping.sampling)}, {"transform", transform_json(mapping.transform)}};
+}
+
+json mask_rule_json(const MaskValueRule& rule)
+{ return {{"mode", name(rule.mode)}, {"threshold", rule.threshold}}; }
+
+json shape_json(const RegionShape& shape)
+{
+    return std::visit(Overload{
+        [](FullImageRegion) { return json{{"kind", "FullImage"}}; },
+        [](EmptyRegionShape) { return json{{"kind", "Empty"}}; },
+        [](const AxisAlignedRect& rectangle) {
+            return json{{"kind", "AxisAlignedRect"}, {"x", rectangle.x}, {"y", rectangle.y},
+                {"width", rectangle.width}, {"height", rectangle.height}};
+        },
+        [](const RotatedRect& rectangle) {
+            return json{{"kind", "RotatedRect"}, {"center_x", rectangle.center_x}, {"center_y", rectangle.center_y},
+                {"width", rectangle.width}, {"height", rectangle.height}, {"angle_radians", rectangle.angle_radians}};
+        },
+        [](const MaskConfig& mask) {
+            return json{{"kind", "RasterMask"}, {"resource", resource_json(mask.resource)}, {"mask_frame", id_text(mask.mask_frame)},
+                {"width", mask.width}, {"height", mask.height}, {"depth", name(mask.format.depth)},
+                {"channel_order", name(mask.format.order)}, {"mapping", mask_mapping_json(mask.mapping)},
+                {"valid_pixels", mask_rule_json(mask.valid_pixels)}};
+        },
+        [](const auto&) -> json { throw std::logic_error("The catalog emitted an ROI shape without a CLI summary."); }}, shape);
+}
+
+json region_source_json(const RegionSource& source)
+{
+    return std::visit([](const auto& value) {
+        json result{{"coordinate_frame", id_text(value.coordinate_frame)}, {"unit", name(value.unit)},
+            {"local_direction_radians", value.local_direction_radians}, {"transform", transform_json(value.transform)}};
+        if constexpr (std::same_as<std::decay_t<decltype(value)>, RegionPrimitive>) {
+            result["kind"] = "primitive";
+            result["geometry"] = shape_json(value.geometry);
+        } else {
+            result["kind"] = "inherited";
+            result["workflow"] = id_text(value.workflow);
+            result["node"] = id_text(value.node);
+            result["output"] = id_text(value.output);
+        }
+        return result;
+    }, source);
+}
+
+json region_json(const RegionDefinition& region)
+{
+    return {{"id", id_text(region.id)}, {"coordinate_frame", id_text(region.coordinate_frame)}, {"unit", name(region.unit)},
+        {"source", region_source_json(region.source)}, {"exclusions", array_json(region.exclusions, region_source_json)},
+        {"boundary_policy", name(region.boundary_policy)}, {"empty_policy", name(region.empty_policy)},
+        {"fill", region.fill ? json{{"mode", name(region.fill->mode)}, {"value", region.fill->value}} : json(nullptr)}};
 }
 
 json update_origin_json(const UpdateOrigin& origin)
@@ -267,16 +438,69 @@ json source_json(const SourceTrace& source)
 
 json binding_json(const RunBindingTrace& binding)
 {
-    return {{"target", std::visit([](const auto& id) { return id_text(id); }, binding.target)},
+    json result{{"target", std::visit([](const auto& id) { return id_text(id); }, binding.target)},
         {"target_kind", std::holds_alternative<InputId>(binding.target) ? "input" : "parameter"},
         {"sources", array_json(binding.sources, source_json)}};
+    if (!binding.regions.empty()) {
+        result["regions"] = array_json(binding.regions, [](const ResolvedRegionReference& region) {
+            const auto& identity = region.identity;
+            json producer{{"node", id_text(identity.invocation.node)}, {"scope", id_text(identity.invocation.scope)},
+                {"invocation", id_text(identity.invocation.invocation)}, {"attempt", id_text(identity.attempt)},
+                {"output", id_text(region.reference.output)}};
+            add_run_identity(producer, identity.run);
+            return json{{"source_index", region.source_index}, {"path", diagnostic_path_json(region.path)},
+                {"region", id_text(region.value.id)}, {"reference", region_source_json(region.reference)},
+                {"producer", std::move(producer)}};
+        });
+    }
+    return result;
+}
+
+json image_layout_json(const ImageHandle& image)
+{
+    return {{"width", image.width()}, {"height", image.height()},
+        {"depth", name(image.format().depth)}, {"channel_order", name(image.format().order)},
+        {"current_frame", id_text(image.coordinate_frame())}, {"root_frame", id_text(image.root_frame())},
+        {"origin", {{"x", image.origin_x()}, {"y", image.origin_y()}}}};
+}
+
+json image_json(const ImageFrame& frame)
+{
+    auto result = image_layout_json(frame.image);
+    result["frame"] = frame.frame ? json{{"source", id_text(frame.frame->source)},
+        {"sequence", std::to_string(frame.frame->sequence)}} : json(nullptr);
+    result["captured_at_unix_ns"] = frame.captured_at ? json(std::to_string(frame.captured_at->time_since_epoch().count())) : json(nullptr);
+    return result;
+}
+
+json raster_mask_json(const RasterMask& mask)
+{
+    json result{{"pixels", image_layout_json(mask.pixels)}, {"mapping", mask_mapping_json(mask.mapping)},
+        {"valid_pixels", mask_rule_json(mask.valid_pixels)}};
+    // Only direct sampling makes source pixel counts the target membership counts.
+    if (mask.mapping.sampling == MaskSampling::None && !mask.mapping.transform
+        && mask.pixels.format() == PixelFormat{PixelDepth::UInt8, ChannelOrder::Mono}) {
+        std::size_t count = 0;
+        for (std::size_t y = 0; y < mask.pixels.height(); ++y) {
+            const auto row = std::get<std::span<const std::byte>>(mask.pixels.row(y));
+            count += static_cast<std::size_t>(std::ranges::count_if(row, [&](std::byte sample) {
+                const auto value = std::to_integer<unsigned>(sample);
+                return mask.valid_pixels.mode == MaskValueMode::NonZero ? value != 0 : value >= mask.valid_pixels.threshold;
+            }));
+        }
+        result["member_count"] = count;
+    }
+    return result;
 }
 
 json data_json(const DataValue& data)
 {
     if (const auto* number = data.as_int64()) { return std::to_string(*number); }
     if (const auto* list = data.elements()) { return array_json(*list, data_json); }
-    throw std::logic_error("The simulation catalog emitted an unsupported output type.");
+    if (const auto* image = data.as_image()) { return image_json(*image); }
+    if (const auto* region = data.as_region2d()) { return region_json(*region); }
+    if (const auto* mask = data.as_raster_mask()) { return raster_mask_json(*mask); }
+    throw std::logic_error("The catalog emitted an output type without a CLI summary.");
 }
 
 json output_json(const OutputSlot& slot)

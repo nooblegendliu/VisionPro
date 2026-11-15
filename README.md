@@ -11,7 +11,7 @@ VisionPro 是一个采用 C++20、Qt、OpenCV 和 CMake 的桌面视觉算法软
 
 ## 当前状态
 
-S1 文档审查、S2 核心模型与绑定及 S3 无 GUI 执行与配置往返均已通过验收。下一阶段为 S4 无 GUI 视觉闭环。
+S1 文档审查、S2 核心模型与绑定及 S3 无 GUI 执行与配置往返均已通过验收。S4.4 已验证真实二值化，支持 ROI 与掩膜，并发布二值图、有效 ROI 和成员掩膜。
 
 - 已建立初始目录、开发规则及基础设计文档。
 - 已确定 C++20、Qt、OpenCV、CMake 技术栈。
@@ -19,13 +19,13 @@ S1 文档审查、S2 核心模型与绑定及 S3 无 GUI 执行与配置往返�
 - 已建立 `visionpro_workflow`，包含方案/流程/节点、控制/绑定/包含关系、Group 公开数据与控制映射、配置快照、单次请求、结果记录及复制重映射。
 - C01–C10 为 S1 审查通过的设计基线，具体能力按后续阶段实现和验收。
 - 2026-10-27 的逐项结论见 [S1 文档审查记录](docs/development.md#81-s1-文档审查记录)。
-- 2026-10-30，S2.1 在 Windows x64/MSVC 下完成 Debug、Release 构建，各 6 项 CTest 通过（含预期失败退出验证）；见 [S2.1 验收记录](docs/development.md#84-s21-实现与验证记录)。
-- S2.2 已在同一环境完成 Debug/Release 构建，各 14 项 CTest 通过（含 S2.1 回归及预期失败检查）；见 [S2.2 验收记录](docs/development.md#85-s22-实现与验证记录)。
-- S2.3 已完成 Debug/Release 构建，各 24 项 CTest 通过（含前两阶段回归及预期失败检查）；见 [S2.3 验收记录](docs/development.md#86-s23-实现与验证记录)。
-- S2.4 已完成 Debug/Release 构建，各 34 项 CTest 通过（含核心回归及预期失败检查）；见 [S2.4 验收记录](docs/development.md#87-s24-实现与验证记录)。
-- S2.5 新增 `validate_solution`，检查流程图、公开边界、类型化绑定及嵌套领域引用，返回独立的派生依赖索引；2026-11-09 完成 Debug/Release 构建，各 39/39 项 CTest 通过。见 [S2.5 验收记录](docs/development.md#88-s25-实现与验证记录)。
-- S2.6 新增会话内 `ResultStore` 和 `BindingResolver`，按精确调用身份解析已有结果、作用域公开输入、常量和只读资源/全局快照，区分成功、等待、不可用和失败；2026-11-09 完成 Debug/Release 构建，各 44/44 项 CTest 通过。见 [S2.6 验收记录](docs/development.md#89-s26-实现与验证记录)。
-- S2.7 已收敛 RunRequest/RunHandle、实例工厂及 InvocationOperation，补齐固定调用投影和组合验证；2026-11-09 完成 Debug/Release 全量重建，各 48/48 项 CTest 通过。14 项 S2 必需子范围全部通过，见 [S2 整体验收与 S3 交接清单](docs/development.md#810-s27-与-s2-整体验收记录)。
+- 2026-10-30，S2.1 在 Windows x64/MSVC 下完成 Release 构建，6 项 CTest 通过（含预期失败退出验证）；见 [S2.1 验收记录](docs/development.md#84-s21-实现与验证记录)。
+- S2.2 已在同一环境完成 Release 构建，14 项 CTest 通过（含 S2.1 回归及预期失败检查）；见 [S2.2 验收记录](docs/development.md#85-s22-实现与验证记录)。
+- S2.3 已完成 Release 构建，24 项 CTest 通过（含前两阶段回归及预期失败检查）；见 [S2.3 验收记录](docs/development.md#86-s23-实现与验证记录)。
+- S2.4 已完成 Release 构建，34 项 CTest 通过（含核心回归及预期失败检查）；见 [S2.4 验收记录](docs/development.md#87-s24-实现与验证记录)。
+- S2.5 新增 `validate_solution`，检查流程图、公开边界、类型化绑定及嵌套领域引用，返回独立的派生依赖索引；2026-11-09 完成 Release 构建，39/39 项 CTest 通过。见 [S2.5 验收记录](docs/development.md#88-s25-实现与验证记录)。
+- S2.6 新增会话内 `ResultStore` 和 `BindingResolver`，按精确调用身份解析已有结果、作用域公开输入、常量和只读资源/全局快照，区分成功、等待、不可用和失败；2026-11-09 完成 Release 构建，44/44 项 CTest 通过。见 [S2.6 验收记录](docs/development.md#89-s26-实现与验证记录)。
+- S2.7 已收敛 RunRequest/RunHandle、实例工厂及 InvocationOperation，补齐固定调用投影和组合验证；2026-11-09 完成 Release 全量重建，48/48 项 CTest 通过。14 项 S2 必需子范围全部通过，见 [S2 整体验收与 S3 交接清单](docs/development.md#810-s27-与-s2-整体验收记录)。
 - 2026-11-11 完成 Manual 复核及 [S3.1–S3.9 实施计划](docs/development.md#6-第三阶段实施与验证)，覆盖内存执行、生命周期、配置往返及无 GUI 入口。
 - S3.1 的执行计划固定工具配置和请求输入，并复用同一范围解析绑定。逐输出可用性、节点状态规格、外部诊断、耗时和异步通知已通过模拟验证。Windows x64 Release 的 55 项 CTest 全部通过。见 [S3.1 实现与验证](docs/development.md#812-s31-实现与验证记录)。
 - S3.2 的 `WorkflowEngine` 支持按流程受理、同步顺序调用、FailFast 和本轮结果查询。不同流程独立受理，由同一工作线程按受理顺序执行。Windows x64 Release 的 59 项 CTest 全部通过。见 [S3.2 实现与验证](docs/development.md#813-s32-实现与验证记录)。
@@ -51,7 +51,7 @@ S1 已确定核心概念、数据结构和接口契约，包括：
 
 第一阶段不以完成 GUI 或运行一个最小算法流程为验收条件。
 上述内容已通过 S1 文档审查；目前已实现核心领域类型、方案/关系模型、快照、请求与结果记录。
-完整图/绑定静态校验和运行绑定解析已通过 Debug/Release 验证。
+完整图/绑定静态校验和运行绑定解析已通过 Release 验证。
 
 S2 将这些契约落实为可构建、可测试的无 GUI 核心库，完成方案模型、配置校验和数据绑定解析。
 它既包含基础类型，也包含实际的校验与取值逻辑；节点调度、取消和配置读写在 S3 接入。
@@ -100,16 +100,16 @@ GUI 和无 GUI 入口共用运行请求及结果接口，第三方 SDK 的名称
 逻辑上划分应用层、核心层与能力层，具体模块映射见 [architecture.md](docs/architecture.md)。
 首批工具按类型静态注册，动态插件后置。
 
-S3.9 在 Windows x64、MSVC 19.51、CMake/CTest 4.4.0 环境完成 Debug 和 Release 验证，各 82/82 项 CTest 通过。
+S3.9 在 Windows x64、MSVC 19.51、CMake/CTest 4.4.0 环境完成 Release 验证，82/82 项 CTest 通过。
 复现步骤见 [S3.9 构建与命令行验证](docs/development.md#316-s39-构建与命令行验证)。
-Qt、OpenCV 的版本和获取方式在相应模块接入前确定。
+当前构建与验收统一使用 Release。视觉目标由默认关闭的 `VISIONPRO_WITH_OPENCV` 启用，使用现有 OpenCV `4.14.0-pre` x64 Release 预编译包。见 [S4.4 构建与验证](docs/development.md#320-s44-release-构建与验证)。
 
 ## 开发阶段
 
 1. 基础模型与契约设计：文档审查通过。
-2. 核心模型与绑定验证。S2.1–S2.7 完成，Debug/Release 及全部 S2 必需子范围通过。
+2. 核心模型与绑定验证。S2.1–S2.7 完成，Release 及全部 S2 必需子范围通过。
 3. 无 GUI 执行与配置往返验证。S3.1–S3.9 完成，26 项必验子范围全部通过。
-4. 无 GUI 视觉闭环。
+4. 无 GUI 视觉闭环。S4.1–S4.4 已完成，S4.5–S4.7 按 [实施与验收计划](docs/development.md#7-第四阶段实施与验收计划)推进。
 5. 基础可视化界面。
 6. 完整循环、多流程并行、触发、共享服务及工业接入。
 
@@ -135,7 +135,7 @@ Qt、OpenCV 的版本和获取方式在相应模块接入前确定。
 
 ## 构建与运行
 
-当前 [CMake 配置](CMakeLists.txt) 构建无 GUI 的 `visionpro_cli`、核心与存储库和测试程序，
+默认 [CMake 配置](CMakeLists.txt) 构建无 GUI 的 `visionpro_cli`、核心与存储库和测试程序，
 不需要 Qt、OpenCV 或厂商 SDK。UUID 生成后端当前使用 Windows CNG，其他平台后端尚未实现。
 `visionpro_cli run` 接受 `solution.json`、流程 UUID 与本次输入，实际退出后输出 JSON 追溯摘要。
 `visionpro_cli save` 提交方案的新修订。见 [命令行用法与闭环复现](docs/development.md#316-s39-构建与命令行验证)。
@@ -150,4 +150,5 @@ Qt、OpenCV 的版本和获取方式在相应模块接入前确定。
 - [核心数据模型与 C01–C10 契约](docs/data-model.md)
 - [S2 实施顺序、首批任务与验收覆盖](docs/development.md#5-第二阶段实施与验证)
 - [S3 整体验收矩阵](docs/s3-acceptance.md#场景证据)
+- [S4 实施顺序与验收标准](docs/development.md#7-第四阶段实施与验收计划)
 - [开发与验证](docs/development.md)

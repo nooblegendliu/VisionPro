@@ -212,6 +212,26 @@ void image_ownership()
     check(row_equals(clone_crop, 0, {23}) && clone_crop.origin_x() == 2 && clone_crop.origin_y() == 2,
         "cropping independent clone uses local storage offsets and retained root mapping");
 
+    constexpr PixelFormat bgr8{PixelDepth::UInt8, ChannelOrder::BGR};
+    auto replacement = bytes({1, 2, 3, 99, 98, 4, 5, 6});
+    const auto derived = take(nested.copy_with_pixels({1, 2, 5, bgr8}, replacement));
+    replacement.front() = std::byte{255};
+    check(derived.format() == bgr8 && derived.row_stride() == 5 && !derived.shares_storage_with(parent),
+        "replacement pixels have an independent layout and allocation");
+    check(row_equals(derived, 0, {1, 2, 3}) && row_equals(derived, 1, {4, 5, 6}) && row_equals(nested, 0, {13}),
+        "replacement input, derived image and source image have independent pixels");
+    check(derived.coordinate_frame() == nested.coordinate_frame() && derived.root_frame() == parent.root_frame()
+        && derived.origin_x() == 2 && derived.origin_y() == 1,
+        "replacing the pixels retains a nested crop's current and root coordinate mapping");
+    expect_error(nested.copy_with_pixels({1, 1, 5, bgr8}, replacement), ErrorCode::InvalidImage,
+        "replacement pixels require the same dimensions");
+    expect_error(nested.copy_with_pixels({1, 2, 2, bgr8}, replacement), ErrorCode::InvalidImage,
+        "replacement pixels validate the declared stride");
+    expect_error(nested.copy_with_pixels({1, 2, 6, bgr8}, replacement), ErrorCode::InvalidImage,
+        "replacement pixels require a complete final row");
+    expect_error(nested.copy_with_pixels({1, 2, std::numeric_limits<std::size_t>::max(), bgr8}, replacement),
+        ErrorCode::SizeOverflow, "replacement storage size cannot overflow");
+
     const auto whole = take(parent.crop({0, 0, 4, 3}, parent.coordinate_frame()));
     check(whole == parent, "same storage and full zero-offset window has the same view identity");
     const auto maximum = std::numeric_limits<std::size_t>::max();

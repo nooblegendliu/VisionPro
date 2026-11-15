@@ -1,0 +1,37 @@
+add_executable(visionpro_opencv_smoke_tests opencv_smoke_tests.cpp)
+target_link_libraries(visionpro_opencv_smoke_tests PRIVATE opencv_core opencv_imgproc opencv_imgcodecs visionpro_build_options)
+add_test(NAME tools.opencv_release_smoke COMMAND visionpro_opencv_smoke_tests)
+
+add_executable(visionpro_vision_contract_tests vision_contract_tests.cpp)
+target_link_libraries(visionpro_vision_contract_tests PRIVATE visionpro_vision_tools visionpro_build_options)
+add_test(NAME tools.vision_contracts COMMAND visionpro_vision_contract_tests)
+
+add_executable(visionpro_image_bridge_tests image_bridge_tests.cpp)
+target_link_libraries(visionpro_image_bridge_tests PRIVATE visionpro_vision_tools opencv_core visionpro_build_options)
+add_test(NAME tools.image_bridge COMMAND visionpro_image_bridge_tests)
+
+add_executable(visionpro_image_read_tests image_read_tests.cpp)
+target_link_libraries(visionpro_image_read_tests PRIVATE visionpro_vision_tools visionpro_infrastructure visionpro_build_options)
+add_test(NAME tools.image_read COMMAND visionpro_image_read_tests)
+
+add_executable(visionpro_roi_tests roi_tests.cpp)
+target_link_libraries(visionpro_roi_tests PRIVATE visionpro_vision_tools visionpro_build_options)
+add_test(NAME tools.roi COMMAND visionpro_roi_tests)
+
+add_executable(visionpro_roi_mask_tests roi_mask_tests.cpp)
+target_link_libraries(visionpro_roi_mask_tests PRIVATE visionpro_vision_tools visionpro_infrastructure visionpro_build_options)
+add_test(NAME tools.mask COMMAND visionpro_roi_mask_tests)
+
+add_executable(visionpro_roi_runtime_tests roi_runtime_tests.cpp)
+target_link_libraries(visionpro_roi_runtime_tests PRIVATE visionpro_vision_tools visionpro_workflow visionpro_build_options)
+add_test(NAME tools.roi_runtime COMMAND visionpro_roi_runtime_tests)
+
+add_executable(visionpro_threshold_tests threshold_tests.cpp)
+target_link_libraries(visionpro_threshold_tests PRIVATE visionpro_vision_tools visionpro_infrastructure visionpro_build_options)
+add_test(NAME tools.threshold COMMAND visionpro_threshold_tests)
+
+set_tests_properties(tools.opencv_release_smoke tools.vision_contracts tools.image_bridge tools.image_read
+    tools.roi tools.mask tools.roi_runtime tools.threshold PROPERTIES
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:opencv_core>"
+    TIMEOUT 30
+)

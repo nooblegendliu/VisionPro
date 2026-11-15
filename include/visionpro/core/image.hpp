@@ -43,6 +43,10 @@ public:
     // Copies while the caller's borrowed buffer is valid. Trailing bytes are ignored.
     [[nodiscard]] static Result<ImageHandle> copy(const ImageLayout& layout,
         std::span<const std::byte> pixels, CoordinateSystemId coordinates);
+    // Publishes independent pixels at the same dimensions and spatial coordinates.
+    // The replacement layout may have a different format and row stride.
+    [[nodiscard]] Result<ImageHandle> copy_with_pixels(const ImageLayout& layout,
+        std::span<const std::byte> pixels) const;
     [[nodiscard]] Result<ImageHandle> crop(PixelRect window, CoordinateSystemId view_coordinates) const;
     // The returned span borrows the storage; retain a handle throughout its use.
     [[nodiscard]] Result<std::span<const std::byte>> row(std::size_t y) const;
@@ -63,6 +67,9 @@ public:
 
 private:
     struct View;
+    [[nodiscard]] static Result<ImageHandle> copy_in_frame(const ImageLayout& layout,
+        std::span<const std::byte> pixels, const CoordinateSystemId& coordinates,
+        const CoordinateSystemId& root_coordinates, std::size_t x, std::size_t y);
     explicit ImageHandle(std::shared_ptr<const View> view) : view_(std::move(view)) {}
     std::shared_ptr<const View> view_;
 };

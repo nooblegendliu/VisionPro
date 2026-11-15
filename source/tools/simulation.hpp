@@ -4,6 +4,6 @@
 
 namespace visionpro::tools {
 
-[[nodiscard]] core::Result<core::ToolRegistry> make_simulation_registry();
+[[nodiscard]] std::vector<core::ToolRegistration> simulation_registrations();
 
 } // namespace visionpro::tools

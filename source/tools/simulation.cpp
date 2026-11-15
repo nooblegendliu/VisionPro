@@ -4,7 +4,6 @@
 #include <visionpro/infrastructure/file_resources.hpp>
 
 #include <algorithm>
-#include <array>
 #include <limits>
 
 namespace visionpro::tools {
@@ -107,7 +106,7 @@ ToolRegistration registration(ToolDescriptor tool, Operation operation)
 
 } // namespace
 
-core::Result<core::ToolRegistry> make_simulation_registry()
+std::vector<core::ToolRegistration> simulation_registrations()
 {
     const auto integer = DataType::integer();
     const auto list = DataType::list(integer);
@@ -139,11 +138,10 @@ core::Result<core::ToolRegistry> make_simulation_registry()
     deliver.inputs = {input("values", list, {BindingSourceKind::RunOutput})};
     deliver.outputs = {values};
 
-    const std::array definitions{
+    return {
         registration(std::move(reader), Operation::ReadByte), registration(std::move(adder), Operation::Add),
         registration(std::move(selector), Operation::Select), registration(std::move(collect), Operation::ForwardValues),
         registration(std::move(deliver), Operation::ForwardValues)};
-    return ToolRegistry::create(definitions);
 }
 
 } // namespace visionpro::tools

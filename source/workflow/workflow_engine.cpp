@@ -490,7 +490,9 @@ std::vector<RunBindingTrace> trace_bindings(const InvocationPreparation& prepara
     std::vector<RunBindingTrace> traces;
     traces.reserve(bindings.size());
     for (const auto& binding : bindings) {
-        traces.push_back({binding.target, std::visit([](const auto& value) { return value.sources; }, binding.resolution)});
+        RunBindingTrace trace{binding.target, std::visit([](const auto& value) { return value.sources; }, binding.resolution)};
+        if (const auto* resolved = std::get_if<ResolvedBinding>(&binding.resolution)) { trace.regions = resolved->regions; }
+        traces.push_back(std::move(trace));
     }
     return traces;
 }

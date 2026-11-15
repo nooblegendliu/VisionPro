@@ -609,6 +609,18 @@ FailFast 在运行控制锁内关闭尚未确定的边并停止后续调度。�
 往返比较依据稳定身份、输出值、各次运行内部的来源关系、调用顺序和控制状态。清单修订和运行期身份按各次执行独立验证。
 命令和故障退出见 [development.md §3.16](development.md#316-s39-构建与命令行验证)。
 
+### 4.12 S4.1 视觉工具 Schema
+
+四个视觉工具的配置版本与工具 Schema 版本均为 1，SchemaId 和工具类型 ID 使用同一拼写。
+`decode_mode` 与 `mode` 的 Enum Schema 分别为 `visionpro.image.read_file.decode_mode` 和 `visionpro.image.threshold.mode`，版本均为 1。
+Blob 的 `components` 元素使用 `visionpro.image.blob.component`，其中 `bounds` 使用 `visionpro.image.blob.bounds`，两个 Record Schema 均为版本 1。
+`area_pixels`、`count` 和 `total_area_pixels` 是 Int64 计数。`largest_area_pixels` 是必需输出，其值为 `Optional<Int64>`。
+
+`frame_origin`、解码模式、阈值模式、连通性和判断上下界为快照构建时固定的常量。
+数值 `threshold` 和两个 `roi` 参数支持常量、同轮节点结果和流程公开输入。阈值工具要求 Region2D，
+Blob 的 `Optional<Region2D>` 默认 None，也可将 `effective_roi: Region2D` 用 `WrapOptional` 绑定给 Blob。
+作用域内的继承仍由 Resolver 固定来源，视觉适配使用 core 类型检查符号限制。完整字段与像素契约见 [development.md §7.2–§7.3](development.md#72-先固定的依赖与算法契约)。
+
 ## 5. 数据绑定与控制关系（C04、C06）
 
 Binding 统一表达输入和可订阅参数：
@@ -807,8 +819,8 @@ Group 被禁用不等于结果可复用，也不自动把输入旁路成输出�
 快照构建期目标只接受固定常量，不能通过嵌套 ROI 继承取得运行输出。
 
 静态引用检查递归进入 Record/List/Optional 的配置值及采用的默认值。
-ROI source/exclusions 中的 `InheritedRegion` 需要目标允许 `RunOutput`，检查来源 Region2D 类型、坐标/单位、
-作用域与启用/缺失策略，并纳入同一依赖环检查；不能用常量包装绕过订阅权限。
+ROI source/exclusions 中的 `InheritedRegion` 需要目标允许 `RunOutput`，静态检查来源 Region2D 类型、明确声明的单位、固定坐标系、
+作用域与启用/缺失策略，并纳入同一依赖环检查。输出描述可以将坐标系留待调用时确定，解析器会在修正前核对实际结果的坐标系和单位。
 几何坐标目录、ROI 能力、Mask 和 Transform 的资源引用、节点资源槽，以及全局/状态/设备配置中的资源引用也按静态定义校验。
 文件内容、实际图像尺寸、继承后真实形状和运行结果有效性仍由后续解析/算法适配检查。
 没有调用上下文的初值不能引用运行 ROI；校验不会读取资源文件或执行共享读写。
@@ -841,7 +853,7 @@ Diagnostics 是可绑定投影，完整位置和其他诊断信息仍保留在 N
 `BindingResolver::create(snapshot) -> Result<BindingResolver>` 与
 `resolve(context, target, results) -> BindingResolution`。
 工厂先完成 S2.5 静态校验并持有不可变快照；解析输入/参数目标时使用同一快照和派生依赖索引。
-当前实现已通过 Debug/Release 验证，实际记录见 development §8.9，不代表已有调度器或真实工具调用。
+当前实现已通过 Release 验证，实际记录见 development §8.9，不代表已有调度器或真实工具调用。
 
 `ResolutionContext` 显式携带 RunIdentity、消费者 InvocationKey、运行作用域表、外层可见性、
 来源调用选择及只读全局值快照。每个 `SourceSelection` 指定一个来源 NodeId 和运行作用域，
@@ -966,6 +978,16 @@ Mono/RGB/BGR/RGBA/BGRA 通道顺序，行内交错、本机字节序。其他编
 帧身份和采集时间由 `ImageFrame` 可选持有，不由内存地址或时间接近推断业务关联。
 当前无零拷贝租约、写入接口、设备适配或取消中的后台操作；这些生命周期另在后续阶段验证。
 
+### 6.2 S4.2 图像桥接与文件读取
+
+`ImageHandle::copy_with_pixels(layout, pixels)` 校验替换像素的尺寸、格式、步长、长度和溢出，复制到独立缓冲。
+替换像素与原图尺寸相同，可用不同像素格式和步长。派生图保留当前坐标系、根坐标系和累计原点偏移，`clone()` 复用此入口。
+OpenCV 桥接支持 UInt8 Mono/BGR，复制有效行时处理裁剪与行填充。派生 `ImageFrame` 还保留可选帧身份和采集时间。
+
+`visionpro.image.read_file` 从 Image 槽 `source` 的固定租约解码，使用方案声明的 Pixel 坐标系和 `(0,0)` 原点。
+`Native8` 保留 Mono8 或 BGR8，`Gray8` 将 BGR8 转为 Mono8。先按原深度解码，再检查支持的格式，EXIF 方向字段不参与变换。
+文件输出的 `frame` 和 `captured_at` 为空，资源身份由调用追溯提供。解码失败返回 `InvalidImage`，不支持的深度或通道返回 `UnsupportedPixelFormat`。
+
 ## 7. 几何、ROI 与坐标（C05）
 
 图像原点为左上角像素中心 (0, 0)，x 向右、y 向下。
@@ -1034,6 +1056,23 @@ RasterMask 保留只读像素所有权、掩膜坐标系、目标图像映射及
 本阶段只验证模型及上述矩阵数值行为，未计算区域交集、排除后成员、真实越界或掩膜像素成员，
 也未执行几何栅格化、重采样、校正局部方向或算法适配。空域策略覆盖显式空域，
 由实际裁剪/排除计算出的空域及浮点几何到像素的规则仍在 S4/S6 验证。
+
+### 7.2 S4.3 ROI 求值与追溯
+
+`evaluate_roi` 接受输入图像、顶层 ROI 绑定、本轮冻结定义和文件租约。求值器把完整定义映射到输入当前的 Pixel 坐标，
+由内到外扣除各层排除区，再检查该层的空域策略。边界检查使用完整包含几何。`RasterMask` 采用与输入同尺寸的 Mono8，成员为 255，其余为 0，保留当前与根坐标及原点。
+
+`RoiEvaluation::layers` 保存各层定义、冻结来源调用、到目标的修正、方向和成员数，`mask_resource` 保存实际使用的租约引用。
+`effective_region` 保留当前 RegionId 和展平后的符号区域。无法用单层 `RegionDefinition` 表达分层空域约束时，发布结果返回定位到绑定的 `UnsupportedRegion`。
+运行记录的 `RunBindingTrace::regions` 保留解析器选中的完整定义、`ResultIdentity`、来源序号和绑定路径。
+支持范围及验收坐标见 [development.md §7.3–§7.5](development.md#73-roi-与掩膜的首批实际能力)。
+
+### 7.3 S4.4 二值化结果
+
+`visionpro.image.threshold` 的 `binary` 是独立存储的 UInt8 Mono 图像，保留输入尺寸、当前与根坐标、原点、可选帧身份及采集时间。
+`effective_roi` 是必需的 `Region2D`，保留配置身份和展开后的区域定义，供后继调用继承。
+`roi_mask` 是与输入同尺寸、直接映射的 `RasterMask`，以 255 表示成员、0 表示域外。
+空域策略为 `ValidEmptyOutput` 时发布全零 `binary` 与 `roi_mask`。ROI 求值或展开失败时，该次调用失败且三项输出均不发布。
 
 ## 8. 运行与结果（C02、C08）
 

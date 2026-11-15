@@ -5,13 +5,13 @@
 C01–C10 已整理为当前设计基线，权威契约见 [data-model.md](data-model.md)。
 S1 的 2026-10-27 文档审查结果见 [§8.1](#81-s1-文档审查记录)。
 S2.1–S2.4 已于 2026-10-30 完成：已有 `visionpro_core`、`visionpro_workflow`、核心领域类型、
-方案/关系模型、配置快照、类型化请求、结果记录及复制重映射。Debug/Release 结果见
+方案/关系模型、配置快照、类型化请求、结果记录及复制重映射。Release 结果见
 [§8.4](#84-s21-实现与验证记录)、[§8.5](#85-s22-实现与验证记录)、[§8.6](#86-s23-实现与验证记录)、
 [§8.7](#87-s24-实现与验证记录)。
 S2 核心模型与绑定验证的实施规划已于 2026-10-28 确定，按 [§5](#5-第二阶段实施与验证) 的七个子阶段推进；
-S2.5 静态校验已完成并通过 Debug/Release 验证，记录见 [§8.8](#88-s25-实现与验证记录)；
-S2.6 结果访问与绑定解析已完成并通过 Debug/Release 验证，记录见 [§8.9](#89-s26-实现与验证记录)；
-S2.7 运行契约与组合验证已完成，Debug/Release 各 48/48 项 CTest 通过；S2 整体验收通过，证据与 S3 交接见 [§8.10](#810-s27-与-s2-整体验收记录)。
+S2.5 静态校验已完成并通过 Release 验证，记录见 [§8.8](#88-s25-实现与验证记录)；
+S2.6 结果访问与绑定解析已完成并通过 Release 验证，记录见 [§8.9](#89-s26-实现与验证记录)；
+S2.7 运行契约与组合验证已完成，Release 48/48 项 CTest 通过；S2 整体验收通过，证据与 S3 交接见 [§8.10](#810-s27-与-s2-整体验收记录)。
 SDK 指南已用于补充契约与用例，未运行厂商 Demo、链接 SDK 或验证设备行为。
 
 2026-11-11 完成 S3.1 执行范围、计划与工具装配，以及 S3.2 最小内存执行闭环。
@@ -24,15 +24,18 @@ Release 验证及交接见 [§8.12](#812-s31-实现与验证记录) 和 [§8.13]
 2026-11-12 完成 S3.8 保存事务与故障保护。验证记录见 [§8.19](#819-s38-实现与验证记录)。
 2026-11-12 完成 S3.9 命令行闭环及 S3 整体验收。验证记录见 [§8.20](#820-s39-与-s3-整体验收记录)。
 参考资料复核记录见 §8.11。[§6](#6-第三阶段实施与验证) 保留 S3.1–S3.9 的任务、依赖和退出条件。
-当前 Debug 和 Release 命令见 §3.16，既有构建命令保留在 §3.1–§3.15。
+S4.1 已接入现有 OpenCV Release 安装包并验证四个视觉工具的 Schema 与适配契约。
+S4.2 接入图像桥接与 `visionpro.image.read_file`。S4.3 接入 ROI、冻结继承和掩膜求值。
+S4.4 接入 `visionpro.image.threshold`，验证正相、反相、独立输出、实际掩膜及继承诊断。
+当前 Release 命令与实测结果见 [§3.20](#320-s44-release-构建与验证) 和 [§8.24](#824-s44-实现与验证记录)。
 
 开发顺序以 [requirements.md](requirements.md) 为准：
 
 | 阶段 | 主要交付与验证方式 |
 |---|---|
 | 1. 基础模型与契约设计 | 文档审查通过；历史审查记录见 §8.1–§8.3 |
-| 2. 核心模型与绑定验证 | S2.1–S2.7 完成；14 项必需子范围和 Debug/Release 验证通过，整体记录见 §8.10 |
-| 3. 无 GUI 执行与配置往返验证 | S3.1–S3.9 完成。Debug 和 Release 各 82/82 项通过，26 项 S3 必验范围全部通过 |
+| 2. 核心模型与绑定验证 | S2.1–S2.7 完成；14 项必需子范围和 Release 验证通过，整体记录见 §8.10 |
+| 3. 无 GUI 执行与配置往返验证 | S3.1–S3.9 完成。Release 82/82 项通过，26 项 S3 必验范围全部通过 |
 | 4. 无 GUI 视觉闭环 | 使用少量真实 OpenCV 工具及固定图像验证结果 |
 | 5. 基础可视化界面 | 复用核心服务，验证界面方案与无 GUI 执行一致 |
 | 6. 后续能力 | 完整循环、多流程并行、触发、共享服务、设备及扩展工具 |
@@ -66,7 +69,7 @@ S2 首个验证组合采用 Windows x64、MSVC 和 CMake，首批使用轻量测
 | 生成器 | `Visual Studio 18 2026`，`-A x64` |
 | MSVC | 编译器 19.51.36248.0，工具集目录 14.51.36231 |
 | Windows SDK | 10.0.26100.0 |
-| 语言/运行库 | C++20；Debug `/MDd`，Release `/MD`；库与测试一致 |
+| 语言/运行库 | C++20；Release `/MD`；库与测试一致 |
 | 测试依赖 | CTest + 仓库内轻量测试程序，无第三方测试框架 |
 
 安装 Visual Studio 的 C++ 工具和 Windows SDK，并将 CMake/CTest 加入 PATH；
@@ -76,7 +79,9 @@ UUID 使用 Windows SDK 的 `bcrypt` 库和系统 `BCryptGenRandom`，API 依据
 [Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/api/bcrypt/nf-bcrypt-bcryptgenrandom)。
 当前非 Windows 配置会明确失败；添加对应随机源后端后才能验证其他平台。
 
-Qt、OpenCV 的具体版本和获取方式在相应模块接入前确定；流程编辑器选型在界面实现前完成。
+当前构建、测试和阶段验收统一使用 **Release**，MSVC 运行库使用 `/MD`，库、应用和测试保持一致。
+OpenCV 使用已有的 `4.14.0-pre` x64 Release 预编译包，来源、摘要和运行依赖见 [§8.21](#821-s41-实现与验证记录)。
+Qt 的具体版本和获取方式在界面接入前确定；流程编辑器选型在界面实现前完成。
 首个核心构建不以 GUI 或 OpenCV 为前提；图像模型需要时可按 architecture §3 受控使用 OpenCV，
 不将首批依赖选择扩展为核心永久禁止 OpenCV 的限制。
 
@@ -112,6 +117,7 @@ Qt、OpenCV 的具体版本和获取方式在相应模块接入前确定；流�
 - 使用源码外构建目录。
 - 使用 target 级编译要求、头文件路径和链接依赖。
 - 要求 C++20，关闭非必要编译器扩展。
+- 统一使用 Release 构建和测试；阶段退出条件只要求该配置，历史记录仅保留对应结果。
 - 支持不构建 GUI 的核心验证。
 - 不提交本机绝对路径、生成文件和构建缓存。
 - 环境稳定后再建立共享 CMake presets。
@@ -125,32 +131,26 @@ Qt、OpenCV 的具体版本和获取方式在相应模块接入前确定；流�
 
 ### 3.1 S2.1 构建与测试命令
 
-在仓库根目录的 PowerShell 中运行。Debug 与 Release 使用独立目录，
+在仓库根目录的 PowerShell 中运行。使用独立的 Release 构建目录，
 VS 为多配置生成器，选择配置使用 `--config` / `-C`，不依赖 `CMAKE_BUILD_TYPE`。
 本节保留 S2.1 当时执行的命令和结果；当前源码请使用 §3.7，测试总数已扩充。
 
 ```powershell
-cmake -S . -B out/build/s21-debug -G "Visual Studio 18 2026" -A x64 -DBUILD_TESTING=ON
-cmake --build out/build/s21-debug --config Debug
-ctest --test-dir out/build/s21-debug -C Debug --output-on-failure --no-tests=error
-
 cmake -S . -B out/build/s21-release -G "Visual Studio 18 2026" -A x64 -DBUILD_TESTING=ON
 cmake --build out/build/s21-release --config Release
 ctest --test-dir out/build/s21-release -C Release --output-on-failure --no-tests=error
 ```
 
-每条命令应返回 0；任一失败先处理再继续。S2.1 当时 CTest 结果为每种配置 6/6 通过，
+每条命令应返回 0；任一失败先处理再继续。S2.1 当时 CTest 结果为 Release 6/6 通过，
 其中 `core.failure_exit` 使用 `WILL_FAIL` 验证故意失败确实返回非零，不能删除该检查使测试变绿。
-下列直接调用预期打印一次 `FAIL`，并分别得到退出码 **1**：
+下列直接调用预期打印一次 `FAIL`，并得到退出码 **1**：
 
 ```powershell
-& ./out/build/s21-debug/tests/core/Debug/visionpro_core_tests.exe --force-failure
-$LASTEXITCODE
 & ./out/build/s21-release/tests/core/Release/visionpro_core_tests.exe --force-failure
 $LASTEXITCODE
 ```
 
-测试输出保存在各构建目录的 `Testing/Temporary/LastTest.log`；
+测试输出保存在 Release 构建目录的 `Testing/Temporary/LastTest.log`；
 需要完整检查输出时可在 CTest 命令上增加 `-V`。
 
 只构建核心库的入口也已验证：
@@ -163,31 +163,24 @@ cmake --build out/build/s21-core-only --config Release
 ### 3.2 S2.2 构建与测试命令
 
 本节为 S2.2 历史记录；当前源码请使用 §3.7。
-同样在仓库根目录 PowerShell 执行，继续使用 §2 的工具链，两个独立目录覆盖 Debug/Release：
+同样在仓库根目录 PowerShell 执行，继续使用 §2 的工具链，使用独立目录验证 Release：
 
 ```powershell
-cmake -S . -B out/build/s22-debug -G "Visual Studio 18 2026" -A x64 -DBUILD_TESTING=ON
-cmake --build out/build/s22-debug --config Debug
-ctest --test-dir out/build/s22-debug -C Debug --output-on-failure --no-tests=error
-
 cmake -S . -B out/build/s22-release -G "Visual Studio 18 2026" -A x64 -DBUILD_TESTING=ON
 cmake --build out/build/s22-release --config Release
 ctest --test-dir out/build/s22-release -C Release --output-on-failure --no-tests=error
 ```
 
-每条命令应返回 0，每种配置为 **14/14 通过**，包含 S2.1 的 6 项及 S2.2 新增 8 项。
+每条命令应返回 0，Release 为 **14/14 通过**，包含 S2.1 的 6 项及 S2.2 新增 8 项。
 每项失败均通过进程退出码传给 CTest；测试不依赖 Release 下禁用的 `assert`。
-以下故意失败入口也在本次构建上重验，两种配置的 `$LASTEXITCODE` 均应为 **1**：
+以下故意失败入口也在本次构建上重验，`$LASTEXITCODE` 应为 **1**：
 
 ```powershell
-& ./out/build/s22-debug/tests/core/Debug/visionpro_core_tests.exe --force-failure
-$LASTEXITCODE
 & ./out/build/s22-release/tests/core/Release/visionpro_core_tests.exe --force-failure
 $LASTEXITCODE
 ```
 
-测试日志分别保存在 `out/build/s22-debug/Testing/Temporary/LastTest.log` 和
-`out/build/s22-release/Testing/Temporary/LastTest.log`，构建目录与日志均不提交。
+测试日志保存在 `out/build/s22-release/Testing/Temporary/LastTest.log`，构建目录与日志均不提交。
 
 ### 3.3 S2.3 构建与测试命令
 
@@ -195,56 +188,43 @@ $LASTEXITCODE
 在仓库根目录的 PowerShell 中执行，沿用 §2 工具链和独立构建目录：
 
 ```powershell
-cmake -S . -B out/build/s23-debug -G "Visual Studio 18 2026" -A x64 -DBUILD_TESTING=ON
-cmake --build out/build/s23-debug --config Debug
-ctest --test-dir out/build/s23-debug -C Debug --output-on-failure --no-tests=error
-
 cmake -S . -B out/build/s23-release -G "Visual Studio 18 2026" -A x64 -DBUILD_TESTING=ON
 cmake --build out/build/s23-release --config Release
 ctest --test-dir out/build/s23-release -C Release --output-on-failure --no-tests=error
 ```
 
-每条命令应返回 0，每种配置为 **24/24 通过**，包括原有 14 项与 S2.3 新增 10 项。
+每条命令应返回 0，Release 为 **24/24 通过**，包括原有 14 项与 S2.3 新增 10 项。
 测试使用固定内存图像、结构化配置与运行记录，不访问设备或外部资源，也不启动 GUI。
-预期失败入口在两种配置中均须实际返回 **1**：
+预期失败入口在 Release 配置中须实际返回 **1**：
 
 ```powershell
-& ./out/build/s23-debug/tests/core/Debug/visionpro_core_tests.exe --force-failure
-$LASTEXITCODE
 & ./out/build/s23-release/tests/core/Release/visionpro_core_tests.exe --force-failure
 $LASTEXITCODE
 ```
 
-CTest 日志分别位于 `out/build/s23-debug/Testing/Temporary/LastTest.log` 与
-`out/build/s23-release/Testing/Temporary/LastTest.log`；本次构建输出另保留在两个目录的 `build.log`。
+CTest 日志位于 `out/build/s23-release/Testing/Temporary/LastTest.log`；本次构建输出另保留在该目录的 `build.log`。
 这些本地产物均被 Git 忽略。验收内容和具体检查数见 §8.6。
 
 ### 3.4 S2.4 构建与测试命令
 
 本节为 S2.4 历史记录；当前源码请使用 §3.7。
-在仓库根目录 PowerShell 中运行；沿用 §2 工具链，两个源码外目录分别验证 Debug/Release：
+在仓库根目录 PowerShell 中运行；沿用 §2 工具链，使用源码外目录验证 Release：
 
 ```powershell
-cmake -S . -B out/build/s24-debug -G "Visual Studio 18 2026" -A x64 -DBUILD_TESTING=ON
-cmake --build out/build/s24-debug --config Debug
-ctest --test-dir out/build/s24-debug -C Debug --output-on-failure --no-tests=error
-
 cmake -S . -B out/build/s24-release -G "Visual Studio 18 2026" -A x64 -DBUILD_TESTING=ON
 cmake --build out/build/s24-release --config Release
 ctest --test-dir out/build/s24-release -C Release --output-on-failure --no-tests=error
 ```
 
-上述命令均应返回 0，每种配置为 **34/34 通过**：已有 24 项核心测试与新增 10 项 workflow 测试。
+上述命令均应返回 0，Release 为 **34/34 通过**：已有 24 项核心测试与新增 10 项 workflow 测试。
 预期失败入口单独调用也须返回 **1**，验证 Release 不因禁用 assert 而跳过断言：
 
 ```powershell
-& ./out/build/s24-debug/tests/core/Debug/visionpro_core_tests.exe --force-failure
-$LASTEXITCODE
 & ./out/build/s24-release/tests/core/Release/visionpro_core_tests.exe --force-failure
 $LASTEXITCODE
 ```
 
-CTest 完整输出位于两个构建目录的 `Testing/Temporary/LastTest.log`，本次构建输出保存在对应 `build.log`。
+CTest 完整输出位于 Release 构建目录的 `Testing/Temporary/LastTest.log`，本次构建输出保存在对应 `build.log`。
 构建目录与日志均被 Git 忽略；不需要 Qt、OpenCV、厂商 SDK 或外部设备。
 实际结果、固定夹具与覆盖边界见 §8.7。
 
@@ -253,10 +233,6 @@ CTest 完整输出位于两个构建目录的 `Testing/Temporary/LastTest.log`�
 在仓库根目录 PowerShell 中运行，沿用 §2 工具链与无 GUI 目标：
 
 ```powershell
-cmake -S . -B out/build/s25-debug -G "Visual Studio 18 2026" -A x64 -DBUILD_TESTING=ON
-cmake --build out/build/s25-debug --config Debug --parallel 1
-ctest --test-dir out/build/s25-debug -C Debug --output-on-failure --no-tests=error
-
 cmake -S . -B out/build/s25-release -G "Visual Studio 18 2026" -A x64 -DBUILD_TESTING=ON
 cmake --build out/build/s25-release --config Release --parallel 1
 ctest --test-dir out/build/s25-release -C Release --output-on-failure --no-tests=error
@@ -269,7 +245,7 @@ S2.5 新增 `workflow.validation_graph`、`workflow.validation_bindings`、`work
 
 本机首轮 `--parallel 4` 构建停在 MSBuild 工程检查步骤，已终止；改为 `--parallel 1` 后开始正常编译。
 这只是本次构建执行方式，不修改共享编译器、依赖或运行库配置。
-CTest 详细输出分别位于两个构建目录的 `Testing/Temporary/LastTest.log`，构建输出保留在对应 `build.log`；
+CTest 详细输出位于 Release 构建目录的 `Testing/Temporary/LastTest.log`，构建输出保留在对应 `build.log`；
 这些日志和构建目录均被 Git 忽略。
 
 ### 3.6 S2.6 构建与测试命令
@@ -277,16 +253,12 @@ CTest 详细输出分别位于两个构建目录的 `Testing/Temporary/LastTest.
 在仓库根目录 PowerShell 中运行，沿用 §2 工具链、无 GUI 目标和已验证的串行 MSBuild 方式：
 
 ```powershell
-cmake -S . -B out/build/s26-debug -G "Visual Studio 18 2026" -A x64 -DBUILD_TESTING=ON
-cmake --build out/build/s26-debug --config Debug --parallel 1
-ctest --test-dir out/build/s26-debug -C Debug --output-on-failure --no-tests=error
-
 cmake -S . -B out/build/s26-release -G "Visual Studio 18 2026" -A x64 -DBUILD_TESTING=ON
 cmake --build out/build/s26-release --config Release --parallel 1
 ctest --test-dir out/build/s26-release -C Release --output-on-failure --no-tests=error
 ```
 
-以上配置、构建与 CTest 命令均已返回 0，Debug/Release 各 44/44 项通过，实际结果见 §8.9。
+以上配置、构建与 CTest 命令均已返回 0，Release 44/44 项通过，实际结果见 §8.9。
 S2.6 注册 `workflow.result_store` 及 `workflow.resolver_values`、`workflow.resolver_availability`、
 `workflow.resolver_isolation`、`workflow.resolver_domains`，保留此前 39 项 CTest，合计 44 项。
 测试使用人工终态记录、显式作用域/公开输入、内存资源目录和只读全局快照；
@@ -298,10 +270,6 @@ CTest 详细输出位于对应构建目录的 `Testing/Temporary/LastTest.log`�
 在仓库根目录 PowerShell 中运行，沿用 §2 工具链和串行 MSBuild。公共结构增加字段时使用完整重建，避免混用旧对象文件：
 
 ```powershell
-cmake -S . -B out/build/s27-debug -G "Visual Studio 18 2026" -A x64 -DBUILD_TESTING=ON
-cmake --build out/build/s27-debug --config Debug --parallel 1 --clean-first
-ctest --test-dir out/build/s27-debug -C Debug --output-on-failure --no-tests=error
-
 cmake -S . -B out/build/s27-release -G "Visual Studio 18 2026" -A x64 -DBUILD_TESTING=ON
 cmake --build out/build/s27-release --config Release --parallel 1 --clean-first
 ctest --test-dir out/build/s27-release -C Release --output-on-failure --no-tests=error
@@ -309,8 +277,8 @@ ctest --test-dir out/build/s27-release -C Release --output-on-failure --no-tests
 
 S2.7 保留全部既有测试，并补运行接口替身、所有权/错误边界和 S2 组合验收。
 新增 `core.tool_execution`、`workflow.run_handles`、`workflow.composition` 和 `workflow.tool_execution`，
-共 48 项 CTest；两种配置的实际结果记录在 §8.10。
-CTest 证据保存在各构建目录的 `Testing/Temporary/LastTest.log`；构建日志一并保留，不能以编译成功代替行为验证。
+共 48 项 CTest；Release 配置的实际结果记录在 §8.10。
+CTest 证据保存在 Release 构建目录的 `Testing/Temporary/LastTest.log`；构建日志一并保留，不能以编译成功代替行为验证。
 模拟调用不得记为真实算法、调度器或设备验证。
 
 ### 3.8 S3.1 Release 构建与测试命令
@@ -412,14 +380,12 @@ ctest --test-dir out/build/s38-release -C Release --output-on-failure --no-tests
 
 ### 3.16 S3.9 构建与命令行验证
 
-在仓库根目录 PowerShell 中构建并运行两套测试。
+在仓库根目录 PowerShell 中构建并运行 Release 测试。
 
 ```powershell
 cmake -S . -B out/build/s39 -G "Visual Studio 18 2026" -A x64 -DBUILD_TESTING=ON
 cmake --build out/build/s39 --config Release --parallel 1
 ctest --test-dir out/build/s39 -C Release --output-on-failure --no-tests=error --output-log out/build/s39/ctest-release.log
-cmake --build out/build/s39 --config Debug --parallel 1
-ctest --test-dir out/build/s39 -C Debug --output-on-failure --no-tests=error --output-log out/build/s39/ctest-debug.log
 ```
 
 单独复现保存前后的命令行闭环和故障路径。
@@ -454,6 +420,86 @@ $cli = '.\out\build\s39\source\app\Release\visionpro_cli.exe'
 | `visionpro.sim.select` | Int64 输入 `mask`（0–3），按位 1、2 选择 `left`、`right` 控制出口 |
 | `visionpro.sim.collect` | 从多个 Int64 节点输出收集 `values`，按绑定顺序输出 `List<Int64>` |
 | `visionpro.sim.deliver` | 接收并输出单个 `List<Int64>` 值 `values`，模拟交付 |
+
+### 3.17 S4.1 Release 构建与验证
+
+在仓库根目录用 PowerShell 分别配置 ON 和 OFF。将 `OpenCV_DIR` 设为现有安装包中含 `OpenCVConfig.cmake` 的目录。
+已核验包的安装根目录为库目录下的 `OpenCV-4.12/build-vs/install`，配置文件位于该安装根目录的 `x64/vc18/lib`。
+
+```powershell
+$env:OpenCV_DIR = Join-Path $openCvInstall 'x64/vc18/lib'
+cmake -S . -B out/build/s41-on -G "Visual Studio 18 2026" -A x64 -DCMAKE_CONFIGURATION_TYPES=Release -DBUILD_TESTING=ON -DVISIONPRO_WITH_OPENCV=ON "-DOpenCV_DIR=$env:OpenCV_DIR"
+cmake --build out/build/s41-on --config Release --parallel 1
+ctest --test-dir out/build/s41-on -C Release --output-on-failure --no-tests=error --output-log out/build/s41-on/ctest.log
+
+cmake -S . -B out/build/s41-off -G "Visual Studio 18 2026" -A x64 -DCMAKE_CONFIGURATION_TYPES=Release -DBUILD_TESTING=ON -DVISIONPRO_WITH_OPENCV=OFF
+cmake --build out/build/s41-off --config Release --parallel 1
+ctest --test-dir out/build/s41-off -C Release --output-on-failure --no-tests=error --output-log out/build/s41-off/ctest.log
+```
+
+`$openCvInstall` 使用本机安装根目录的实际路径。ON 要求 Windows x64/MSVC、仅 Release 和 `/MD`（`MultiThreadedDLL`）。
+单配置生成器通过 `CMAKE_BUILD_TYPE=Release` 选择配置。CMake 精确查找 `4.14.0`，并核对 `-pre` 后缀和三个组件的 Release 导入库及 DLL。
+CTest 为 `tools.opencv_release_smoke` 单独把导入目标的 `bin` 路径加入 PATH。直接运行此程序时，可将
+`x64/vc18/bin` 加到当前进程的 PATH，或把 `opencv_world4140.dll` 放到该程序旁，并使用 x64 MSVC 运行库。
+
+### 3.18 S4.2 Release 构建与验证
+
+沿用 [§3.17](#317-s41-release-构建与验证) 中的 `OpenCV_DIR`。在仓库根目录的 PowerShell 中运行以下命令。
+
+```powershell
+cmake -S . -B out/build/s42-on -G "Visual Studio 18 2026" -A x64 -DCMAKE_CONFIGURATION_TYPES=Release -DBUILD_TESTING=ON -DVISIONPRO_WITH_OPENCV=ON "-DOpenCV_DIR=$env:OpenCV_DIR"
+cmake --build out/build/s42-on --config Release --parallel 1
+ctest --test-dir out/build/s42-on -C Release -R '^(core\.|workflow\.|tools\.|app\.vision_image_summary$)' --output-on-failure --no-tests=error --output-log out/build/s42-on/ctest.log
+
+cmake -S . -B out/build/s42-off -G "Visual Studio 18 2026" -A x64 -DCMAKE_CONFIGURATION_TYPES=Release -DBUILD_TESTING=ON -DVISIONPRO_WITH_OPENCV=OFF
+cmake --build out/build/s42-off --config Release --parallel 1
+ctest --test-dir out/build/s42-off -C Release -R '^(core\.|workflow\.)' --output-on-failure --no-tests=error --output-log out/build/s42-off/ctest.log
+```
+
+ON 的 CTest 为使用 OpenCV 的程序引入安装包的 `bin` 路径。直接运行 ON 的 `visionpro_cli` 时，在同一 PowerShell 中设置该路径。
+
+```powershell
+$openCvBin = (Resolve-Path -LiteralPath (Join-Path $env:OpenCV_DIR '../bin')).Path
+$env:Path = "$openCvBin;$env:Path"
+& .\out\build\s42-on\source\app\Release\visionpro_cli.exe --help
+```
+
+本次读图与摘要用例使用未配置摘要的 `PerInvocation` 外部图像，经 `FileResourceProvider` 和 `WorkflowEngine` 验证。
+执行范围为上述 CTest 分组，涉及 SHA-256 的既有方案存储与 CLI 独立进程回归本次跳过。
+
+### 3.19 S4.3 Release 构建与验证
+
+沿用 [§3.17](#317-s41-release-构建与验证) 的 `OpenCV_DIR` 和现有安装包。在仓库根目录的 PowerShell 中执行。
+
+```powershell
+cmake -S . -B out/build/s43-on -G "Visual Studio 18 2026" -A x64 -DCMAKE_CONFIGURATION_TYPES=Release -DBUILD_TESTING=ON -DVISIONPRO_WITH_OPENCV=ON "-DOpenCV_DIR=$env:OpenCV_DIR"
+cmake --build out/build/s43-on --config Release --parallel 1
+ctest --test-dir out/build/s43-on -C Release -R '^(core\.|workflow\.|tools\.|app\.vision_image_summary$)' --output-on-failure --no-tests=error --output-log out/build/s43-on/ctest.log
+
+cmake -S . -B out/build/s43-off -G "Visual Studio 18 2026" -A x64 -DCMAKE_CONFIGURATION_TYPES=Release -DBUILD_TESTING=ON -DVISIONPRO_WITH_OPENCV=OFF
+cmake --build out/build/s43-off --config Release --parallel 1
+ctest --test-dir out/build/s43-off -C Release -R '^(core\.|workflow\.)' --output-on-failure --no-tests=error --output-log out/build/s43-off/ctest.log
+```
+
+掩膜夹具使用未配置摘要的 `PerInvocation` 外部资源，验证按实际成员像素、方向、调用身份和诊断执行。
+本轮执行上述 CTest 分组，跳过涉及 SHA-256 的既有存储与独立进程 CLI 用例。
+
+### 3.20 S4.4 Release 构建与验证
+
+沿用 [§3.17](#317-s41-release-构建与验证) 的 `OpenCV_DIR` 和现有安装包。在仓库根目录的 PowerShell 中执行。
+
+```powershell
+cmake -S . -B out/build/s44-on -G "Visual Studio 18 2026" -A x64 -DCMAKE_CONFIGURATION_TYPES=Release -DBUILD_TESTING=ON -DVISIONPRO_WITH_OPENCV=ON "-DOpenCV_DIR=$env:OpenCV_DIR"
+cmake --build out/build/s44-on --config Release --parallel 1
+ctest --test-dir out/build/s44-on -C Release -R '^(core\.|workflow\.|tools\.|app\.vision_image_summary$)' --output-on-failure --no-tests=error --output-log out/build/s44-on/ctest.log
+
+cmake -S . -B out/build/s44-off -G "Visual Studio 18 2026" -A x64 -DCMAKE_CONFIGURATION_TYPES=Release -DBUILD_TESTING=ON -DVISIONPRO_WITH_OPENCV=OFF
+cmake --build out/build/s44-off --config Release --parallel 1
+ctest --test-dir out/build/s44-off -C Release -R '^(core\.|workflow\.)' --output-on-failure --no-tests=error --output-log out/build/s44-off/ctest.log
+```
+
+本轮按逐像素、坐标、输出所有权和调用记录验证。PNG 掩膜与 BMP 读图使用未配置摘要的 `PerInvocation` 外部资源。
+涉及 SHA-256 的方案存储与独立进程 CLI 往返回归留在后续闭环验收。
 
 ## 4. 第一阶段验证
 
@@ -498,13 +544,13 @@ S2 将设计基线落实为能够无 GUI 构建和测试的 core/workflow 库：
 阶段范围与通过标准以 [requirements.md §4](requirements.md#4-第二阶段核心模型与绑定验证) 为准；
 与调度、算法及数据服务的分工见 [architecture.md §2.1](architecture.md#21-s2-在整体架构中的位置)。
 以下计划保持原范围；S2.1–S2.5 已通过，证据见 §8.4–§8.8。
-S2.6 已完成并通过 Debug/Release 验证，结果见 §8.9；S2.7 及 S2 整体验收已通过，记录见 §8.10。
+S2.6 已完成并通过 Release 验证，结果见 §8.9；S2.7 及 S2 整体验收已通过，记录见 §8.10。
 
 ### 5.1 子阶段与依赖顺序
 
 | 子阶段 | 主要交付 | 退出条件 |
 |---|---|---|
-| S2.1 工程底座与首个领域类型 | 实际 visionpro_core 目标、CTest 入口、最小强类型身份和诊断；确定首个验证环境 | 无 GUI 配置、Debug/Release 编译与首批真实行为测试通过，命令及环境可复现 |
+| S2.1 工程底座与首个领域类型 | 实际 visionpro_core 目标、CTest 入口、最小强类型身份和诊断；确定首个验证环境 | 无 GUI 配置、Release 编译与首批真实行为测试通过，命令及环境可复现 |
 | S2.2 基础类型、值系统与工具元数据 | 补齐持久/Schema/运行身份、错误返回、ConfigValue/DataValue、Record/List/Optional，以及参数、端口和 ToolDescriptor | 身份类别不混用；空集合、None、缺失和错误可区分；Schema、必填性、默认值、范围/枚举及转换约束可校验 |
 | S2.3 图像、几何、资源与状态模型 | 图像只读所有权、裁剪视图、坐标和 ROI/掩膜；资源、全局变量、队列及节点状态的定义和校验 | 共享输入与独立输出不互相污染，视图保留父缓冲；区域、资源和状态域可表达并校验，运行对象不混入配置 |
 | S2.4 方案、关系、快照与请求模型 | Solution/Workflow/Node、控制/包含关系、Binding/OutputReference、Group 公开映射、不可变快照、类型化请求与结果身份；复制重映射 | 五路分叉、多前驱汇合和公开边界可构造；改名保持引用，复制重映射；配置、快照、请求输入和结果分别持有 |
@@ -530,7 +576,7 @@ S2.6 已完成并通过 Debug/Release 验证，结果见 §8.9；S2.7 及 S2 整
 2. 建立 include/visionpro/core、source/core、tests/core 的最小实际结构，创建 visionpro_core 并复用 visionpro_build_options。workflow 目标随其首批实现加入，不先建立空壳库。
 3. 至少实现 SolutionId、WorkflowId、NodeId 的强类型区分、UUIDv4 生成/解析及规范文本表示；Schema 标识和运行计数身份随后按各自契约补齐，不统一套用 UUID。
 4. 实现最小 Diagnostic/ErrorCode 和错误返回约定，包含稳定错误分类、严重程度、对象位置与说明，不扩展异常或日志框架。
-5. 用 CTest 注册真实行为测试，覆盖合法/非法身份、文本往返及类型隔离；在独立构建目录验证 Debug、Release，并确认失败能够使测试返回失败。
+5. 用 CTest 注册真实行为测试，覆盖合法/非法身份、文本往返及类型隔离；在独立构建目录验证 Release，并确认失败能够使测试返回失败。
 6. 将实际成功的版本、构建/测试命令及结果记录到本文。未经执行的命令不能作为已验证步骤；节点改名与复制的测试在 S2.4 随配置模型加入。
 
 首批不创建调度器、GUI、设备适配或完整算法接口。其交付是可构建的领域代码与测试，
@@ -591,7 +637,7 @@ RunHandle、实例工厂和操作句柄使用具体可编译接口及必要测�
 S2 结束前须同时满足：
 
 - 上述范围及 requirements §4 的必需项全部通过。未覆盖或失败的项记录原因并保持未完成，不通过删减场景或放宽标准收尾。
-- 首个验证环境中，core/workflow 及测试可独立于 GUI 构建，Debug/Release 的真实执行结果可复现。
+- 首个验证环境中，core/workflow 及测试可独立于 GUI 构建，Release 的真实执行结果可复现。
 - 固定内存方案贯通“构造模型 → 静态校验 → 人工结果查询与绑定解析 → 值或诊断”；不把人工夹具写成已完成节点执行或真实检测。
 - 公共契约与实现一致，证据按 §8 记录代码版本、夹具、测试入口、期望/实际结果和命令；可编译接口不能代替所有权或绑定行为验证。
 - 向 S3 交接可复用模型、校验/解析接口、夹具和已明确的后续事项。S3 的调度、提交/取消、回调及配置往返保持未验证状态，不能随 S2 一并标记完成。
@@ -639,7 +685,7 @@ S2 的历史验收范围见 §8.10。
 | S3.6 结果交付、通知与会话生命周期 | 结果物化/查询/保留；必要完成与可选观察通道分离、有界容量及注销；内存候选会话切换和关闭；模拟外部错误域/原码及分范围耗时 | 后端下轮覆盖不改已持有快照；历史淘汰不使活动图像悬空；慢观察者不阻塞完成；关闭显示不丢必要通知；旧会话不错误投递，关闭拒绝新请求；0/1 各状态域、未知原码/耗时可追溯 |
 | S3.7 配置格式、资源解析与诊断加载 | infrastructure 编解码与资源解析；目录/JSON 版本化格式、显式值编码和路径基准；解析/编辑诊断/执行检查分层；候选加载和未知内容保存限制 | 稳定 ID、三类关系、节点状态选择、资源/变量/队列定义与布局往返；Int64 边界、空 List、None、Binary 和中文路径通过；缺工具/资源可诊断编辑但不能误执行；损坏不替换有效配置，未知内容不被有损覆盖 |
 | S3.8 保存事务与故障保护 | 不可变托管资源新版本、临时清单、原子提交；修订比较和提交处于同一受控协议；提交与清理结果分开；保护仍被运行持有的旧资源 | 资源写、临时清单、提交与清理逐点故障注入；提交前旧方案有效，提交后清理失败不误报未保存；两个协作保存者交错不丢更新；外部资源不被改写或自动托管 |
-| S3.9 无 GUI 入口与整体验收 | app 装配，可指定方案文件、流程及输入的命令行入口和追溯摘要；加载/执行/保存/重载集成夹具；验收矩阵、复现命令及实际记录 | 无窗口初始化完成文件方案执行；往返前后业务结果、来源和控制行为一致；§6.5 全部 S3 子范围与 S2 回归通过，Debug/Release 证据可复现 |
+| S3.9 无 GUI 入口与整体验收 | app 装配，可指定方案文件、流程及输入的命令行入口和追溯摘要；加载/执行/保存/重载集成夹具；验收矩阵、复现命令及实际记录 | 无窗口初始化完成文件方案执行；往返前后业务结果、来源和控制行为一致；§6.5 全部 S3 子范围与 S2 回归通过，Release 证据可复现 |
 
 运行主线按 S3.1 → S3.2 → S3.3 → S3.4 推进，再完成 S3.5 和 S3.6。
 格式/兼容性设计可在内存执行期间准备，S3.7 的完整读写在内存主线通过后接入，
@@ -775,15 +821,191 @@ S3 结束前须同时满足：
 
 - 九个子阶段的退出条件和上述 26 项 S3 子范围全部通过；未覆盖或失败的项保持未完成，不用人工结果插入代替调度、提交或竞争测试。
 - 无 GUI 入口接受磁盘方案及指定流程/输入，完成加载、执行、保存和重载；固定五路及条件分支方案有业务结果、来源、控制顺序和诊断证据，不只运行硬编码内存夹具。
-- 核心/运行/存储测试独立于 Qt、OpenCV 和厂商运行时，在既有 Windows x64 工具链验证 Debug/Release；保留 S2 回归，新接口变化应更新对应行为验证，不删减标准。
+- 核心/运行/存储测试独立于 Qt、OpenCV 和厂商运行时，在既有 Windows x64 工具链验证 Release；保留 S2 回归，新接口变化应更新对应行为验证，不删减标准。
 - 验收记录保存实际代码版本、工具链、夹具、CTest 名称、复现命令和结果；S3 新命令随实际入口完成后记录，现阶段不提供未经运行的“已验证命令”。
 - 文档与实现能力一致，未实现的合法结构有明确诊断和配置保留策略；为 S4 交接可复用运行/存储服务，不将模拟通过记为真实算法、SDK 或设备通过。
 
-## 7. 第四阶段及后续验证
+## 7. 第四阶段实施与验收计划
 
-第四阶段使用固定图像和真实 OpenCV 工具验证预期结果与数值容差，
-包含加载失败、非法参数、共享图像与旋转/继承/修正 ROI、掩膜的代表场景，并保持无 GUI 可执行。
-明确面积等结果的定义：像素计数与轮廓几何面积不能无说明地互相比较。
+本计划制定于 2026-11-15，以提交 `cee6190` 的实际代码为起点。制定时复核 S3 Release 构建，CTest 82/82 通过。
+S4.1–S4.4 的完成记录见 [§8.21](#821-s41-实现与验证记录) 至 [§8.24](#824-s44-实现与验证记录)。
+S4 目标是让同一磁盘方案通过现有无 GUI 入口完成“本地图像 → 二值化 → Blob 分析 → 结果判断”，
+并以像素、数值、来源和控制行为证明真实算法与 S3 的运行、存储契约一致。
+
+### 7.1 当前代码基础与必须补齐的接缝
+
+下表记录制定计划时的代码基础。
+
+| 当前代码 | 可复用能力 | S4 必须完成的工作 |
+|---|---|---|
+| `source/workflow/workflow_engine.cpp`、`execution_plan.cpp` | 静态装配、快照、数据绑定、分叉汇合、取消与结果保留 | 直接注册真实工具；不另建执行器或算法专用调度入口 |
+| `include/visionpro/core/image.hpp`、`source/core/image.cpp` | 只读图像、深度/通道/步长、共享裁剪及根坐标关系 | 集中实现 OpenCV 桥接；补充保持空间元数据的新像素发布入口，避免 `copy` 重置裁剪图的 root/origin |
+| `geometry.hpp`、`InvocationContextData::regions`、`resolver.cpp` | ROI 形状、变换、排除、掩膜规则和本轮继承来源冻结 | 实际计算像素成员、边界、空域和修正后的方向；不能把模型校验视为算法适配 |
+| `FileResourceLease::bytes()`、`PreparedTool::prepare` | 固定文件字节、摘要检查、显式资源槽及调用租约 | 直接从租约字节解码；嵌套 `MaskConfig` 的资源检查尚不等于获得像素，须显式取得匹配租约 |
+| `source/tools/simulation.cpp`、`ToolRegistry::create` | 模拟工具和一次性 registration 集合装配 | 新增视觉 registration，由 app 合并创建注册表；保留模拟工具及旧方案 |
+| `source/app/main.cpp`、`run_summary.cpp` | 独立 CLI 进程、模拟工具装配、Int64/List 与来源摘要 | 补齐真实工具装配和 S4 输出类型 |
+| 现有 core/workflow/infrastructure/app 测试 | S3 的 82 个回归入口 | 增加真实像素与算法证据；保留既有测试，不以测试数量代替验收 |
+
+S4 不包含 GUI、相机、PLC/TCP、动态插件、完整 Group/循环、自动重试或通用表达式系统。
+这些边界不缩减既有模型；未支持内容仍须保留配置并明确诊断。
+
+### 7.2 先固定的依赖与算法契约
+
+**依赖与模块。** S4.1 接入已有的 OpenCV `4.14.0-pre` Windows x64/MSVC Release 预编译包，使用 `core`、`imgproc`、`imgcodecs` 和 `/MD`。
+`VISIONPRO_WITH_OPENCV` 默认 OFF，核心、模拟 CLI 与既有测试可独立构建。ON 精确查找已验证版本，缺少依赖会导致配置失败。
+安装包通过 `OpenCV_DIR` 从本机提供，构建命令见 [§3.17](#317-s41-release-构建与验证)，依赖证据见 [§8.21](#821-s41-实现与验证记录)。
+
+S4.1 在 `source/tools/vision/` 建立 `visionpro_vision_tools`，提供工具元数据、符号适配校验和静态注册入口。
+S4.2 注册 `visionpro.image.read_file` 的实例工厂。`opencv_image` 集中处理像素复制和 OpenCV 异常转换，
+`read_file` 从 `FileResourceLease` 固定的字节解码。S4.3 的 `roi`、`roi_mask` 复用相同的解码和图像所有权边界。
+S4.4 注册 `visionpro.image.threshold`，用 `cv::threshold` 处理 UInt8 Mono，再用 `cv::bitwise_and` 应用求值器生成的 0/255 成员掩膜。
+两种模式均将 ROI 外像素清零。core/workflow 公共接口使用项目图像类型。
+
+**首批工具与 Schema。** 工具配置版本和新 Record Schema 从 1 开始；以下字段为实施基线。
+
+| 工具 | 输入与配置 | 输出与明确行为 |
+|---|---|---|
+| `visionpro.image.read_file` | `source` 槽为 Image 资源；`decode_mode` 为 Gray8/Native8；`frame_origin: Point2D` 为固定参数 | `image: Image`。`frame_origin` 必须为方案已声明 Pixel 坐标系的 `(0,0)`，复用现有类型化坐标校验；不按节点显示名生成坐标身份 |
+| `visionpro.image.threshold` | `image: Image(UInt8/Mono)`；必需 `roi: Region2D`，全图使用显式 FullImage 配置；`threshold: Int64 [0,255]`；`mode` 为 Binary/BinaryInverse；可选 `mask` 资源槽 | `binary: Image(UInt8/Mono)`；`effective_roi: Region2D`；`roi_mask: RasterMask`。Binary 为 `src > threshold` 时 255，否则 0；Inverse 只在有效 ROI 内反转；ROI 外恒为 0，输出尺寸与坐标不变 |
+| `visionpro.image.blob` | `binary: Image(UInt8/Mono)`；`connectivity` 为 4/8；`roi: Optional<Region2D>` 默认 None 表示全图；可选 `mask` 槽 | `count: Int64`、`components: List<BlobRecord>`、`total_area_pixels: Int64`、`largest_area_pixels: Optional<Int64>`；非零像素为前景，不输出背景 label |
+| `visionpro.judge.integer_range` | `value: Int64`；固定闭区间 `minimum`、`maximum` | `passed: Bool`，节点技术状态为 Succeeded，业务判定为 OK/NG；`minimum > maximum` 在工具开始计算前报配置错误；NG 不阻止正常后继 |
+
+`BlobRecord` 至少包括 `area_pixels: Int64`、`centroid: Point2D`、
+`bounds: Record{origin: Point2D, width: Int64, height: Int64}`。
+面积是前景像素数量，不能用 `contourArea` 的几何面积替代，也不把像素数量标记成长度单位。
+质心与包围框 origin 使用输入图像当前坐标系和 Pixel 单位；包围框覆盖半开像素索引区间。
+组件按其最先出现的前景像素 `(y,x)` 升序排序，不依赖 OpenCV 内部 label 编号。
+正常无 Blob 返回 `count=0`、空 List、总面积 0、最大面积 None；它是成功结果。
+算法依据见 [OpenCV 连通域与面积接口](https://docs.opencv.org/4.13.0/d3/dc0/group__imgproc__shape.html)；
+阈值边界依据见 [OpenCV threshold 说明](https://docs.opencv.org/4.13.0/d7/d4d/tutorial_py_thresholding.html)。
+
+**图像读取与所有权。** 首批验收 PNG/BMP 的 UInt8 Mono/BGR；Gray8 对 BGR 显式灰度转换，Native8 保留支持的原格式。
+threshold/Blob 的 `image_formats` 仅声明 UInt8/Mono；Native8 的 BGR 输出必须明确拒绝，不隐式灰度或逐通道阈值。
+先按原深度解码并检查，再执行所选转换；UInt16、浮点或未支持通道明确拒绝，不自动截断成 UInt8。
+禁止工具重新按 `FileResourceLease::path()` 打开文件；通过 `bytes()` 和 `imdecode` 使用已固定内容，
+路径、资源身份、修订和摘要继续由 infrastructure 管理。解码忽略 EXIF 自动旋转，不因文件元数据隐式改变坐标。
+格式和解码行为依据见 [OpenCV 图像编解码接口](https://docs.opencv.org/4.13.0/d4/da8/group__imgcodecs.html)。
+
+初版桥接按有效像素逐行复制，支持带 padding 的行及非连续裁剪视图；不暴露可写 `cv::Mat` 指向只读共享缓冲。
+新增最小 ImageHandle 工厂：从已有图像复制空间元数据并发布同尺寸、可不同像素格式的新缓冲；
+保留 current/root frame 和 origin，校验尺寸、步长、长度及溢出。不得通过重新贴坐标标签隐藏重采样。
+派生 `ImageFrame` 保留输入的可选 FrameId/captured_at；文件读取不伪造采集时间。
+阈值和 Blob 首版同步运行，不承诺抢占正在执行的 OpenCV 调用；取消后仍由引擎拦截迟到结果，并持有资源到实际退出。
+`cv::Exception` 映射为带 provider、operation、原始码及版本的 Diagnostic，未知异常保留现有边界保护。
+
+### 7.3 ROI 与掩膜的首批实际能力
+
+S4.3 的 `evaluate_roi` 已实现本节的像素求值、租约匹配和分层追溯。输出包括 0/255 成员掩膜、像素数、修正方向和可发布的 `Region2D`。
+终态采用输入图像当前的 Pixel 坐标，`FullImage` 以本次目标图像尺寸展开。掩膜的局部目标尺寸在没有 ROI 修正时必须匹配目标图像，
+有修正时先回到掩膜声明的局部目标域再取样。边界按半开域判断，位于远端上界且包含该边的几何会触发 `Reject`。
+
+- 支持 FullImage、Empty、AxisAlignedRect、RotatedRect、RasterMask；支持 Reject/Intersect 和 Error/ValidEmptyOutput。圆、环、扇环、多边形、Fill 等未适配能力明确报告，不降级为包围框。
+- 像素中心为整数 `(x,y)`。轴对齐矩形使用 `[x,x+width) × [y,y+height)`；旋转矩形在自身局部坐标中使用 `[-width/2,width/2) × [-height/2,height/2)`，通过逆变换判定像素中心。角度为弧度，图像正向为顺时针。
+- 支持无校准、无 valid_domain 限制的可逆 Similarity/Affine 修正；不支持的 Projective/Calibrated 或有界变换明确诊断。矩阵按现有列向量约定组合；不对顶点取整后用填充结果替代成员规则。
+- 继承仅使用 `InvocationContextData::regions` 冻结的本轮来源。先展开来源自身的几何与排除，再对整个继承集合施加外层修正，最后减去当前层排除集合。首版支持继承主来源和本地 RegionPrimitive 排除，保留主来源已经包含的排除项；排除项本身为 InheritedRegion 的复杂集合暂不支持，明确诊断。每层方向先按该层声明确定，再随该层变换映射；方向与区域一同变换，保留各层来源和方向记录。
+- 几何组合在符号空间展开，最终在本次目标图像求成员；不隐式继承上游调用时的图像裁剪结果。需要继承确切像素集合时，使用显式 RasterMask。每层边界/空域策略在该层映射到当前目标后检查，不绕过来源的 Error/Reject。
+- 首版边界判断以完整包含几何是否超出目标采样域 `[0,width) × [0,height)` 为准，排除区不得掩盖包含区域越界；Intersect 再求交集。排除区可与目标求交但不能扩大有效区域。空域 Error 报 EmptyRegion；ValidEmptyOutput 得全零的同尺寸图和成功的空 Blob 结果，不创建零尺寸 ImageHandle。
+- 掩膜支持 UInt8 Mono、NonZero/AtLeastThreshold、同尺寸同坐标直接映射和显式 Nearest 映射；Nearest 使用目标像素中心逆映射到源，取 `floor(v+0.5)`，源外为无效成员。不同尺寸/坐标无显式映射时报错；Linear 暂不支持。几何包含与掩膜排除按 Combine 能力执行，不自动把普通 Image 当作掩膜。
+- MaskConfig 必须匹配节点声明的可选 `mask` 资源槽，核对固定后的资源身份、种类、版本、解码格式与尺寸。嵌套引用未指定 revision 时采用已固定槽位的版本，显式指定时必须一致；不直接用未固定引用与租约作相等比较。S4 每次调用支持一个不同的掩膜文件，可重复引用；缺槽、引用不符或额外掩膜资源明确拒绝。这样复用现有租约，不新增按任意路径查资源的接口。
+
+ROI 求值结果至少保留有效掩膜、像素成员数、当前坐标、修正后方向以及冻结来源。
+threshold 发布无未解析 InheritedRegion 的 `effective_roi`，保持该 ROI 的配置身份；
+全图同样由显式配置提供 RegionId，`roi_mask` 表示实际成员。该输出必须是 Region2D 而非 Optional，符合当前继承引用的类型校验。
+成员掩膜由内部求值器生成，Region2D 输出保留展开后的几何、变换与排除；当前表达式无法无损展开时明确拒绝，不能只丢掉排除项后输出。
+如果一层 `Error` 约束和外层 `ValidEmptyOutput` 加排除无法合并，像素求值可供只消费成员的工具使用，需要发布 `Region2D` 的调用取得 `UnsupportedRegion`。
+S4.4 用两个真实 threshold 节点验证冻结流转及平移和排除。输出坐标系随输入图像确定，绑定解析在修正前核对实际坐标和单位。
+threshold 到 Blob 的链路在对应工具接入后按 V08 验收。
+`RunBindingTrace::regions` 保留冻结定义、绑定路径和生产者调用身份，CLI 摘要记录绑定路径及生产者身份。
+求值结果记录各层修正、方向、成员数和实际掩膜租约引用。
+
+### 7.4 子阶段、依赖与交付门槛
+
+| 子阶段 | 具体实施及代码落点 | 完成门槛 |
+|---|---|---|
+| S4.1 依赖、Schema 与适配契约 | 根及 tools CMake 增加可选视觉目标；核验并锁定现有 OpenCV Release 包；建立四个工具的版本化元数据与 registration 组合；落实 §7.2–§7.3 的类型和不支持边界 | OFF 配置不要求 OpenCV 且旧测试通过；ON 在 Release 可链接并运行最小解码/处理程序；元数据校验通过，未实现工具不注册成可用 |
+| S4.2 图像桥接与真实文件读取 | `source/tools/vision/` 增加集中桥接/解码和 read_file；core 增加保留空间元数据的独立输出工厂；`tests/tools/` 增加图像夹具 | 实际 PNG/BMP 与中文路径通过；裁剪、padding、通道、独立所有权及非法图像诊断通过；固定资源改动不改变已固定字节 |
+| S4.3 ROI、继承与掩膜求值 | 内部 ROI 求值器消费完整冻结来源；实现变换、排除、边界、空域、mask 槽解码与映射；对不足的类型化追溯做最小扩展 | §7.5 的旋转7像素、继承6像素、边界和掩膜黄金集合通过；声明能力与实际支持一致，支持外内容有定位诊断 |
+| S4.4 二值化工具 | threshold 调用 OpenCV，接入 ROI、独立图像输出、有效区域与 mask 结果 | 阈值边界和反相逐像素一致；真实工具不修改输入；空域和不支持图像路径符合契约 |
+| S4.5 Blob 与结果判断 | 连通域统计、确定性排序、类型化 Record/Optional 输出、integer_range 及组合参数检查 | 两组件、单像素、孔洞、4/8连通、裁剪坐标、空结果及 OK/NG 数值全部通过；实际通过字段/列表选择器绑定判断输入 |
+| S4.6 运行、CLI 与配置往返 | 完成真实工具装配与摘要；新增真实单链、五路、ROI继承及独立调用夹具；保存重载用独立 CLI 进程 | 真实算法经现有 WorkflowEngine 运行；NG继续、FailFast/取消/历史隔离通过；磁盘往返的结果、来源和控制一致，模拟方案仍可执行 |
+| S4.7 整体验收与交接 | 固定样例方案和输入清单，完成 ON/OFF 构建矩阵、完整回归、可复现命令及验收记录；同步已实现接口与文档 | §7.5–§7.7 全部满足；每项有输入摘要、期望值、实际值与日志；未达到门槛不能标记 S4 完成 |
+
+主线顺序为 S4.1 → S4.2 → S4.3 → S4.4 → S4.5 → S4.6 → S4.7。
+Schema 和桥接固定后，Blob 数学测试、CLI 类型输出可独立准备，但只在真实集成验证后算完成。
+每一子阶段提交实现、直接相关测试及对应接口说明；不等最后一次统一补测试。
+
+### 7.5 固定夹具与可复现验收数值
+
+验收图像优先使用小型无损文件和明确像素数组；固定文件提交生成说明、尺寸、格式及 SHA-256。
+期望值手算或由独立数学参考产生，不能用被测 OpenCV/ROI 函数重新生成“期望”。
+下表坐标均指像素中心，未另写时为输入当前图像坐标系。
+
+| 编号 | 固定输入或操作 | 必须得到的结果 |
+|---|---|---|
+| V01 阈值边界 | Mono8 `[0,127,128,129,255]`，阈值128 | Binary `[0,0,0,255,255]`；Inverse `[255,255,255,0,0]`；阈值0/255另测等值边界 |
+| V02 Blob 主样例 | 12×10，背景10；`x=1..3,y=1..2` 和 `x=7..9,y=5..7` 为200；阈值128 | count=2，面积6/9，总面积15，最大面积Some(9)；质心 `(2,1.5)`/`(8,6)`；bounds `(1,1,3,2)`/`(7,5,3,3)`，顺序固定 |
+| V03 连通性 | 3×3 仅 `(0,0)`、`(1,1)` 非零 | 4连通两组件，各面积1；8连通一组件，面积2、质心 `(0.5,0.5)` |
+| V04 面积与空结果 | 单像素；3×3前景删除中心；全零图 | 面积分别1、8；全零图成功且 count=0、components为空、total=0、largest=None，不能用轮廓面积替代 |
+| V05 判断与绑定 | V02 的 count 接范围 `[2,2]`/`[3,3]`；另一判断绑定 `components[0].area_pixels` | 前者OK/后者NG，均为技术成功且后继照常；字段结果为6；对空列表读取 `[0]` 报 IndexOutOfRange，不能当0 |
+| V06 步长与裁剪 | 4×3 Mono8、stride=6，有效像素 `[1,2,3,4;11,12,13,14;21,22,23,24]`，裁剪 `(1,1,3,2)` 后阈值13 | binary `[0,0,255;255,255,255]`，面积4；质心当前帧 `(1.25,0.75)`，用保留 origin 显式换算根帧 `(2.25,1.75)`；原图/padding不变，派生图 root/origin 保留 |
+| V07 旋转 ROI | 9×9 前景图，中心 `(4,4)`、宽4、高2、角π/4 | 成员恰为 `{(3,3),(4,3),(3,4),(4,4),(5,4),(4,5),(5,5)}`，共7，不是包围框 |
+| V08 继承与修正 | 同一全255原图分叉：FullImage threshold 提供全前景 binary，V07 threshold 提供 effective_roi；Blob 读前者图像、继承后者区域，再平移 `(+1,0)` 并排除 `(5,4,1,1)` | ROI成员及Blob面积均为6，即V07集合平移后去掉 `(5,4)`；不能改读V07已清零的binary，否则交集只有3；source本身带排除时仍保留；本轮来源调用可追溯；另测方向0经π/2修正为向量 `(0,1)` |
+| V09 边界和空域 | 4×3图，ROI `(-1,0,3,2)`；再测全部排除 | Reject定位越界；Intersect为4像素；全排除 Error报EmptyRegion，ValidEmptyOutput全零/空结果；另测支持域边界和贴边旋转矩形 |
+| V10 掩膜规则 | 3×2掩膜 `[0,1,127;128,255,0]` | NonZero为4成员，AtLeastThreshold(128)为2；等于阈值包含；全零掩膜按空域策略处理 |
+| V11 掩膜显式映射 | 2×2 `[1,0;0,1]`，Nearest平移 `(+1,0)` 到3×2 | 仅 `(1,0),(2,1)` 有效；无变换却尺寸/坐标不匹配时报错；补测半像素取整和源外采样 |
+| V12 真实五路 | V02 同一原图扇出，阈值依次100/128/180/210/250，各接Blob和 `[2,2]` 判断，再AllActivated汇合 | Blob count依次 `[2,2,2,0,0]`，判定 `[OK,OK,OK,NG,NG]`；各路一次，汇合和模拟交付各一次；原图及兄弟输出不变 |
+| V13 真实资源与往返 | 托管/外部PNG/BMP、中文和空格路径；从不同工作目录执行→保存→新进程重载→执行 | 输入/输出有效像素、Blob值/排序、判定、绑定与ROI来源、控制行为一致；保持资源类别和引用，运行缓冲不进入清单 |
+| V14 失败与本轮隔离 | 上轮成功，下轮损坏编码/缺资源/摘要不符；非法阈值、min>max、未支持深度/ROI、掩膜错配 | 按发生层报告资源/参数/图像/区域诊断；受理前错误无工具调用，受理后失败FailFast；无旧图、旧Blob或伪成功后继 |
+| V15 结果与取消保活 | 持有A的真实图像结果后运行B并淘汰历史；受控门闩在真实计算和结果接受间插入取消 | A像素不变，释放引擎后已持有结果仍可读；取消先赢不发布输出/不调用后继，实际退出前不复用槽位；不用偶然sleep证明竞争 |
+| V16 单节点与输入快照 | 以 RunRequest 注入真实Image执行threshold/Blob单节点；Busy竞争提供另一图；编辑ROI/阈值 | 仅目标执行；受理图像/参数不变，Busy输入不泄漏到下一轮；后续新快照采用编辑值；运行后仍可读旧结果 |
+
+整数像素、成员集合、面积、数量、包围框与稳定排序要求精确相等。
+这些小型确定性夹具的质心/变换坐标绝对误差 ≤ `1e-9` pixel，方向单位向量分量误差 ≤ `1e-9`。
+灰度转换另用固定色块核对 BGR/RGB 顺序及固定整数期望；不能以放宽全局误差容忍通道错误。
+图像比较只取有效行像素，并连同尺寸、格式和坐标比较；忽略 padding 字节布局差异，不用编码文件字节或 ImageHandle 身份相等代替像素比较。
+往返排除新 session/run/invocation/frame 分配值、耗时和时间戳，但要检查引用确实落在各自本轮，不能删掉整个来源字段后比较。
+
+### 7.6 CLI、测试组织与实施后的复现方式
+
+S4.2 的 CLI 已支持 Image 元数据输出，包括宽高、深度、通道、current/root frame、origin、可选帧身份和采集时间。
+S4.4 已支持实际 `Region2D` 的形状、变换、排除和冻结来源摘要，以及 `RasterMask` 的映射、成员规则和直接映射掩膜的成员数。
+S4.6 计划补充 Bool、Float64、String/Enum、Record、Optional、Point2D 及完整 Image 和掩膜摘要，
+递归处理 List/Record，并保留原有 Int64 十进制字符串约定和 S3 摘要字段。
+图像摘要至少给出宽高、深度、通道、current/root frame、origin、可选帧身份及有效行像素的 SHA-256；mask 给出映射/成员规则与摘要。
+ROI 给出实际采用的形状、变换、排除和来源；不将整图数据塞进标准输出。
+NG 维持成功退出码0；技术错误为非零，并同时保留已受理运行的终态摘要。
+本阶段文件图像由方案资源输入；真实 Image 请求注入由 C++ RunRequest 验证，不扩展通用 CLI 图像参数语言。
+
+计划测试分组为 `tools.image_bridge`、`tools.image_read`、`tools.roi`、`tools.mask`、`tools.threshold`、
+`tools.blob`、`tools.judgement`、`workflow.vision_integration`、`app.vision_roundtrip`、`app.vision_diagnostics`。
+各组包含有意义的成功/失败断言；实现时可按夹具规模拆分，不预先要求固定新增测试数量。
+`tests/tools` 验证算法本身，workflow/app 组必须走真实注册表和引擎；CLI 往返继续采用独立进程。
+V12 允许复用现有模拟 collect/deliver 检查交付次数，但读图、五路阈值、Blob和判断必须是真实工具。
+collect 的数据来源为各路 Blob.count（Int64），控制前驱为各路 judge；不能把 Bool 的 passed 绑定给现有整数集合输入。
+
+当前 ON/OFF 命令见 [§3.20](#320-s44-release-构建与验证)。S4.4 新增 `tools.threshold`，并扩展 `app.vision_image_summary`。
+S4.7 重跑 ON 的全部测试和独立 OFF 的 82 项回归，并确认 OFF 产物没有 OpenCV/Qt 的传递依赖。
+同时提供一个固定样例方案、所有资源/摘要、流程UUID和完整CLI命令，能在新进程中加载、运行、保存与重载。
+
+### 7.7 阶段退出条件与证据
+
+S4 必须同时满足以下条件才可标记完成：
+
+1. 四个真实工具及 ROI/掩膜支持范围按元数据实现；V01–V16 全部通过，未实现能力显式拒绝。
+2. 单链、真实五路、继承ROI、单节点调用、失败与取消均使用现有运行服务；运行和保存不依赖窗口初始化。
+3. Release 的 ON 全量测试和 OFF 的82项回归通过；断言在 Release 有效。OpenCV 预编译包版本、文件摘要、组件、工具链兼容性和运行依赖可复现。
+4. 结果证据包含配置/Schema版本、输入文件摘要、预期像素或数值、实际结果、误差判定和诊断；绑定、ROI/资源及调用身份可追溯。
+5. 保存重载保持真实算法行为；不持久化运行图像、临时结果、cv::Mat或设备句柄。只新增工具/Record Schema时不机械升级方案格式；新增持久化字段时单独检查兼容性。
+6. S4记录与代码一致，已实现接口同步到data-model/architecture，构建与复现方式同步到本文件；README只在门槛通过后改为完成。
+
+对应需求矩阵：A09→V06/V12/V15，A10→V07–V09，A11的本阶段真实算法部分→V12，
+A19→V13/V14，A21的无GUI算法部分→V01–V13，A25的图像结果部分→V04/V14/V15，A26→V09–V11。
+A05/A06/A07/A17/A18/A23分别以V04/V05/V14–V16补充真实数据集成；A21的GUI一致性仍归S5，设备/SDK部分仍归后续阶段。
+不将构建成功、只返回Succeeded、仅模拟测试通过或性能测量代替上述门槛。
+本阶段可记录固定夹具耗时和峰值资源供后续优化，但不在没有基准的情况下承诺实时性或吞吐率。
+
+### 7.8 后续阶段验证边界
+
 第五阶段验证界面生成的方案能够由相同无 GUI 入口运行，
 两种入口使用相同配置与输入时得到一致检测结果。
 
@@ -937,35 +1159,34 @@ S2 开始时确定适用的工具链、依赖与测试框架，将具体 C++ 类
 本节为 S2.1 结束时的历史记录；后续 S2.2 的实现与验证见 §8.5。
 
 - 日期：2026-10-30。
-- 结论：**S2.1 完成，Debug/Release 构建与首批行为测试通过**；S2.2–S2.7 未开始，S2 整体验收未完成。
+- 结论：**S2.1 完成，Release 构建与首批行为测试通过**；S2.2–S2.7 未开始，S2 整体验收未完成。
 - 代码基线：`12f5d1f` 加本次 S2.1 工作区改动，本次未创建 Git 提交；实现与测试随包含本记录的提交一起追溯。
 - 实现入口：[核心构建](../source/core/CMakeLists.txt)、[身份类型](../include/visionpro/core/id.hpp)、
   [身份创建](../include/visionpro/core/id_factory.hpp)、[诊断](../include/visionpro/core/diagnostic.hpp)、
   [错误返回](../include/visionpro/core/result.hpp)。
 - 测试入口：[core_tests.cpp](../tests/core/core_tests.cpp)、[CTest 注册](../tests/core/CMakeLists.txt)。
   固定输入保存在该测试文件，包括 `00112233-4455-4677-8899-aabbccddeeff`、大小写/边界变体及非法文本；
-  每种配置另从本机 Windows 系统随机源生成三类身份各 256 个样本。
+  Release 另从本机 Windows 系统随机源生成三类身份各 256 个样本。
 - 工具/Schema、方案/快照、Session/Run/Scope/Invocation/Attempt、Frame/Correlation、控制图、绑定、ROI、设备：本子阶段不适用。
 - 环境和复现命令见 §2、§3.1；构建不需要 Qt、OpenCV 或厂商运行库。
 
-| 范围 / 测试入口 | 期望与验证内容 | Debug 实际结果 | Release 实际结果 |
-|---|---|---|---|
-| 工程底座 | 配置、编译实际静态库及测试程序，核心与测试使用一致运行库 | 成功，退出码 0 | 成功，退出码 0 |
-| A03 / C02：编译期身份隔离 | 三类身份不可交叉构造、赋值、比较；不可默认/裸字节/字符串构造 | 静态断言通过 | 静态断言通过 |
-| A03 / C02：`core.parse_valid` | 大小写归一、固定文本字节顺序、所有合法 variant、有效边界及非 NUL 结尾视图 | 111 检查，0 失败 | 111 检查，0 失败 |
-| A03 / C02：`core.parse_invalid` | 长度、全部字符位置、分隔符、NUL/非 ASCII、nil、错误 version/variant，以及诊断优先级 | 1320 检查，0 失败 | 1320 检查，0 失败 |
-| A03 / C02：`core.generate` | 768 个样本均为规范 UUIDv4，可往返且本次样本不重复 | 3841 检查，0 失败 | 3841 检查，0 失败 |
-| A03 / C02：`core.value_semantics` | 身份比较、排序、复制、移动、独立持有输入值 | 42 检查，0 失败 | 42 检查，0 失败 |
-| 最小诊断：`core.diagnostics` | 分类、名称、严重程度、结构化位置及文本按值持有；成功值 0 与错误分开；未知码明确回退 | 30 检查，0 失败 | 30 检查，0 失败 |
-| 测试可靠性：`core.failure_exit` | 同一检查路径故意失败，进程必须返回非零；CTest 按 `WILL_FAIL` 判为通过 | 直接运行退出码 1；预期失败测试通过 | 直接运行退出码 1；预期失败测试通过 |
+| 范围 / 测试入口 | 期望与验证内容 | Release 实际结果 |
+|---|---|---|
+| 工程底座 | 配置、编译实际静态库及测试程序，核心与测试使用一致运行库 | 成功，退出码 0 |
+| A03 / C02：编译期身份隔离 | 三类身份不可交叉构造、赋值、比较；不可默认/裸字节/字符串构造 | 静态断言通过 |
+| A03 / C02：`core.parse_valid` | 大小写归一、固定文本字节顺序、所有合法 variant、有效边界及非 NUL 结尾视图 | 111 检查，0 失败 |
+| A03 / C02：`core.parse_invalid` | 长度、全部字符位置、分隔符、NUL/非 ASCII、nil、错误 version/variant，以及诊断优先级 | 1320 检查，0 失败 |
+| A03 / C02：`core.generate` | 768 个样本均为规范 UUIDv4，可往返且本次样本不重复 | 3841 检查，0 失败 |
+| A03 / C02：`core.value_semantics` | 身份比较、排序、复制、移动、独立持有输入值 | 42 检查，0 失败 |
+| 最小诊断：`core.diagnostics` | 分类、名称、严重程度、结构化位置及文本按值持有；成功值 0 与错误分开；未知码明确回退 | 30 检查，0 失败 |
+| 测试可靠性：`core.failure_exit` | 同一检查路径故意失败，进程必须返回非零；CTest 按 `WILL_FAIL` 判为通过 | 直接运行退出码 1；预期失败测试通过 |
 
-两种配置各 6/6 项 CTest 通过，其中 5 个正常行为组各执行合计 5344 次检查，
+Release 配置 6/6 项 CTest 通过，其中 5 个正常行为组各执行合计 5344 次检查，
 另有 1 次故意失败检查。Release 生成配置含 `NDEBUG`，运行检查没有使用 `assert`；
 因此不会随 Release 优化配置被禁用。日志位于
-`out/build/s21-debug/Testing/Temporary/LastTest.log` 和
 `out/build/s21-release/Testing/Temporary/LastTest.log`，属于本机构建产物，不提交。
 另以 `BUILD_TESTING=OFF` 完成独立 Release 核心库构建，确认没有生成测试目标；
-该附加验证的临时构建目录在收尾时清理，正常 Debug/Release 目录保留以便查看结果和复用。
+该附加验证的临时构建目录在收尾时清理，正常 Release 目录保留以便查看结果和复用。
 
 验证边界：样本无重复不证明全局无碰撞，方案级重复身份检查仍在 S2.5；
 系统随机源失败已实现为 `IdGenerationFailed`，本次未通过故障注入执行该系统失败路径。
@@ -978,7 +1199,7 @@ S2 开始时确定适用的工具链、依赖与测试框架，将具体 C++ 类
 本节为 S2.2 结束时的历史记录；后续 S2.3 的实现与验证见 §8.6。
 
 - 日期：2026-10-30。
-- 结论：**S2.2 完成，Debug/Release 各 14/14 项 CTest 通过**，包含 S2.1 回归及预期失败检查。
+- 结论：**S2.2 完成，Release 14/14 项 CTest 通过**，包含 S2.1 回归及预期失败检查。
   S2.3–S2.7 尚未开始，整个 S2 尚未通过验收。
 - 代码基线：`12f5d1f` 加本会话 S2.1 和 S2.2 工作区改动，未创建 Git 提交，保留前一阶段成果。
 - 公共接口：[UUID 身份](../include/visionpro/core/id.hpp)、[Schema 身份](../include/visionpro/core/schema_id.hpp)、
@@ -993,22 +1214,22 @@ S2 开始时确定适用的工具链、依赖与测试框架，将具体 C++ 类
 - 会话/运行/作用域等仅作固定内存身份夹具，不代表实际运行；方案/快照、工具执行、图像、ROI、
   队列、设备及厂商后端版本在本子阶段不适用。
 
-| 场景子范围 / 测试入口 | 期望与验证内容 | Debug 实际结果 | Release 实际结果 |
-|---|---|---|---|
-| A03/A04 身份：`core.identities` | UUID/Schema/运行类别不混用；27 类身份编译期隔离，token/关联键边界，计数下界/耗尽，组合键各维度不同 | 1111 检查，0 失败 | 1111 检查，0 失败 |
-| A05 值：`core.values` | 配置值/运行值隔离；标量边界、空 List、None、缺失、错误分别表达；不可变持有和复制/移动有效 | 116 检查，0 失败 | 116 检查，0 失败 |
-| A05/A32 类型：`core.schema` | Record/Enum 身份、版本、字段/成员及嵌套结构；未知/重复/缺失/错类型拒绝，诊断保留字段或索引 | 161 检查，0 失败 | 161 检查，0 失败 |
-| A32 编码：`core.utf8` | UTF-8 标量边界、中文/emoji/NUL 与有界视图；过长编码、代理项、超范围、孤立延续、截断拒绝 | 270 检查，0 失败 | 270 检查，0 失败 |
-| A06 元数据：`core.metadata` | 输入/参数/数据输出/控制出口分开；重复声明、未知枚举、订阅/结构参数与必填/默认规则可校验 | 24 检查，0 失败 | 24 检查，0 失败 |
-| A06 约束：`core.constraints` | 数值范围、枚举集合、容量及非法约束声明；None/缺值/默认/来源错误的行为不同 | 40 检查，0 失败 | 40 检查，0 失败 |
-| A06 转换：`core.conversions` | 精确匹配、Optional 包装、显式数值转换许可；单来源/集合/多来源区别 | 19 检查，0 失败 | 19 检查，0 失败 |
-| A32 兼容：`core.compatibility` | Schema 版本区间、所需能力、完整性、同身份版本的嵌套定义一致性；失败不删除字段 | 20 检查，0 失败 | 20 检查，0 失败 |
-| S2.1 回归与测试可靠性 | 原 5 个行为组与 `core.failure_exit`；正常检查不依赖 assert，故意失败进程退出码 1 | 6/6 通过，正常 5344 检查；故意失败退出 1 | 6/6 通过，正常 5344 检查；故意失败退出 1 |
+| 场景子范围 / 测试入口 | 期望与验证内容 | Release 实际结果 |
+|---|---|---|
+| A03/A04 身份：`core.identities` | UUID/Schema/运行类别不混用；27 类身份编译期隔离，token/关联键边界，计数下界/耗尽，组合键各维度不同 | 1111 检查，0 失败 |
+| A05 值：`core.values` | 配置值/运行值隔离；标量边界、空 List、None、缺失、错误分别表达；不可变持有和复制/移动有效 | 116 检查，0 失败 |
+| A05/A32 类型：`core.schema` | Record/Enum 身份、版本、字段/成员及嵌套结构；未知/重复/缺失/错类型拒绝，诊断保留字段或索引 | 161 检查，0 失败 |
+| A32 编码：`core.utf8` | UTF-8 标量边界、中文/emoji/NUL 与有界视图；过长编码、代理项、超范围、孤立延续、截断拒绝 | 270 检查，0 失败 |
+| A06 元数据：`core.metadata` | 输入/参数/数据输出/控制出口分开；重复声明、未知枚举、订阅/结构参数与必填/默认规则可校验 | 24 检查，0 失败 |
+| A06 约束：`core.constraints` | 数值范围、枚举集合、容量及非法约束声明；None/缺值/默认/来源错误的行为不同 | 40 检查，0 失败 |
+| A06 转换：`core.conversions` | 精确匹配、Optional 包装、显式数值转换许可；单来源/集合/多来源区别 | 19 检查，0 失败 |
+| A32 兼容：`core.compatibility` | Schema 版本区间、所需能力、完整性、同身份版本的嵌套定义一致性；失败不删除字段 | 20 检查，0 失败 |
+| S2.1 回归与测试可靠性 | 原 5 个行为组与 `core.failure_exit`；正常检查不依赖 assert，故意失败进程退出码 1 | 6/6 通过，正常 5344 检查；故意失败退出 1 |
 
-每种配置的新增 8 组共 1761 次检查；加上 S2.1 回归，每种配置共 7105 次正常检查，
-另有 1 次预期失败检查。结果可从 §3.2 的 `LastTest.log` 复核，Debug/Release 构建目录保留供后续使用。
+Release 的新增 8 组共 1761 次检查；加上 S2.1 回归，Release 共 7105 次正常检查，
+另有 1 次预期失败检查。结果可从 §3.2 的 `LastTest.log` 复核，Release 构建目录保留供后续使用。
 初次编译的类型隔离断言发现 `FrameId` 聚合允许仅给来源并默认序号，已改为必须显式提供两个参数；
-原断言未放宽，最终两种配置均通过。嵌套类型相等比较使用明确的递归调用，最终构建不再报告相应 MSVC 比较警告。
+原断言未放宽，最终 Release 配置通过。嵌套类型相等比较使用明确的递归调用，最终构建不再报告相应 MSVC 比较警告。
 
 验证边界与后续衔接：
 
@@ -1025,7 +1246,7 @@ S2 开始时确定适用的工具链、依赖与测试框架，将具体 C++ 类
 本节为 S2.3 结束时的历史记录；后续 S2.4 的实现与验证见 §8.7。
 
 - 日期：2026-10-30。
-- 结论：**S2.3 完成，Debug/Release 各 24/24 项 CTest 通过**，包含 S2.1–S2.2 回归与预期失败检查。
+- 结论：**S2.3 完成，Release 24/24 项 CTest 通过**，包含 S2.1–S2.2 回归与预期失败检查。
   下一项为 S2.4；S2.4–S2.7 尚未开始，整个 S2 尚未通过验收。
 - 代码基线：`12f5d1f` 加本会话 S2.1–S2.3 工作区改动；保留已有改动，未创建 Git 提交。
 - 公共接口：[image.hpp](../include/visionpro/core/image.hpp)、[coordinate.hpp](../include/visionpro/core/coordinate.hpp)、
@@ -1037,23 +1258,23 @@ S2 开始时确定适用的工具链、依赖与测试框架，将具体 C++ 类
   夹具包括带填充行的小图、嵌套裁剪、固定坐标/矩阵/区域、掩膜、资源目录及会话/运行/调用状态记录，
   不读取实际图像文件、不连接设备、不使用厂商运行库。
 - 环境沿用 §2，实际命令见 §3.3；核心和测试仍无 Qt/OpenCV 或新第三方依赖。
-  最终 Debug/Release 构建均返回 0，构建日志无编译警告。
+  最终 Release 构建返回 0，构建日志无编译警告。
 
-| 场景子范围 / 测试入口 | 验证内容 | Debug 实际结果 | Release 实际结果 |
-|---|---|---|---|
-| A09：`core.image_layout` | 深度/通道、行步长、末行长度、短缓冲、零尺寸、乘加溢出及未知格式 | 136 检查，0 失败 | 136 检查，0 失败 |
-| A09：`core.image_ownership` | 外部复制、只读共享、裁剪保活、根坐标累计、独立导出与克隆 | 53 检查，0 失败 | 53 检查，0 失败 |
-| A10：`core.geometry` | 坐标轴/手性/单位、点线圆位姿、相似/仿射/投影、显式求逆、源有效域、数值边界和标定后端拒绝 | 70 检查，0 失败 | 70 检查，0 失败 |
-| A10：`core.regions` | 多形状、自交/退化、继承/修正/排除、边界/空域、坐标目录和工具能力 | 81 检查，0 失败 | 81 检查，0 失败 |
-| A26：`core.masks` | 配置引用/运行像素分离、单通道/阈值、尺寸/坐标匹配、显式映射/采样、所有权 | 40 检查，0 失败 | 40 检查，0 失败 |
-| 资源模型：`core.resources` | 托管/外部/序列/设备/输出定义、路径基准/逃逸、目录身份/类别/版本引用 | 51 检查，0 失败 | 51 检查，0 失败 |
-| A08：`core.shared_definitions` | 全局定义/当前值、完整队列消息、容量/收发策略、身份和精确类型 | 20 检查，0 失败 | 20 检查，0 失败 |
-| A01：`core.state_models` | 三类状态域、节点/会话/运行隔离、代次溢出、初始化值/错误一致性和策略声明 | 23 检查，0 失败 | 23 检查，0 失败 |
-| A05/A09/A26：`core.domain_values` | 两值域编译期隔离、嵌套 Image/Mask 保活、类型诊断、ROI/容器/Schema 保留可写别名回归 | 167 检查，0 失败 | 167 检查，0 失败 |
-| A06/A32：`core.domain_metadata` | 工具状态/资源/图像/区域能力声明、重复/非法声明、状态嵌套 Schema 冲突 | 53 检查，0 失败 | 53 检查，0 失败 |
-| S2.1–S2.2 回归与测试可靠性 | 原有行为与 `core.failure_exit`；故意失败入口直接调用也返回 1 | 14/14 通过，正常 7105 检查；故意失败退出 1 | 14/14 通过，正常 7105 检查；故意失败退出 1 |
+| 场景子范围 / 测试入口 | 验证内容 | Release 实际结果 |
+|---|---|---|
+| A09：`core.image_layout` | 深度/通道、行步长、末行长度、短缓冲、零尺寸、乘加溢出及未知格式 | 136 检查，0 失败 |
+| A09：`core.image_ownership` | 外部复制、只读共享、裁剪保活、根坐标累计、独立导出与克隆 | 53 检查，0 失败 |
+| A10：`core.geometry` | 坐标轴/手性/单位、点线圆位姿、相似/仿射/投影、显式求逆、源有效域、数值边界和标定后端拒绝 | 70 检查，0 失败 |
+| A10：`core.regions` | 多形状、自交/退化、继承/修正/排除、边界/空域、坐标目录和工具能力 | 81 检查，0 失败 |
+| A26：`core.masks` | 配置引用/运行像素分离、单通道/阈值、尺寸/坐标匹配、显式映射/采样、所有权 | 40 检查，0 失败 |
+| 资源模型：`core.resources` | 托管/外部/序列/设备/输出定义、路径基准/逃逸、目录身份/类别/版本引用 | 51 检查，0 失败 |
+| A08：`core.shared_definitions` | 全局定义/当前值、完整队列消息、容量/收发策略、身份和精确类型 | 20 检查，0 失败 |
+| A01：`core.state_models` | 三类状态域、节点/会话/运行隔离、代次溢出、初始化值/错误一致性和策略声明 | 23 检查，0 失败 |
+| A05/A09/A26：`core.domain_values` | 两值域编译期隔离、嵌套 Image/Mask 保活、类型诊断、ROI/容器/Schema 保留可写别名回归 | 167 检查，0 失败 |
+| A06/A32：`core.domain_metadata` | 工具状态/资源/图像/区域能力声明、重复/非法声明、状态嵌套 Schema 冲突 | 53 检查，0 失败 |
+| S2.1–S2.2 回归与测试可靠性 | 原有行为与 `core.failure_exit`；故意失败入口直接调用也返回 1 | 14/14 通过，正常 7105 检查；故意失败退出 1 |
 
-每种配置新增 694 次检查，总计 **7799 次正常检查，0 失败**，另有 1 次预期失败检查。
+Release 新增 694 次检查，总计 **7799 次正常检查，0 失败**，另有 1 次预期失败检查。
 编译期断言同时验证配置域不能持运行图像/掩膜及跨值域容器；检查数不包括这些编译期断言。
 完整行为输出保存在 §3.3 的 `LastTest.log`，构建目录与日志保留供复核。
 
@@ -1080,7 +1301,7 @@ S2 开始时确定适用的工具链、依赖与测试框架，将具体 C++ 类
 本节为 S2.4 结束时的历史记录；S2.5 的后续实现与验证见 §8.8。
 
 - 日期：2026-10-30。
-- 结论：**S2.4 完成，Debug/Release 各 34/34 项 CTest 通过**；新增 workflow 模型、快照、复制和请求/结果测试。
+- 结论：**S2.4 完成，Release 34/34 项 CTest 通过**；新增 workflow 模型、快照、复制和请求/结果测试。
   下一项为 S2.5；S2.5–S2.7 尚未开始，整个 S2 尚未通过验收。
 - 代码基线：`12f5d1f` 加本会话 S2.1–S2.4 工作区改动；未覆盖前阶段成果，未创建 Git 提交。
 - 新增 `visionpro_workflow` 静态库，公开依赖 `visionpro_core`，继续使用标准 C++20，不增加 GUI 或第三方依赖。
@@ -1092,27 +1313,27 @@ S2 开始时确定适用的工具链、依赖与测试框架，将具体 C++ 类
   夹具包括五路测量/条件/汇合、嵌套 Group、两个流程的方案、嵌套资源/ROI 引用、固定内存图像、独立请求和人工终态结果。
   快照夹具使用方案格式版本 2/修订 12、工具配置版本 7/Schema 版本 2；固定 UUID/token、Session/Snapshot/Run/Scope/Invocation/Attempt
   及关联身份的具体取值见对应测试工厂。身份只是内存夹具，未发生真实节点调用。
-- 环境沿用 §2，实际命令见 §3.4；Debug/Release 配置与构建均返回 0，构建日志无编译警告。
+- 环境沿用 §2，实际命令见 §3.4；Release 配置与构建均返回 0，构建日志无编译警告。
   未加载实际资源文件、连接设备、执行图像算法或调用厂商 SDK。
 
-| 场景子范围 / 测试入口 | 验证内容 | Debug 实际结果 | Release 实际结果 |
-|---|---|---|---|
-| A01/A13/A24：`workflow.model_graph` | 同类型配置独立、五路分叉/多前驱汇合、嵌套 Group、直接/递归枚举、公开数据与控制映射、改名/布局不改引用 | 21 检查，0 失败 | 21 检查，0 失败 |
-| A06：`workflow.model_bindings` | 输入/参数目标、五类来源、系统字段/固定选择器、源基数、转换及缺失策略的形状检查 | 40 检查，0 失败 | 40 检查，0 失败 |
-| A03/A24：`workflow.model_structure` | 方案内身份唯一性、包含缺父/多父/环、入口层级、公开导出目标、布局和非法局部定义 | 89 检查，0 失败 | 89 检查，0 失败 |
-| A01/A09：`workflow.snapshots` | 配置与工具元数据深复制、保留可写别名隔离、源释放保活、只读 API、快照身份和缺工具草稿边界 | 25 检查，0 失败 | 25 检查，0 失败 |
-| A03/A24：`workflow.copy_subgraph` | Group 后代闭包、内部引用/包含/数据及控制导出重映射、外部来源报告、跨选区控制线略过 | 24 检查，0 失败 | 24 检查，0 失败 |
-| A03：`workflow.copy_solution` | 新方案及各持久身份、两个 Workflow、资源/变量/队列/布局、复合值内 ROI/Mask/标定引用和公开默认值重映射 | 25 检查，0 失败 | 25 检查，0 失败 |
-| A03：`workflow.copy_boundaries` | 明确 Preserve/Reject、外部父及外部或错误归属的引用、非法选择/结构、失败不修改输入 | 15 检查，0 失败 | 15 检查，0 失败 |
-| A23/A24：`workflow.run_inputs` | Workflow/Node/Group 目标、禁用祖先、精确工具版本、必需 Optional、未知/重复/错类型、范围与默认值物化 | 56 检查，0 失败 | 56 检查，0 失败 |
-| A01/A09/A23：`workflow.run_isolation` | 多请求输入隔离、无旧输入回退、保留别名隔离、快照固定和图像缓冲保活 | 15 检查，0 失败 | 15 检查，0 失败 |
-| A04：`workflow.result_models` | 运行/快照/调用/尝试身份、输出地址、NG 成功、三类输出可用性、失败输出拒绝、终态记录隔离 | 67 检查，0 失败 | 67 检查，0 失败 |
-| S2.1–S2.3 回归与测试可靠性 | 原 24 项；故意失败入口也直接调用，验证退出码传递 | 24/24 通过，正常 7799 检查；故意失败退出 1 | 24/24 通过，正常 7799 检查；故意失败退出 1 |
+| 场景子范围 / 测试入口 | 验证内容 | Release 实际结果 |
+|---|---|---|
+| A01/A13/A24：`workflow.model_graph` | 同类型配置独立、五路分叉/多前驱汇合、嵌套 Group、直接/递归枚举、公开数据与控制映射、改名/布局不改引用 | 21 检查，0 失败 |
+| A06：`workflow.model_bindings` | 输入/参数目标、五类来源、系统字段/固定选择器、源基数、转换及缺失策略的形状检查 | 40 检查，0 失败 |
+| A03/A24：`workflow.model_structure` | 方案内身份唯一性、包含缺父/多父/环、入口层级、公开导出目标、布局和非法局部定义 | 89 检查，0 失败 |
+| A01/A09：`workflow.snapshots` | 配置与工具元数据深复制、保留可写别名隔离、源释放保活、只读 API、快照身份和缺工具草稿边界 | 25 检查，0 失败 |
+| A03/A24：`workflow.copy_subgraph` | Group 后代闭包、内部引用/包含/数据及控制导出重映射、外部来源报告、跨选区控制线略过 | 24 检查，0 失败 |
+| A03：`workflow.copy_solution` | 新方案及各持久身份、两个 Workflow、资源/变量/队列/布局、复合值内 ROI/Mask/标定引用和公开默认值重映射 | 25 检查，0 失败 |
+| A03：`workflow.copy_boundaries` | 明确 Preserve/Reject、外部父及外部或错误归属的引用、非法选择/结构、失败不修改输入 | 15 检查，0 失败 |
+| A23/A24：`workflow.run_inputs` | Workflow/Node/Group 目标、禁用祖先、精确工具版本、必需 Optional、未知/重复/错类型、范围与默认值物化 | 56 检查，0 失败 |
+| A01/A09/A23：`workflow.run_isolation` | 多请求输入隔离、无旧输入回退、保留别名隔离、快照固定和图像缓冲保活 | 15 检查，0 失败 |
+| A04：`workflow.result_models` | 运行/快照/调用/尝试身份、输出地址、NG 成功、三类输出可用性、失败输出拒绝、终态记录隔离 | 67 检查，0 失败 |
+| S2.1–S2.3 回归与测试可靠性 | 原 24 项；故意失败入口也直接调用，验证退出码传递 | 24/24 通过，正常 7799 检查；故意失败退出 1 |
 
-每种配置新增 **377 次检查**，总计 **8176 次正常检查，0 失败**，另有 1 次预期失败检查；
+Release 新增 **377 次检查**，总计 **8176 次正常检查，0 失败**，另有 1 次预期失败检查；
 编译期断言验证只读接口及配置/运行类型边界，不计入上述运行检查数。
-Debug/Release 日志及构建目录保留供复核；完整输出路径见 §3.4。
-实现审查补齐了 Group/Workflow 的控制出口导出及复制/快照回归，测试标准未放宽；两种配置均一次构建和全量测试通过。
+Release 日志及构建目录保留供复核；完整输出路径见 §3.4。
+实现审查补齐了 Group/Workflow 的控制出口导出及复制/快照回归，测试标准未放宽；Release 配置一次构建和全量测试通过。
 
 验证边界与后续衔接：
 
@@ -1130,29 +1351,29 @@ Debug/Release 日志及构建目录保留供复核；完整输出路径见 §3.4
 ### 8.8 S2.5 实现与验证记录
 
 - 日期：2026-11-09。
-- 结论：**S2.5 完成，Debug/Release 各 39/39 项 CTest 通过**；新增 5 项静态校验测试，保留全部 34 项前阶段回归。
+- 结论：**S2.5 完成，Release 39/39 项 CTest 通过**；新增 5 项静态校验测试，保留全部 34 项前阶段回归。
   S2.6–S2.7 尚未实现，整个 S2 尚未通过验收。
 - 公共入口：[validation.hpp](../include/visionpro/workflow/validation.hpp) 的 `validate_solution` 与 `system_field_type`；
   实现位于 `source/workflow/validation.cpp`，内部领域值递归检查位于 `validation_values.cpp`。
 - 测试：[validation_tests.cpp](../tests/workflow/validation_tests.cpp) 覆盖图、绑定、Group 与 Schema，
   [validation_domain_tests.cpp](../tests/workflow/validation_domain_tests.cpp) 覆盖 ROI 继承、嵌套资源与坐标/能力检查。
 - 环境与 §2 相同：Windows x64、MSVC 19.51.36248.0、Windows SDK 10.0.26100.0、CMake/CTest 4.4.0。
-  §3.5 两种配置的配置、最终构建和全量测试均返回 0，最终构建日志无编译警告。
-  本地日志保留在 `out/build/s25-debug/`、`out/build/s25-release/` 下的 `build.log` 与 `Testing/Temporary/LastTest.log`，均被 Git 忽略。
+  §3.5 Release 的配置、最终构建和全量测试均返回 0，最终构建日志无编译警告。
+  本地日志保留在 `out/build/s25-release/` 下的 `build.log` 与 `Testing/Temporary/LastTest.log`，均被 Git 忽略。
 - 本次在已有 S2.1–S2.4 未提交工作区基础上补充实现；没有覆盖前阶段成果或创建 Git 提交。
 - 验证边界：静态类型、引用、控制可达性与依赖索引；没有结果解析、实际调度、资源加载、设备访问或算法运行。
   S2.6 负责运行结果/公开输入取值、实际 List 长度和可用性，S2.7 负责接口收敛，S3 负责运行与提交。
 
-| 场景子范围 / 测试入口 | 实际验证内容 | Debug | Release |
-|---|---|---|---|
-| A03/A13：`workflow.validation_graph` | 五路分叉/汇合、非相邻/兄弟依赖、普通回边、自环、直接/间接逆序、纯数据/混合环、显式入口及范围外前驱/来源、诊断与索引 | 56 检查，0 失败 | 56 检查，0 失败 |
-| A06/A07：`workflow.validation_bindings` | 字段/固定索引、目标/来源、基数、转换、Optional/缺失、默认值、静态长度约束、单位、公开输入/全局/资源及系统字段 | 112 检查，0 失败 | 112 检查，0 失败 |
-| A24：`workflow.validation_groups` | 两层嵌套 Group、逐层数据/控制映射、映射完整性、作用域穿透与来源可达性 | 43 检查，0 失败 | 43 检查，0 失败 |
-| A03/A32：`workflow.validation_schema` | 工具注册/版本、完整 Schema、显式能力支持、跨工具/公开接口/队列的类型冲突、同版本端口结构与改名 | 41 检查，0 失败 | 41 检查，0 失败 |
-| A10/A26：`workflow.validation_domains` | ROI 来源/排除项的隐藏依赖、权限/禁用/结构参数、嵌套值路径、坐标/能力、掩膜/标定资源、资源槽、状态初值/设备配置 | 110 检查，0 失败 | 110 检查，0 失败 |
-| 既有 34 项 CTest | S2.1–S2.4 回归，含 `core.failure_exit` 预期失败入口 | 全部通过 | 全部通过 |
+| 场景子范围 / 测试入口 | 实际验证内容 | Release |
+|---|---|---|
+| A03/A13：`workflow.validation_graph` | 五路分叉/汇合、非相邻/兄弟依赖、普通回边、自环、直接/间接逆序、纯数据/混合环、显式入口及范围外前驱/来源、诊断与索引 | 56 检查，0 失败 |
+| A06/A07：`workflow.validation_bindings` | 字段/固定索引、目标/来源、基数、转换、Optional/缺失、默认值、静态长度约束、单位、公开输入/全局/资源及系统字段 | 112 检查，0 失败 |
+| A24：`workflow.validation_groups` | 两层嵌套 Group、逐层数据/控制映射、映射完整性、作用域穿透与来源可达性 | 43 检查，0 失败 |
+| A03/A32：`workflow.validation_schema` | 工具注册/版本、完整 Schema、显式能力支持、跨工具/公开接口/队列的类型冲突、同版本端口结构与改名 | 41 检查，0 失败 |
+| A10/A26：`workflow.validation_domains` | ROI 来源/排除项的隐藏依赖、权限/禁用/结构参数、嵌套值路径、坐标/能力、掩膜/标定资源、资源槽、状态初值/设备配置 | 110 检查，0 失败 |
+| 既有 34 项 CTest | S2.1–S2.4 回归，含 `core.failure_exit` 预期失败入口 | 全部通过 |
 
-每种配置新增 **362 次正常检查**，总计 **8538 次正常检查，0 失败**，另有 1 次预期失败检查。
+Release 新增 **362 次正常检查**，总计 **8538 次正常检查，0 失败**，另有 1 次预期失败检查。
 测试使用固定 UUID/token、内存 Schema/图/ROI/资源目录，不读取真实资源、运行算法或连接设备。
 最终 `git diff --check` 无空白错误；本次构建目录保留作验证依据，没有其他临时文件。
 
@@ -1164,7 +1385,7 @@ Debug/Release 日志及构建目录保留供复核；完整输出路径见 §3.4
 ### 8.9 S2.6 实现与验证记录
 
 - 日期：2026-11-09。
-- 结论：**S2.6 完成，Debug/Release 各 44/44 项 CTest 通过**。
+- 结论：**S2.6 完成，Release 44/44 项 CTest 通过**。
   新增 5 项结果访问/解析测试，全部前阶段回归通过；S2.7 尚未开始，整个 S2 尚未通过验收。
 - 公共入口：[result_store.hpp](../include/visionpro/workflow/result_store.hpp) 的 `ResultStore`，
   [resolver.hpp](../include/visionpro/workflow/resolver.hpp) 的 `BindingResolver`、`ResolutionContext` 和四态解析结果。
@@ -1172,20 +1393,20 @@ Debug/Release 日志及构建目录保留供复核；完整输出路径见 §3.4
 - 测试：[result_store_tests.cpp](../tests/workflow/result_store_tests.cpp) 与
   [resolver_tests.cpp](../tests/workflow/resolver_tests.cpp)；新增 5 项 CTest，合计 44 项。
 - 环境与 §2 相同：Windows x64、MSVC 19.51.36248.0、Windows SDK 10.0.26100.0、CMake/CTest 4.4.0。
-  §3.6 两种配置的配置、最终构建和全量测试均返回 0，最终构建日志没有编译警告。
-  日志保留在 `out/build/s26-debug/`、`out/build/s26-release/` 的 `build.log` 与 `Testing/Temporary/LastTest.log`，均被 Git 忽略。
+  §3.6 Release 的配置、最终构建和全量测试均返回 0，最终构建日志没有编译警告。
+  日志保留在 `out/build/s26-release/` 的 `build.log` 与 `Testing/Temporary/LastTest.log`，均被 Git 忽略。
 - 本次在已有 S2.1–S2.5 未提交工作区上继续实现，没有覆盖前阶段成果或创建 Git 提交。
 
-| 场景子范围 / 测试入口 | 验证内容 | Debug | Release |
-|---|---|---|---|
-| A04/A09：`workflow.result_store` | 完整输出 Schema、精确会话/运行/快照/调用身份、重复调用拒绝、退役运行与持有值保活 | 81 检查，0 失败 | 81 检查，0 失败 |
-| A05/A06：`workflow.resolver_values` | 常量/默认值、参数、本轮字段/固定索引、显式转换、多来源顺序和运行约束 | 35 检查，0 失败 | 35 检查，0 失败 |
-| A04/A07：`workflow.resolver_availability` | Pending、正常缺失、失败/取消/超时、系统字段、Optional 不吞错、原始原因及四态优先级 | 52 检查，0 失败 | 52 检查，0 失败 |
-| A04：`workflow.resolver_isolation` | 会话/运行/作用域/调用隔离、显式同宿主外层可见性、禁止兄弟域读取、退役与上下文检查 | 35 检查，0 失败 | 35 检查，0 失败 |
-| A08/A09/A10/A23/A24/A26：`workflow.resolver_domains` | 公开输入及 Group 作用域隔离、资源/全局快照、图像保活与格式、嵌套 ROI 完整冻结、坐标与组合能力 | 48 检查，0 失败 | 48 检查，0 失败 |
-| 既有 39 项 CTest | S2.1–S2.5 回归，含 `core.failure_exit` 预期失败入口 | 全部通过 | 全部通过 |
+| 场景子范围 / 测试入口 | 验证内容 | Release |
+|---|---|---|
+| A04/A09：`workflow.result_store` | 完整输出 Schema、精确会话/运行/快照/调用身份、重复调用拒绝、退役运行与持有值保活 | 81 检查，0 失败 |
+| A05/A06：`workflow.resolver_values` | 常量/默认值、参数、本轮字段/固定索引、显式转换、多来源顺序和运行约束 | 35 检查，0 失败 |
+| A04/A07：`workflow.resolver_availability` | Pending、正常缺失、失败/取消/超时、系统字段、Optional 不吞错、原始原因及四态优先级 | 52 检查，0 失败 |
+| A04：`workflow.resolver_isolation` | 会话/运行/作用域/调用隔离、显式同宿主外层可见性、禁止兄弟域读取、退役与上下文检查 | 35 检查，0 失败 |
+| A08/A09/A10/A23/A24/A26：`workflow.resolver_domains` | 公开输入及 Group 作用域隔离、资源/全局快照、图像保活与格式、嵌套 ROI 完整冻结、坐标与组合能力 | 48 检查，0 失败 |
+| 既有 39 项 CTest | S2.1–S2.5 回归，含 `core.failure_exit` 预期失败入口 | 全部通过 |
 
-每种配置新增 **251 次正常检查**，总计 **8789 次正常检查，0 失败**，另有 1 次预期失败检查。
+Release 新增 **251 次正常检查**，总计 **8789 次正常检查，0 失败**，另有 1 次预期失败检查。
 夹具使用固定 UUID/token、人工终态、运行作用域、内存图像/ROI 和资源/全局快照；没有真实工具调用或设备访问。
 审查补齐了所有绑定的运行身份/退役前置校验、继承 ROI 跨边界组合能力，以及空图像格式列表拒绝规则，
 对应正反例和既有 RunRequest 回归均通过。最终 `git diff --check` 无空白错误；构建日志保留作验收依据。
@@ -1209,26 +1430,26 @@ Debug/Release 日志及构建目录保留供复核；完整输出路径见 §3.4
 
 - 日期：2026-11-09。
 - 当前状态：**S2.7 完成，S2 整体验收通过**。既有 S2.1–S2.6 全部回归、新增运行接口、
-  所有权/错误边界与组合验证均在 Debug/Release 通过；14 项必需 S2 子范围证据见下表。
+  所有权/错误边界与组合验证均在 Release 通过；14 项必需 S2 子范围证据见下表。
 - 范围：收敛 RunHandle、实例工厂、InvocationOperation 及其与快照/固定输入的边界；
   使用可控测试替身验证契约，不建设调度器、真实设备适配或完整共享服务。
 - 版本和环境：基准 HEAD `12f5d1f` 上的当前未提交工作区，已有 S2.1–S2.6 修改保留；工具链沿用 §2。
-  C++20、Windows x64、MSVC 19.51.36248.0、CMake/CTest 4.4.0；Debug `/MDd`、Release `/MD`。
+  C++20、Windows x64、MSVC 19.51.36248.0、CMake/CTest 4.4.0；Release `/MD`。
   新接口为 core/workflow 各自的 `tool_execution.hpp` 和 workflow `run_handle.hpp`；
   测试为 core `tool_execution_tests.cpp`、workflow `run_handle_tests.cpp`、`tool_execution_tests.cpp`、`composition_tests.cpp`。
-  日志位于 `out/build/s27-debug`、`out/build/s27-release` 的 `build.log` 和 `Testing/Temporary/LastTest.log`。
+  日志位于 `out/build/s27-release` 的 `build.log` 和 `Testing/Temporary/LastTest.log`。
 - 新增 CTest：`core.tool_execution`、`workflow.run_handles`、`workflow.tool_execution`、`workflow.composition`；
   共 48 项，保留 S2.6 的全部 44 项。
 
-| 本轮验证 | Debug | Release |
-|---|---|---|
-| §3.7 配置与全量重建退出码、编译警告 | 0；0 警告 | 0；0 警告 |
-| 既有 44 项 CTest 回归 | 44/44 通过 | 44/44 通过 |
-| `core.tool_execution` 实例与操作契约 | 91 检查，0 失败 | 91 检查，0 失败 |
-| `workflow.run_handles` 已受理句柄契约 | 60 检查，0 失败 | 60 检查，0 失败 |
-| `workflow.tool_execution` 固定调用与结果投影 | 38 检查，0 失败 | 38 检查，0 失败 |
-| `workflow.composition` 固定内存组合验收 | 27 检查，0 失败 | 27 检查，0 失败 |
-| 全量 CTest、正常检查及预期失败入口 | 48/48；9,005 正常检查，0 失败；1 项预期失败符合预期 | 48/48；9,005 正常检查，0 失败；1 项预期失败符合预期 |
+| 本轮验证 | Release |
+|---|---|
+| §3.7 配置与全量重建退出码、编译警告 | 0；0 警告 |
+| 既有 44 项 CTest 回归 | 44/44 通过 |
+| `core.tool_execution` 实例与操作契约 | 91 检查，0 失败 |
+| `workflow.run_handles` 已受理句柄契约 | 60 检查，0 失败 |
+| `workflow.tool_execution` 固定调用与结果投影 | 38 检查，0 失败 |
+| `workflow.composition` 固定内存组合验收 | 27 检查，0 失败 |
+| 全量 CTest、正常检查及预期失败入口 | 48/48；9,005 正常检查，0 失败；1 项预期失败符合预期 |
 
 本轮每配置新增 216 个正常检查。两次 CTest 均退出 0；编译使用 `/W4`，不依赖 `assert` 维持 Release 检查。
 `git diff --check` 无空白错误；core 没有反向包含 workflow，两个库与测试均不依赖 Qt/OpenCV 或窗口初始化。
@@ -1238,7 +1459,7 @@ Debug/Release 日志及构建目录保留供复核；完整输出路径见 §3.4
 #### 8.10.1 十四项 S2 子范围证据矩阵
 
 下列 CTest 名称已与 `tests/core/CMakeLists.txt`、`tests/workflow/CMakeLists.txt` 核对。
-“已有证据”引用 §8.4–§8.9 的 Debug/Release 实测结果；本轮全量回归已再次通过上述全部入口。
+“已有证据”引用 §8.4–§8.9 的 Release 实测结果；本轮全量回归已再次通过上述全部入口。
 这里只验收 development §5.4/requirements §4 的 S2 子范围，不将各场景的 S3–S6 运行义务提前记为完成。
 
 | 场景 | S2 子范围与现有精确 CTest 入口 | 已有证据与后续边界 |
@@ -1268,7 +1489,7 @@ Debug/Release 日志及构建目录保留供复核；完整输出路径见 §3.4
 现有 `resolver_tests.cpp` 的 Harness 已串联配置构造、ConfigSnapshot 捕获、
 BindingResolver 工厂内静态校验、人工结果插入与解析，正反例按 §8.9 记录。
 S2.7 的 `workflow.composition` 已注册，夹具代码为
-[composition_tests.cpp](../tests/workflow/composition_tests.cpp)，Debug/Release 各 27 个检查通过。
+[composition_tests.cpp](../tests/workflow/composition_tests.cpp)，Release 27 个检查通过。
 它使用固定 UUID、Session/Snapshot/Run 标识，根 Scope 为 0，节点 A–D 分别使用 Invocation 1–4、Attempt 0；
 `composition.measurement` v1 Record 含 Float64 `radius` 字段。
 公开 `seed` 输入为 2×2 UInt8 Mono 图像，像素为 `[3, 17, 29, 251]`；
@@ -1285,7 +1506,7 @@ S2.7 的 `workflow.composition` 已注册，夹具代码为
 这些是内存模型、人工终态和可控接口替身证据；即使替身方法被调用，也不代表 WorkflowEngine、
 控制到达/关闭传播、真实异步回调竞争、OpenCV 检测或设备通信已经实现。
 核心接口不反向依赖 workflow，工具输入使用类型化、固定值；运行对象不回写 Node 或普通方案配置。
-公共契约与代码已核对，全部必需项和两种配置验证通过，**S2 按既定模型与绑定范围通过整体验收**。
+公共契约与代码已核对，全部必需项和 Release 配置验证通过，**S2 按既定模型与绑定范围通过整体验收**。
 实际状态服务暂未接入，含状态的 core 调用返回 MissingCapability；实例寿命/重试能力是给 S3 的声明，
 没有实例池、自动重试、生产 Busy 准入或执行器。S3 后续验收不得用上述人工结果和受控替身代替。
 
@@ -1306,7 +1527,7 @@ S2.7 的 `workflow.composition` 已注册，夹具代码为
 | 结果获取与显示通知边界 | 不可变 NodeResult、精确身份、系统字段投影和保留规则 | 假后端下轮覆盖不改已持有结果；关闭可选显示通知不阻断必要完成；慢观察者不阻塞运行，完整诊断与原码保留 |
 | 方案往返与失败保护 | Solution/Workflow、稳定 ID、类型化资源/变量/队列定义、复制重映射 | 无 GUI 加载/执行/保存同一方案；损坏/缺工具/缺资源及未知内容可诊断；加载失败保留有效配置，禁止有损覆盖 |
 | 保存提交与资源清理 | 格式/工具版本、路径基准、资源修订声明 | 临时资源/清单写入故障不破坏旧方案；清理失败与提交失败分离；交错保存者验证修订比较与提交的完整协议 |
-| 可复现无 GUI 运行入口 | core/workflow 库、固定内存夹具及 §3 构建步骤 | 无窗口初始化即可装配模拟工具并运行；输出追溯快照、运行、实际来源、顺序和诊断；Debug/Release 重复验证 |
+| 可复现无 GUI 运行入口 | core/workflow 库、固定内存夹具及 §3 构建步骤 | 无窗口初始化即可装配模拟工具并运行；输出追溯快照、运行、实际来源、顺序和诊断；Release 重复验证 |
 
 S4 再接真实视觉算法与几何像素计算；完整循环、多流程协调、连续/外部触发、真实共享读写/队列服务、
 设备及 SDK 按原阶段推进。S3 不以线程安全替代工件配对，也不提前建设动态插件或通用重试框架。
@@ -1491,10 +1712,10 @@ CTest **80/80** 项通过，包含 3 项保存事务测试和 77 项回归。
 2026-11-12 在基于 `0c7fab5` 的工作区验证 S3.9。环境为 Windows x64、本地固定 NTFS、
 Visual Studio Professional 2026、MSBuild 18.7.8、MSVC 19.51.36248.0、Windows SDK 10.0.26100.0 和 CMake/CTest 4.4.0。
 复现命令见 [§3.16](#316-s39-构建与命令行验证)。
-Debug 和 Release 均完成全量构建，CTest 各 **82/82** 项通过，包含 2 项新增命令行用例及 80 项回归。
-`out/build/s39/` 保存 `build-debug.log`、`build-release.log`、`ctest-debug.log`、`ctest-release.log` 及两个配置的 `LastTest` 日志。
+Release 完成全量构建，CTest **82/82** 项通过，包含 2 项新增命令行用例及 80 项回归。
+`out/build/s39/` 保存 `build-release.log`、`ctest-release.log` 及 Release 配置的 `LastTest` 日志。
 
-| CTest 入口 | 固定夹具及结果 | 每种配置的检查数 |
+| CTest 入口 | 固定夹具及结果 | Release 的检查数 |
 |---|---|---|
 | `app.cli_roundtrip` | 独立 CLI 进程加载含中文和空格路径的方案。托管字节 `abc` 提供 97，公开输入 `offset=7` 与保存的常量共同产生五路交付 `[104, 99, 100, 101, 102]`。11 条控制边全部到达，汇合与模拟交付各调用一次。条件掩码 3、1、0 分别交付 `[11, 22]`、`[11]` 和跳过汇合与交付。`save` 将修订 12 提交为 13；新进程重新加载后，同一输入的输出、来源关系、派发顺序、控制边和关闭原因全部一致 | 269 通过 |
 | `app.cli_diagnostics` | 核对帮助、参数错误、缺必填输入与数字越界。已受理的加法溢出运行报告 `Failed` 和 `FailFast`，保留终态摘要。未知字段拒绝覆盖保存并保留原清单及资源。损坏清单与缺失资源返回可定位诊断 | 21 通过 |
@@ -1502,7 +1723,92 @@ Debug 和 Release 均完成全量构建，CTest 各 **82/82** 项通过，包含
 回归用例 `workflow.sibling_dependencies` 验证控制就绪的消费者等待实际生产者，并在追溯中排在生产者之后，25 项检查通过。
 用 `dumpbin /DEPENDENTS` 检查 Release 命令行程序，直接依赖为 Windows 系统库和 MSVC 运行库。
 
-两套通过日志均覆盖验收矩阵引用的 41 个测试入口和 S2 的 48 个回归入口。**S3 的 26 项必验子范围全部通过**。
+Release 通过日志覆盖验收矩阵引用的 41 个测试入口和 S2 的 48 个回归入口。**S3 的 26 项必验子范围全部通过**。
 场景、行为和测试入口见 [S3 整体验收矩阵](s3-acceptance.md#场景证据)。
 
 S4 复用静态注册、无 GUI 命令行装配、运行快照和文件方案存储，接续本地图像、二值化、Blob 分析及结果判断的真实算法验证。
+
+### 8.21 S4.1 实现与验证记录
+
+2026-11-15 在 Windows x64、Visual Studio Professional 2026、MSBuild 18.7.8、MSVC 19.51.36248.0、
+Windows SDK 10.0.26100.0、CMake/CTest 4.4.0 验证。复现命令见 [§3.17](#317-s41-release-构建与验证)。
+
+两个独立 Release 构建均通过。ON 通过 **84/84** 项 CTest，包含全部既有回归和两个 S4.1 用例。
+OFF 通过 **82/82** 项 CTest，CMake 缓存无 `OpenCV_DIR`，39 个 Release 可执行文件均无 OpenCV 或 Qt 的 DLL 导入。
+构建与测试日志分别保存在 `out/build/s41-on/` 和 `out/build/s41-off/` 的 `build.log` 与 `ctest.log`。
+
+沿用本机已有的 `OpenCV-4.12/build-vs/install` 安装产物。`opencv_version.exe --verbose` 报告其实际版本为 `4.14.0-pre`，
+源码修订为 OpenCV `5d88781f74b49ec6c2f609b273ce05241d8803f1` 和 opencv_contrib `115e941b7a2a95a2855a7cfa7332ea64707a8f3b`。
+现有工程和安装包均使用 VS 2026、MSVC 19.51.36248.0、x64 和 Release `/MD`。
+包的 CMake 配置从 `opencv_world4140` 提供 `core`、`imgproc`、`imgcodecs` 三个组件。
+`dumpbin /HEADERS` 确认 DLL 的机器类型为 `8664 (x64)`，`dumpbin /DEPENDENTS` 确认其依赖 Windows 系统库（含 Media Foundation）、UCRT 和
+`MSVCP140.dll`、`CONCRT140.dll`、`VCRUNTIME140.dll`、`VCRUNTIME140_1.dll`。PNG 使用随包构建的 libpng 1.6.53。
+
+| 相对安装根目录的文件 | SHA-256 |
+|---|---|
+| `x64/vc18/lib/OpenCVConfig.cmake` | `b141a6fdca3add5be1105b4bfde155a098a7029cf370fe612b1b89eecaf23f8e` |
+| `x64/vc18/lib/OpenCVConfig-version.cmake` | `343f3d3fef18aed6c6996ee48d53827a158e2e7d53e90855329c1b9cf4571bd7` |
+| `x64/vc18/lib/OpenCVModules.cmake` | `5f86aed1d0943768c689b82752c3cc35bd8fed4aa0ada1a3cdff591923cb66b9` |
+| `x64/vc18/lib/OpenCVModules-release.cmake` | `376f2a097e3a77f126368feee3431b96d51dc6e4ec6035042908bc43b8ec3a1b` |
+| `x64/vc18/lib/opencv_world4140.lib` | `00afe3d9fa621c399ed289019849b96eb0932b456525075dbda721ddb4cbcbe1` |
+| `x64/vc18/bin/opencv_world4140.dll` | `0bdee6e91162a95d7daf03c254c2ebeb30b2b85359d0de28aad6de1d6ebbfe2d` |
+
+`tools.opencv_release_smoke` 使用两张独立构造的 2×2 图，检查原始解码、重新编码后的文件签名与像素、DLL/头文件版本一致性。
+
+| 输入 | SHA-256 | 实测结果 |
+|---|---|---|
+| 71 字节 Mono8 PNG | `7d9c8022352ed64bc7f0873007256b8374015fd54ff1887bafbc0845e6756cbd` | 像素 `[0,128;129,255]`，阈值 128 得 `[0,0;255,255]`，非零计数 2 |
+| 70 字节 24 位 BMP | `1f1280b485e1c861fe6523402e0d03f24bde1b1d0a033f60d54672332358de51` | BGR 蓝、绿、红、白，灰度转换得 `[29,150;76,255]` |
+
+`tools.vision_contracts` 通过 core 校验四个版本 1 工具描述，并验证参数边界、类型化输出与绑定、可选资源和适配诊断。
+支持的几何、掩膜和继承配置通过检查，Projective、有界修正、继承排除、Linear 掩膜采样等越界能力按区域定位返回 `UnsupportedRegion`。
+
+ON 配置在 OpenCV 查找被禁用、指定 4.12.0、选择 Debug 或显式指定 `/MT` 时均按预期失败。
+分别给 ON 和 OFF 的 CLI 加载使用四种视觉类型的单节点方案，都在受理前返回带节点和工具定位的 `UnknownTool`，退出码为 1。
+
+### 8.22 S4.2 实现与验证记录
+
+2026-11-15 在 Windows x64、MSVC 19.51.36248.0、Release `/MD` 验证，沿用 S4.1 的 OpenCV `4.14.0-pre` 安装包。
+复现命令与本轮测试范围见 [§3.18](#318-s42-release-构建与验证)。两套 CLI 的 `--help` 均成功，ON 的目录列出 `visionpro.image.read_file`。
+
+两个独立 Release 构建均通过。ON 的所选 CTest **79/79** 项通过，覆盖核心、流程、视觉工具与图像摘要。OFF 的核心和流程 CTest **74/74** 项通过。
+构建与测试日志保存在 `out/build/s42-on/` 和 `out/build/s42-off/` 各自的 `build.log` 与 `ctest.log`。
+
+| 用例 | 实测结果 |
+|---|---|
+| `core.image_ownership`、`tools.image_bridge` | 带填充的 4×3 Mono8 裁剪窗口复制为 `[12,13,14;22,23,24]`。分别修改 Mat 和发布图像的源缓冲，另一侧保持原像素。裁剪派生图保留当前和根坐标、偏移、帧身份及采集时间。尺寸、步长、长度、溢出与不支持的像素格式可诊断。 |
+| `tools.image_read` 的实际文件 | 中文和空格路径下的 2×2 PNG，两模式均得到 Mono8 `[0,128;129,255]`。BMP 的 Native8 保留蓝、绿、红、白的 BGR 像素，Gray8 得 `[29,150;76,255]`。记录指向本次 `source` 租约。 |
+| `tools.image_read` 的固定租约 | 真实 provider 取得租约后覆盖源文件。本轮仍得到 `[0,128;129,255]`，下一轮得到 `[9,17;33,65]`。替换图的 EXIF 方向为 6，像素顺序保持原样。 |
+| `tools.image_read` 的诊断 | 空与截断图像返回 `InvalidImage`，UInt16 和带 Alpha 的 PNG 返回 `UnsupportedPixelFormat`。非零原点定位到 `frame_origin`，未声明的坐标系在受理前失败。失败的解码没有有效图像输出。 |
+| `app.vision_image_summary` | 同一摘要入口读取真实 BMP 结果，输出 2×2 UInt8 BGR、当前/根坐标 `camera`、原点 `(0,0)` 和空采集元数据。 |
+
+### 8.23 S4.3 实现与验证记录
+
+2026-11-15 在 Windows x64、MSVC 19.51.36248.0、Release `/MD` 验证，沿用现有 OpenCV `4.14.0-pre`。
+复现命令和本轮测试范围见 [§3.19](#319-s43-release-构建与验证)。
+
+两个独立 Release 构建均通过。ON 执行的 CTest **82/82** 项通过，覆盖核心、流程、视觉工具和图像摘要。OFF 的核心和流程用例 **74/74** 项通过。
+构建和测试日志分别位于 `out/build/s43-on/` 和 `out/build/s43-off/` 下的 `build.log`、`ctest.log`。
+
+| 用例 | 实测结果 |
+|---|---|
+| `tools.roi` V07–V08 | 9×9 旋转矩形精确得到计划中的 7 个成员。继承后平移并扣除外层排除得到 6 个成员，加入来源自身的排除后为 5。分层方向、仿射修正、跨单位修正及展平后再求值均符合预期。 |
+| `tools.roi` V09 | `(-1,0,3,2)` 在 `Reject` 下报 `ImageBounds`，`Intersect` 下为 4 个成员。明确区分贴边、包含远端上界和微超界，验证内层的越界与空域限制、全排除的零掩膜，以及无法无损发布的分层策略。 |
+| `tools.mask` V10–V11 | 固定 3×2 掩膜的 `NonZero`、`AtLeastThreshold(128)` 分别为 4、2 个成员。2×2 掩膜平移 `(+1,0)` 后成员为 `(1,0)`、`(2,1)`，半像素和源外取样符合约定。附加 ROI 修正后局部映射仍生效。 |
+| `tools.mask` 资源与诊断 | 中文路径的实际文件通过固定租约解码。替换磁盘文件后仍可按两种有效规则读取同一租约内容。验证掩膜排除、空域、缺槽、额外槽、身份、种类、显式版本、坏编码、尺寸和像素格式诊断。 |
+| `tools.roi_runtime` | 两个节点均调用实际求值器，通过 `WorkflowEngine` 发布和继承 `Region2D`。第一轮上游裁剪后为 5 个像素，下游依据完整冻结定义重新展开后为 6 个。第二轮加入来源排除后，上游为 6 个、下游为 5 个。两轮逐一核对 `RunBindingTrace::regions` 中的来源定义、修正、路径和 `ResultIdentity`。 |
+
+### 8.24 S4.4 实现与验证记录
+
+2026-11-15 在 Windows x64、MSVC 19.51.36248.0、Release `/MD` 验证，沿用现有 OpenCV `4.14.0-pre`。
+两个 Release 构建均通过。ON 的核心、流程、视觉工具与摘要 CTest **83/83** 项通过，OFF 的核心与流程 CTest **74/74** 项通过。
+ON 的 CLI `--help` 列出读图和二值化工具，OFF 列出模拟工具。
+复现命令见 [§3.20](#320-s44-release-构建与验证)。日志位于 `out/build/s44-on/` 和 `out/build/s44-off/` 下的 `build.log`、`ctest.log`。
+
+| 用例 | 实测结果 |
+|---|---|
+| `tools.threshold` V01 阈值边界 | `[0,127,128,129,255]` 在阈值 128 得正相 `[0,0,0,255,255]` 与反相 `[255,255,255,0,0]`。阈值 0、255 的等值边界及局部 ROI 外清零均通过。局部 ROI 的阈值 255 反相结果为 `[0,255,255,255,0]`。 |
+| `tools.threshold` V06 二值化 | 4×3、步长 6 的输入裁剪到 3×2，在阈值 13 得 `[0,0,255;255,255,255]`。二值图与掩膜存储独立于输入。原图和裁剪视图像素保留，二值图保留坐标、原点、帧身份及采集时间。 |
+| `tools.threshold` 继承与坐标 | 两个真实节点发布与消费 `effective_roi`。旋转 ROI 的 7 个成员经平移和排除得到 6 个，核对上游冻结定义和调用身份。实际来源坐标错配时在消费节点的 `roi.source` 报 `CoordinateMismatch`。 |
+| `tools.threshold` 文件掩膜与失败路径 | 中文路径的实际 PNG 通过 `mask` 租约产生成员掩膜 `[0,0,255,255]`，反相结果为 `[0,0,255,0]`。越界阈值、BGR、UInt16 定位到对应参数或输入。全排除在 `Error` 下失败且无有效输出，`ValidEmptyOutput` 发布全零图与掩膜。 |
+| `app.vision_image_summary` | 保留真实 BMP 的 BGR 摘要验证，并用 Gray8 读图和两个真实阈值节点核对图像元数据、展开区域和冻结生产者身份。掩膜成员数由 3 变为 1。 |

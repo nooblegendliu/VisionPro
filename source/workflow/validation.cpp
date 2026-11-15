@@ -658,7 +658,9 @@ Check Validator::config(const ConfigValue& value, const Node* consumer, const Bi
         if (const auto* failure = std::get_if<Diagnostic>(&source)) { return *failure; }
         const auto& info = std::get<SourceType>(source);
         if (info.type != DataType::region2d()) { return error(ErrorCode::TypeMismatch, "Inherited ROI requires a Region2D output."); }
-        if (info.semantics.coordinate_system != inherited.coordinate_frame || info.semantics.unit != inherited.unit) {
+        // The resolver verifies the actual frame when the output frame is determined at invocation time.
+        if (info.semantics.unit != inherited.unit
+            || (info.semantics.coordinate_system && info.semantics.coordinate_system != inherited.coordinate_frame)) {
             return error(ErrorCode::CoordinateMismatch, "Inherited ROI declaration must match its output frame and unit before correction.");
         }
         if (!find_node(*flow_, inherited.node)->enabled

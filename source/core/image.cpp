@@ -76,6 +76,22 @@ struct ImageHandle::View {
 Result<ImageHandle> ImageHandle::copy(const ImageLayout& layout,
     std::span<const std::byte> pixels, CoordinateSystemId coordinates)
 {
+    return copy_in_frame(layout, pixels, coordinates, coordinates, 0, 0);
+}
+
+Result<ImageHandle> ImageHandle::copy_with_pixels(const ImageLayout& layout,
+    std::span<const std::byte> pixels) const
+{
+    if (layout.width != width() || layout.height != height()) {
+        return error(ErrorCode::InvalidImage, "Replacement pixel dimensions must match the source image.");
+    }
+    return copy_in_frame(layout, pixels, coordinate_frame(), root_frame(), origin_x(), origin_y());
+}
+
+Result<ImageHandle> ImageHandle::copy_in_frame(const ImageLayout& layout,
+    std::span<const std::byte> pixels, const CoordinateSystemId& coordinates,
+    const CoordinateSystemId& root_coordinates, std::size_t x, std::size_t y)
+{
     auto length = required_image_bytes(layout);
     if (const auto* failure = std::get_if<Diagnostic>(&length)) { return *failure; }
     const auto required = std::get<std::size_t>(length);
@@ -87,7 +103,7 @@ Result<ImageHandle> ImageHandle::copy(const ImageLayout& layout,
     auto storage = std::make_shared<const std::vector<std::byte>>(selected.begin(), selected.end());
     const auto bytes = std::get<std::size_t>(bytes_per_pixel(layout.format));
     return ImageHandle{std::make_shared<const View>(View{
-        std::move(storage), layout, 0, bytes, coordinates, coordinates, 0, 0})};
+        std::move(storage), layout, 0, bytes, coordinates, root_coordinates, x, y})};
 }
 
 Result<ImageHandle> ImageHandle::crop(PixelRect window, CoordinateSystemId view_coordinates) const
@@ -130,13 +146,7 @@ Result<ImageHandle> ImageHandle::clone() const
 {
     const auto pixels = copy_pixels();
     const ImageLayout layout{width(), height(), width() * view_->pixel_bytes, format()};
-    auto copied = copy(layout, pixels, coordinate_frame());
-    if (auto* image = std::get_if<ImageHandle>(&copied)) {
-        const auto& copy_view = *image->view_;
-        image->view_ = std::make_shared<const View>(View{copy_view.storage, copy_view.layout, 0,
-            view_->pixel_bytes, coordinate_frame(), root_frame(), origin_x(), origin_y()});
-    }
-    return copied;
+    return copy_with_pixels(layout, pixels);
 }
 
 std::size_t ImageHandle::width() const noexcept { return view_->layout.width; }
