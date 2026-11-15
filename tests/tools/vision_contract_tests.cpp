@@ -47,8 +47,7 @@ void schemas()
     for (const auto& tool : tools) {
         take(validate_descriptor(tool));
         check(tool.config_version == 1 && tool.schema.version == 1 && tool.schema.id.text() == tool.id.text(), "Tool Schema must be version 1.");
-        if (tool.id.text() == "visionpro.image.read_file" || tool.id.text() == "visionpro.image.threshold") { take(registry.validate(tool)); }
-        else { rejects(registry.validate(tool), ErrorCode::UnknownTool); }
+        take(registry.validate(tool));
     }
 
     const auto& reader = by_id(tools, "visionpro.image.read_file");

@@ -30,8 +30,16 @@ add_executable(visionpro_threshold_tests threshold_tests.cpp)
 target_link_libraries(visionpro_threshold_tests PRIVATE visionpro_vision_tools visionpro_infrastructure visionpro_build_options)
 add_test(NAME tools.threshold COMMAND visionpro_threshold_tests)
 
+add_executable(visionpro_blob_tests blob_tests.cpp)
+target_link_libraries(visionpro_blob_tests PRIVATE visionpro_vision_tools visionpro_infrastructure visionpro_build_options)
+add_test(NAME tools.blob COMMAND visionpro_blob_tests)
+
+add_executable(visionpro_judgement_tests judgement_tests.cpp)
+target_link_libraries(visionpro_judgement_tests PRIVATE visionpro_vision_tools visionpro_workflow visionpro_build_options)
+add_test(NAME tools.judgement COMMAND visionpro_judgement_tests)
+
 set_tests_properties(tools.opencv_release_smoke tools.vision_contracts tools.image_bridge tools.image_read
-    tools.roi tools.mask tools.roi_runtime tools.threshold PROPERTIES
+    tools.roi tools.mask tools.roi_runtime tools.threshold tools.blob tools.judgement PROPERTIES
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:opencv_core>"
     TIMEOUT 30
 )

@@ -1,4 +1,6 @@
 #include "vision_tools.hpp"
+#include "blob.hpp"
+#include "integer_range.hpp"
 #include "read_file.hpp"
 #include "threshold.hpp"
 
@@ -141,7 +143,8 @@ std::span<const core::ToolDescriptor> tool_descriptors()
 
 std::vector<core::ToolRegistration> registrations()
 {
-    return {read_file_registration(read_file_descriptor()), threshold_registration(threshold_descriptor())};
+    return {read_file_registration(read_file_descriptor()), threshold_registration(threshold_descriptor()),
+        blob_registration(blob_descriptor()), integer_range_registration(integer_range_descriptor())};
 }
 
 core::Result<std::monostate> validate_file_frame_origin(const core::Point2D& origin)

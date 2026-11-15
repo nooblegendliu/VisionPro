@@ -13,6 +13,8 @@ if(VISIONPRO_WITH_OPENCV)
         vision/roi.cpp vision/roi.hpp
         vision/roi_mask.cpp vision/roi_mask.hpp
         vision/threshold.cpp vision/threshold.hpp
+        vision/blob.cpp vision/blob.hpp
+        vision/integer_range.cpp vision/integer_range.hpp
     )
     target_include_directories(visionpro_vision_tools PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>")
     target_link_libraries(visionpro_vision_tools

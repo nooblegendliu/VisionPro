@@ -495,9 +495,22 @@ json raster_mask_json(const RasterMask& mask)
 
 json data_json(const DataValue& data)
 {
+    if (const auto* flag = data.as_bool()) { return *flag; }
     if (const auto* number = data.as_int64()) { return std::to_string(*number); }
     if (const auto* list = data.elements()) { return array_json(*list, data_json); }
+    if (const auto* fields = data.fields()) {
+        auto result = json::object();
+        for (const auto& field : *fields) { result[id_text(field.id)] = data_json(field.value); }
+        return result;
+    }
+    if (data.type().kind() == TypeKind::Optional) {
+        const auto* value = data.optional_value();
+        return value ? data_json(*value) : json(nullptr);
+    }
     if (const auto* image = data.as_image()) { return image_json(*image); }
+    if (const auto* point = data.as_point2d()) {
+        return {{"coordinate_frame", id_text(point->coordinate_frame)}, {"unit", name(point->unit)}, {"x", point->x}, {"y", point->y}};
+    }
     if (const auto* region = data.as_region2d()) { return region_json(*region); }
     if (const auto* mask = data.as_raster_mask()) { return raster_mask_json(*mask); }
     throw std::logic_error("The catalog emitted an output type without a CLI summary.");

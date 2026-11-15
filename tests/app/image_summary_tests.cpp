@@ -10,6 +10,7 @@
 #include <visionpro/workflow/workflow_engine.hpp>
 
 #include <algorithm>
+#include <array>
 #include <fstream>
 #include <iostream>
 #include <stdexcept>
@@ -72,6 +73,18 @@ const json& produced_value(const json& node, std::string_view output)
     return summary.at("value");
 }
 
+json execute_summary(WorkflowEngine& engine, const RunRequest& request)
+{
+    const auto started = engine.submit(request);
+    if (const auto* rejected = std::get_if<RunRejected>(&started)) { throw std::runtime_error(rejected->diagnostic.message); }
+    const auto& run = std::get<RunHandle>(started);
+    const auto finished = take(run.wait(RunWaitTarget::Quiescence, std::chrono::steady_clock::now() + std::chrono::seconds(10)));
+    if (finished.outcome != RunWaitOutcome::Satisfied || !finished.progress.quiescent) {
+        throw std::runtime_error("The workflow did not reach quiescence.");
+    }
+    return take(visionpro::app::summarize_run(run, finished.progress, {}));
+}
+
 void image_summary()
 {
     const ScratchDirectory fixture;
@@ -128,15 +141,10 @@ void image_summary()
     const auto snapshot = take(ConfigSnapshot::capture(solution, registry.descriptors(), {engine->session(), revision}));
     const auto request = take(RunRequest::create(snapshot, WorkflowTarget{flow.id}, {},
         {TriggerKind::Manual, key<SchemaId>("test.image_summary")}));
-    const auto started = engine->submit(request);
-    if (const auto* rejected = std::get_if<RunRejected>(&started)) { throw std::runtime_error(rejected->diagnostic.message); }
-    const auto& run = std::get<RunHandle>(started);
-    const auto finished = take(run.wait(RunWaitTarget::Quiescence, std::chrono::steady_clock::now() + std::chrono::seconds(10)));
-    if (finished.outcome != RunWaitOutcome::Satisfied || finished.progress.status != ExecutionStatus::Succeeded) {
-        const auto details = visionpro::app::diagnostics_json(finished.progress.diagnostics);
-        throw std::runtime_error("The image and threshold workflow did not finish successfully: " + details.dump());
+    const auto report = execute_summary(*engine, request);
+    if (report.at("status") != "Succeeded") {
+        throw std::runtime_error("The image and threshold workflow failed: " + report.at("diagnostics").dump());
     }
-    const auto report = take(visionpro::app::summarize_run(run, finished.progress, {}));
     const auto node = [&](const NodeId& id) -> const json& { return find_entry(report.at("nodes"), "id", id.to_string()); };
     const json expected_native{{"width", 2}, {"height", 2}, {"depth", "UInt8"}, {"channel_order", "BGR"},
         {"current_frame", "camera"}, {"root_frame", "camera"}, {"origin", {{"x", 0}, {"y", 0}}},
@@ -186,12 +194,119 @@ void image_summary()
         throw std::runtime_error("Unexpected frozen ROI source summary: " + frozen.dump());
     }
 }
+
+void blob_judgement_summary()
+{
+    const auto registry = take(ToolRegistry::create(visionpro::tools::vision::registrations()));
+    const auto flow_id = id<WorkflowId>();
+    const auto input = key<InputId>("image");
+    const auto frame = key<CoordinateSystemId>("camera");
+    constexpr auto pixels = MeasurementUnit::Pixel;
+    const auto threshold_tool = key<ToolTypeId>("visionpro.image.threshold");
+    const auto mode = key<ParameterId>("mode");
+    const RegionDefinition full{id<RegionId>(), frame, pixels, RegionPrimitive{frame, pixels, FullImageRegion{}}, {}};
+    const Node threshold{id<NodeId>(), "Threshold", ToolConfiguration{threshold_tool, 1},
+        {{input, {ScopedInputReference{flow_id, {}, input, {}}}},
+            {key<ParameterId>("roi"), {take(ConfigValue::region2d(full))}},
+            {key<ParameterId>("threshold"), {ConfigValue::integer(128)}},
+            {mode, {enum_value(registry, threshold_tool, mode, "Binary")}}}, {}};
+    const Node blob{id<NodeId>(), "Measure components", ToolConfiguration{key<ToolTypeId>("visionpro.image.blob"), 1},
+        {{key<InputId>("binary"), {OutputReference{flow_id, threshold.id, key<OutputId>("binary"), {}}}},
+            {key<ParameterId>("connectivity"), {ConfigValue::integer(8)}}}, {}};
+    const auto judge = [&](std::string name, OutputReference source, std::int64_t expected) {
+        return Node{id<NodeId>(), std::move(name), ToolConfiguration{key<ToolTypeId>("visionpro.judge.integer_range"), 1},
+            {{key<InputId>("value"), {std::move(source)}}, {key<ParameterId>("minimum"), {ConfigValue::integer(expected)}},
+                {key<ParameterId>("maximum"), {ConfigValue::integer(expected)}}}, {}};
+    };
+    const OutputReference count{flow_id, blob.id, key<OutputId>("count"), {}};
+    const auto two = judge("Expect two components", count, 2);
+    const auto three = judge("Expect three components", count, 3);
+    const auto first_area = judge("Expect first area six", {flow_id, blob.id, key<OutputId>("components"),
+        {ElementSelection{0}, FieldSelection{key<FieldId>("area_pixels")}}}, 6);
+    InputDescriptor source{input, "Image", DataType::image()};
+    source.binding.allowed_sources = {BindingSourceKind::PublicInput};
+    const Workflow flow{flow_id, "Blob and judgement summary", {key<SchemaId>("test.blob_summary"), 1, {source}, {}, {}},
+        {threshold, blob, two, three, first_area},
+        {{id<ControlLinkId>(), threshold.id, {}, blob.id}, {id<ControlLinkId>(), blob.id, {}, two.id},
+            {id<ControlLinkId>(), two.id, {}, three.id}, {id<ControlLinkId>(), three.id, {}, first_area.id}},
+        {}, {threshold.id}, {}};
+    const CoordinateFrameDefinition coordinates{frame, CoordinateKind::Image, pixels, {0, 0}, {1, 0}, {0, -1}, Handedness::LeftHanded};
+    const Solution solution{id<SolutionId>(), "Blob summary", 1, 1, {flow}, {}, {}, {}, {coordinates}, {}};
+    const auto engine = take(WorkflowEngine::create(registry));
+    const auto revision = take(RuntimeIdFactory::from_value<ConfigSnapshotId>(1));
+    const auto snapshot = take(ConfigSnapshot::capture(solution, registry.descriptors(), {engine->session(), revision}));
+
+    constexpr std::size_t width = 12, height = 10;
+    std::array<unsigned char, width * height> samples;
+    const auto submit = [&] {
+        const auto image = take(ImageHandle::copy({width, height, width, {PixelDepth::UInt8, ChannelOrder::Mono}},
+            std::as_bytes(std::span(samples)), frame));
+        const auto request = take(RunRequest::create(snapshot, WorkflowTarget{flow_id},
+            {{input, take(DataValue::image({image, {}, {}}))}}, {TriggerKind::Manual, key<SchemaId>("test.blob_summary")}));
+        return execute_summary(*engine, request);
+    };
+    samples.fill(10);
+    for (std::size_t y = 1; y <= 2; ++y) { std::fill_n(samples.begin() + y * width + 1, 3, 200); }
+    for (std::size_t y = 5; y <= 7; ++y) { std::fill_n(samples.begin() + y * width + 7, 3, 200); }
+    const auto report = submit();
+    const auto node = [](const json& summary, const Node& node) -> const json& {
+        return find_entry(summary.at("nodes"), "id", node.id.to_string());
+    };
+    const auto point = [](double x, double y) {
+        return json{{"coordinate_frame", "camera"}, {"unit", "Pixel"}, {"x", x}, {"y", y}};
+    };
+    const json expected_components = json::array({
+        {{"area_pixels", "6"}, {"centroid", point(2, 1.5)}, {"bounds", {{"origin", point(1, 1)}, {"width", "3"}, {"height", "2"}}}},
+        {{"area_pixels", "9"}, {"centroid", point(8, 6)}, {"bounds", {{"origin", point(7, 5)}, {"width", "3"}, {"height", "3"}}}}
+    });
+    const auto& measured = node(report, blob);
+    if (report.at("status") != "Succeeded" || measured.at("status") != "Succeeded"
+        || produced_value(measured, "count") != "2" || produced_value(measured, "components") != expected_components
+        || produced_value(measured, "total_area_pixels") != "15" || produced_value(measured, "largest_area_pixels") != "9") {
+        throw std::runtime_error("Unexpected two-component results: " + measured.dump() + report.at("diagnostics").dump());
+    }
+    const auto check_judge = [&](const Node& target, bool passed) {
+        const auto& summary = node(report, target);
+        if (summary.at("status") != "Succeeded" || summary.at("judgement") != (passed ? "OK" : "NG")
+            || produced_value(summary, "passed") != passed) {
+            throw std::runtime_error("Unexpected integer range result: " + summary.dump());
+        }
+    };
+    check_judge(two, true);
+    check_judge(three, false);
+    check_judge(first_area, true);
+    const json expected_order = json::array({threshold.id.to_string(), blob.id.to_string(), two.id.to_string(),
+        three.id.to_string(), first_area.id.to_string()});
+    const auto& binding = find_entry(node(report, first_area).at("bindings"), "target", "value").at("sources").at(0);
+    if (report.at("call_order") != expected_order || binding.at("node") != blob.id.to_string()
+        || binding.at("invocation") != measured.at("invocation") || binding.at("run") != report.at("run")
+        || binding.at("output") != "components" || binding.at("selector") != json::array({{{"index", 0}}, {{"field", "area_pixels"}}})) {
+        throw std::runtime_error("NG continuation or the selected Blob field is incorrect: " + binding.dump());
+    }
+
+    samples.fill(10);
+    const auto empty = submit();
+    const auto& empty_blobs = node(empty, blob);
+    const auto& blocked = node(empty, first_area);
+    if (empty.at("status") != "Failed" || empty_blobs.at("status") != "Succeeded"
+        || produced_value(empty_blobs, "count") != "0" || produced_value(empty_blobs, "components") != json::array()
+        || produced_value(empty_blobs, "total_area_pixels") != "0" || !produced_value(empty_blobs, "largest_area_pixels").is_null()
+        || blocked.at("status") != "Failed" || !blocked.at("invocation").is_null()) {
+        throw std::runtime_error("Unexpected empty-component results: " + empty.at("diagnostics").dump());
+    }
+    const auto& location = find_entry(empty.at("diagnostics"), "code", "IndexOutOfRange").at("location");
+    if (location.at("node") != first_area.id.to_string() || location.at("input") != "value"
+        || location.at("path") != json::array({{{"index", 0}}})) {
+        throw std::runtime_error("Wrong diagnostic location for the empty Blob list: " + location.dump());
+    }
+}
 } // namespace
 
 int main()
 {
     try {
         image_summary();
+        blob_judgement_summary();
         return 0;
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

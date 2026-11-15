@@ -43,7 +43,8 @@ constexpr auto usage =
     "visionpro_cli save --solution <solution.json> [--root <id>=<directory>]...\n"
     "Inputs follow the workflow's public Bool, Int64, Float64 and String schemas.\n"
 #ifdef VISIONPRO_WITH_OPENCV
-    "The installed catalog contains the VisionPro simulation tools, visionpro.image.read_file and visionpro.image.threshold.\n";
+    "The installed catalog contains the VisionPro simulation tools, visionpro.image.read_file, "
+    "visionpro.image.threshold, visionpro.image.blob and visionpro.judge.integer_range.\n";
 #else
     "The installed catalog contains the VisionPro simulation tools.\n";
 #endif

@@ -27,7 +27,8 @@ Release 验证及交接见 [§8.12](#812-s31-实现与验证记录) 和 [§8.13]
 S4.1 已接入现有 OpenCV Release 安装包并验证四个视觉工具的 Schema 与适配契约。
 S4.2 接入图像桥接与 `visionpro.image.read_file`。S4.3 接入 ROI、冻结继承和掩膜求值。
 S4.4 接入 `visionpro.image.threshold`，验证正相、反相、独立输出、实际掩膜及继承诊断。
-当前 Release 命令与实测结果见 [§3.20](#320-s44-release-构建与验证) 和 [§8.24](#824-s44-实现与验证记录)。
+S4.5 接入 `visionpro.image.blob` 和 `visionpro.judge.integer_range`，验证实际连通域、类型化绑定以及 OK/NG 后继。
+当前 Release 命令与实测结果见 [§3.21](#321-s45-release-构建与验证) 和 [§8.25](#825-s45-实现与验证记录)。
 
 开发顺序以 [requirements.md](requirements.md) 为准：
 
@@ -501,6 +502,24 @@ ctest --test-dir out/build/s44-off -C Release -R '^(core\.|workflow\.)' --output
 本轮按逐像素、坐标、输出所有权和调用记录验证。PNG 掩膜与 BMP 读图使用未配置摘要的 `PerInvocation` 外部资源。
 涉及 SHA-256 的方案存储与独立进程 CLI 往返回归留在后续闭环验收。
 
+### 3.21 S4.5 Release 构建与验证
+
+沿用 [§3.17](#317-s41-release-构建与验证) 的 `OpenCV_DIR` 和现有安装包，在仓库根目录的 PowerShell 中执行。
+本轮复用 S4.4 的 ON/OFF 构建目录，各自写入 S4.5 日志。
+
+```powershell
+cmake -S . -B out/build/s44-on -G "Visual Studio 18 2026" -A x64 -DCMAKE_CONFIGURATION_TYPES=Release -DBUILD_TESTING=ON -DVISIONPRO_WITH_OPENCV=ON "-DOpenCV_DIR=$env:OpenCV_DIR"
+cmake --build out/build/s44-on --config Release --parallel 1 *> out/build/s44-on/build-s45.log
+ctest --test-dir out/build/s44-on -C Release -R '^(core\.|workflow\.|tools\.|app\.vision_image_summary$)' --output-on-failure --no-tests=error --output-log out/build/s44-on/ctest-s45.log
+
+cmake -S . -B out/build/s44-off -G "Visual Studio 18 2026" -A x64 -DCMAKE_CONFIGURATION_TYPES=Release -DBUILD_TESTING=ON -DVISIONPRO_WITH_OPENCV=OFF
+cmake --build out/build/s44-off --config Release --parallel 1 *> out/build/s44-off/build-s45.log
+ctest --test-dir out/build/s44-off -C Release -R '^(core\.|workflow\.)' --output-on-failure --no-tests=error --output-log out/build/s44-off/ctest-s45.log
+```
+
+按固定像素、几何数值、选择器和控制行为验证，文件掩膜使用未配置摘要的 `PerInvocation` 外部资源。
+本轮未执行 SHA-256 校验，涉及摘要的方案存储与独立进程 CLI 往返回归留在后续闭环验收。
+
 ## 4. 第一阶段验证
 
 2026-10-27 已按以下检查项完成文档审查，结果见 [§8.1](#81-s1-文档审查记录) 和 [§8.2](#82-s1-场景定义逐项审查)。
@@ -828,7 +847,7 @@ S3 结束前须同时满足：
 ## 7. 第四阶段实施与验收计划
 
 本计划制定于 2026-11-15，以提交 `cee6190` 的实际代码为起点。制定时复核 S3 Release 构建，CTest 82/82 通过。
-S4.1–S4.4 的完成记录见 [§8.21](#821-s41-实现与验证记录) 至 [§8.24](#824-s44-实现与验证记录)。
+S4.1–S4.5 的完成记录见 [§8.21](#821-s41-实现与验证记录) 至 [§8.25](#825-s45-实现与验证记录)。
 S4 目标是让同一磁盘方案通过现有无 GUI 入口完成“本地图像 → 二值化 → Blob 分析 → 结果判断”，
 并以像素、数值、来源和控制行为证明真实算法与 S3 的运行、存储契约一致。
 
@@ -876,6 +895,9 @@ S4.4 注册 `visionpro.image.threshold`，用 `cv::threshold` 处理 UInt8 Mono�
 质心与包围框 origin 使用输入图像当前坐标系和 Pixel 单位；包围框覆盖半开像素索引区间。
 组件按其最先出现的前景像素 `(y,x)` 升序排序，不依赖 OpenCV 内部 label 编号。
 正常无 Blob 返回 `count=0`、空 List、总面积 0、最大面积 None；它是成功结果。
+S4.5 用 `cv::connectedComponentsWithStats` 计算统计，再按标签图中首次出现的位置排列组件。
+OpenCV 的标签与统计使用有符号 32 位整数，输入像素数超过 `INT_MAX - 1` 时在 `binary` 输入报告 `SizeOverflow`。
+整数范围工具的工厂在节点派发前校验上下界，反序区间定位到 `maximum`。
 算法依据见 [OpenCV 连通域与面积接口](https://docs.opencv.org/4.13.0/d3/dc0/group__imgproc__shape.html)；
 阈值边界依据见 [OpenCV threshold 说明](https://docs.opencv.org/4.13.0/d7/d4d/tutorial_py_thresholding.html)。
 
@@ -914,7 +936,7 @@ threshold 发布无未解析 InheritedRegion 的 `effective_roi`，保持该 ROI
 成员掩膜由内部求值器生成，Region2D 输出保留展开后的几何、变换与排除；当前表达式无法无损展开时明确拒绝，不能只丢掉排除项后输出。
 如果一层 `Error` 约束和外层 `ValidEmptyOutput` 加排除无法合并，像素求值可供只消费成员的工具使用，需要发布 `Region2D` 的调用取得 `UnsupportedRegion`。
 S4.4 用两个真实 threshold 节点验证冻结流转及平移和排除。输出坐标系随输入图像确定，绑定解析在修正前核对实际坐标和单位。
-threshold 到 Blob 的链路在对应工具接入后按 V08 验收。
+S4.5 按 V08 验证 Blob 分别绑定全前景图像与另一路阈值的有效 ROI。Blob 直接消费 ROI 成员掩膜。
 `RunBindingTrace::regions` 保留冻结定义、绑定路径和生产者调用身份，CLI 摘要记录绑定路径及生产者身份。
 求值结果记录各层修正、方向、成员数和实际掩膜租约引用。
 
@@ -969,8 +991,8 @@ Schema 和桥接固定后，Blob 数学测试、CLI 类型输出可独立准备�
 
 S4.2 的 CLI 已支持 Image 元数据输出，包括宽高、深度、通道、current/root frame、origin、可选帧身份和采集时间。
 S4.4 已支持实际 `Region2D` 的形状、变换、排除和冻结来源摘要，以及 `RasterMask` 的映射、成员规则和直接映射掩膜的成员数。
-S4.6 计划补充 Bool、Float64、String/Enum、Record、Optional、Point2D 及完整 Image 和掩膜摘要，
-递归处理 List/Record，并保留原有 Int64 十进制字符串约定和 S3 摘要字段。
+S4.5 支持 JSON 布尔值、带坐标系与单位的 Point2D，以及按字段 ID 递归序列化的 Record。Optional 无值时为 `null`，有值时递归序列化其内容。
+List 继续使用数组，Int64 保留十进制字符串。S4.6 计划补充 Float64、String/Enum 和完整的 Image 与掩膜摘要。
 图像摘要至少给出宽高、深度、通道、current/root frame、origin、可选帧身份及有效行像素的 SHA-256；mask 给出映射/成员规则与摘要。
 ROI 给出实际采用的形状、变换、排除和来源；不将整图数据塞进标准输出。
 NG 维持成功退出码0；技术错误为非零，并同时保留已受理运行的终态摘要。
@@ -983,7 +1005,7 @@ NG 维持成功退出码0；技术错误为非零，并同时保留已受理运�
 V12 允许复用现有模拟 collect/deliver 检查交付次数，但读图、五路阈值、Blob和判断必须是真实工具。
 collect 的数据来源为各路 Blob.count（Int64），控制前驱为各路 judge；不能把 Bool 的 passed 绑定给现有整数集合输入。
 
-当前 ON/OFF 命令见 [§3.20](#320-s44-release-构建与验证)。S4.4 新增 `tools.threshold`，并扩展 `app.vision_image_summary`。
+当前 ON/OFF 命令见 [§3.21](#321-s45-release-构建与验证)。S4.5 新增 `tools.blob` 和 `tools.judgement`，并扩展 `app.vision_image_summary`。
 S4.7 重跑 ON 的全部测试和独立 OFF 的 82 项回归，并确认 OFF 产物没有 OpenCV/Qt 的传递依赖。
 同时提供一个固定样例方案、所有资源/摘要、流程UUID和完整CLI命令，能在新进程中加载、运行、保存与重载。
 
@@ -1812,3 +1834,18 @@ ON 的 CLI `--help` 列出读图和二值化工具，OFF 列出模拟工具。
 | `tools.threshold` 继承与坐标 | 两个真实节点发布与消费 `effective_roi`。旋转 ROI 的 7 个成员经平移和排除得到 6 个，核对上游冻结定义和调用身份。实际来源坐标错配时在消费节点的 `roi.source` 报 `CoordinateMismatch`。 |
 | `tools.threshold` 文件掩膜与失败路径 | 中文路径的实际 PNG 通过 `mask` 租约产生成员掩膜 `[0,0,255,255]`，反相结果为 `[0,0,255,0]`。越界阈值、BGR、UInt16 定位到对应参数或输入。全排除在 `Error` 下失败且无有效输出，`ValidEmptyOutput` 发布全零图与掩膜。 |
 | `app.vision_image_summary` | 保留真实 BMP 的 BGR 摘要验证，并用 Gray8 读图和两个真实阈值节点核对图像元数据、展开区域和冻结生产者身份。掩膜成员数由 3 变为 1。 |
+
+### 8.25 S4.5 实现与验证记录
+
+2026-11-15 使用 Windows x64、MSVC 19.51.36248.0、Release `/MD` 构建，沿用 OpenCV `4.14.0-pre`。
+ON 的核心、流程、视觉工具和摘要 CTest **85/85** 项通过，OFF 的核心与流程 CTest **74/74** 项通过。
+启用 OpenCV 时 CLI `--help` 列出四个视觉工具。复现命令与日志路径见 [§3.21](#321-s45-release-构建与验证)。
+
+| 用例 | 实测结果 |
+|---|---|
+| `app.vision_image_summary` V02 | 12×10 图像经真实二值化和 Blob 后得到 2 个组件，面积依次为 6、9。总面积为 15，最大面积为 Some(9)。质心为 `(2,1.5)`、`(8,6)`，包围框为 `(1,1,3,2)`、`(7,5,3,3)`。 |
+| `tools.blob` V03–V04 | 对角像素在 4 连通下分成两个面积为 1 的组件，8 连通下为一个面积为 2 的组件，质心为 `(0.5,0.5)`。单像素和有孔图形的面积为 1、8。全零图像成功产生空 List 与 None。首像素排序用例中组件面积为 2、8，后者包围框原点更靠左。 |
+| `tools.blob` V06、V08 | 裁剪图的面积为 4，质心在当前帧为 `(1.25,0.75)`，按原点偏移换算到根帧为 `(2.25,1.75)`。两条真实阈值输出分别供给图像与继承 ROI，平移并排除后总面积为 6，追加来源排除后为 5。核对冻结来源身份及原图像素。 |
+| `tools.blob` 边界、空域及掩膜 | 验证 Reject、Intersect、Error 和 ValidEmptyOutput。经中文路径的 PNG 租约读取掩膜，阈值 129 的成员规则产生一个面积为 2 的组件，并核对实际资源引用。 |
+| `tools.judgement` 闭区间 | 覆盖区间内外、等值和 Int64 两端。OK 与 NG 均发布 Bool 并成功完成。反序区间在派发前报告 `ConstraintViolation`，定位到 `maximum`。 |
+| `app.vision_image_summary` V05 | `count=2` 对 `[2,2]` 判 OK、对 `[3,3]` 判 NG。NG 后继继续执行，以 `components[0].area_pixels` 绑定 6 并判 OK。第二轮空结果的最大面积摘要为 `null`，访问 `[0]` 得到定位到选择器的 `IndexOutOfRange`。 |

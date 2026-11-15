@@ -11,7 +11,7 @@ VisionPro 是一个采用 C++20、Qt、OpenCV 和 CMake 的桌面视觉算法软
 
 ## 当前状态
 
-S1 文档审查、S2 核心模型与绑定及 S3 无 GUI 执行与配置往返均已通过验收。S4.4 已验证真实二值化，支持 ROI 与掩膜，并发布二值图、有效 ROI 和成员掩膜。
+S1 文档审查、S2 核心模型与绑定及 S3 无 GUI 执行与配置往返均已通过验收。S4.5 已验证二值化、Blob 连通域分析与整数范围判断的无 GUI 流程。
 
 - 已建立初始目录、开发规则及基础设计文档。
 - 已确定 C++20、Qt、OpenCV、CMake 技术栈。
@@ -102,14 +102,14 @@ GUI 和无 GUI 入口共用运行请求及结果接口，第三方 SDK 的名称
 
 S3.9 在 Windows x64、MSVC 19.51、CMake/CTest 4.4.0 环境完成 Release 验证，82/82 项 CTest 通过。
 复现步骤见 [S3.9 构建与命令行验证](docs/development.md#316-s39-构建与命令行验证)。
-当前构建与验收统一使用 Release。视觉目标由默认关闭的 `VISIONPRO_WITH_OPENCV` 启用，使用现有 OpenCV `4.14.0-pre` x64 Release 预编译包。见 [S4.4 构建与验证](docs/development.md#320-s44-release-构建与验证)。
+当前构建与验收统一使用 Release。视觉目标由默认关闭的 `VISIONPRO_WITH_OPENCV` 启用，使用现有 OpenCV `4.14.0-pre` x64 Release 预编译包。见 [S4.5 构建与验证](docs/development.md#321-s45-release-构建与验证)。
 
 ## 开发阶段
 
 1. 基础模型与契约设计：文档审查通过。
 2. 核心模型与绑定验证。S2.1–S2.7 完成，Release 及全部 S2 必需子范围通过。
 3. 无 GUI 执行与配置往返验证。S3.1–S3.9 完成，26 项必验子范围全部通过。
-4. 无 GUI 视觉闭环。S4.1–S4.4 已完成，S4.5–S4.7 按 [实施与验收计划](docs/development.md#7-第四阶段实施与验收计划)推进。
+4. 无 GUI 视觉闭环。S4.1–S4.5 已完成，S4.6–S4.7 按 [实施与验收计划](docs/development.md#7-第四阶段实施与验收计划)推进。
 5. 基础可视化界面。
 6. 完整循环、多流程并行、触发、共享服务及工业接入。
 

@@ -621,6 +621,14 @@ Blob 的 `components` 元素使用 `visionpro.image.blob.component`，其中 `bo
 Blob 的 `Optional<Region2D>` 默认 None，也可将 `effective_roi: Region2D` 用 `WrapOptional` 绑定给 Blob。
 作用域内的继承仍由 Resolver 固定来源，视觉适配使用 core 类型检查符号限制。完整字段与像素契约见 [development.md §7.2–§7.3](development.md#72-先固定的依赖与算法契约)。
 
+### 4.13 S4.5 连通域与整数判断结果
+
+`visionpro.image.blob` 按各连通域的首个前景像素 `(y,x)` 排列 `components`。质心和包围框原点是输入当前坐标系中的 Pixel 点，包围框宽高和面积是像素计数。
+成功的空结果为 `count=0`、空 `components`、`total_area_pixels=0` 和 `largest_area_pixels=None`。对空列表应用 `ElementSelection{0}` 会定位到选择器并报告 `IndexOutOfRange`。
+
+`visionpro.judge.integer_range` 比较 Int64 闭区间 `[minimum,maximum]`。`passed=true` 对应 OK，`passed=false` 对应 NG，两者技术状态均为 Succeeded。
+反序上下界在工具准备时报告 `ConstraintViolation`，定位到 `maximum`。
+
 ## 5. 数据绑定与控制关系（C04、C06）
 
 Binding 统一表达输入和可订阅参数：
