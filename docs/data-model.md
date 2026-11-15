@@ -629,6 +629,12 @@ Blob 的 `Optional<Region2D>` 默认 None，也可将 `effective_roi: Region2D` 
 `visionpro.judge.integer_range` 比较 Int64 闭区间 `[minimum,maximum]`。`passed=true` 对应 OK，`passed=false` 对应 NG，两者技术状态均为 Succeeded。
 反序上下界在工具准备时报告 `ConstraintViolation`，定位到 `maximum`。
 
+### 4.14 S4.6 视觉 CLI 摘要
+
+Float64 使用 JSON 数字，String 使用 UTF-8 字符串，Enum 提供 `schema`、`version`、`member`。List、Record 和 Optional 递归处理这些值。
+UInt8 图像的 `samples` 汇总所有有效行中的通道样本，包含 `minimum`、`maximum` 和 `nonzero_count`。掩膜像素使用相同结构，并保留映射、成员规则和直接映射的 `member_count`。
+ROI 继承保留绑定路径、修正和本次生产者调用身份。进程间往返通过直接比较有效像素、坐标和这些来源关系验证。
+
 ## 5. 数据绑定与控制关系（C04、C06）
 
 Binding 统一表达输入和可订阅参数：
@@ -1472,17 +1478,17 @@ PerInvocation 文件在受理前检查路径，调用时读入并校验可选摘
 
 #### 10.4.1 S3.8 保存与清理接口
 
-`load_solution` 记录原始 UTF-8 清单字节的 SHA-256，并在固定资源读入后复读清单。两次读取的字节不一致时返回 `SolutionSaveConflict`，调用方可重新加载。
+`load_solution` 将原始 UTF-8 清单字节保留在 `SolutionDocument` 中，并在固定资源读入后复读清单。两次读取的字节不一致时返回 `SolutionSaveConflict`，调用方可重新加载。
 
 | 入口或结果 | 契约 |
 |---|---|
-| `save_solution(source, edited, writes)` | 编辑模型使用来源文档的方案 ID 和修订号。保存成功时方案修订号加一。来源包含未知字段时拒绝覆盖。磁盘清单与来源摘要不符时返回 `SolutionSaveConflict` |
+| `save_solution(source, edited, writes)` | 编辑模型使用来源文档的方案 ID 和修订号。保存成功时方案修订号加一。来源包含未知字段时拒绝覆盖。磁盘清单和加载时的字节不同时返回 `SolutionSaveConflict` |
 | `ManagedResourceWrite` | 按托管资源 ID 提交字节，调用期间保持字节有效且不可变。事务生成独立文件路径和 SHA-256，已有托管版本加一，新托管资源从版本 1 开始。调用方在编辑模型中显式维护固定版本绑定 |
 | `SolutionSaveResult` | 清单已提交。`solution` 是包含实际版本及路径的模型，`cleanup` 包含已删除数、延期数和清理诊断。下次保存前重新加载基线 |
 | `cleanup_solution_resources(previous)` | 保留旧文档以便重试。持包目录锁复核当前清单属于同一方案且修订更新，然后检查旧版本是否仍被引用。已删除的文件重复检查时跳过 |
 
 Windows 后端在本地固定 NTFS 卷使用包目录中 `.visionpro-save.lock` 的独占字节范围锁。
-事务在持锁期间完成初次摘要比较、写入独立托管文件、写入并刷新临时清单、再次比较和同卷替换。
+事务在持锁期间比较清单原文、写入独立托管文件、写入并刷新临时清单、再次逐字节比较和同卷替换。
 新托管文件位于 `resources/<资源 UUID>-<版本>-<事务 UUID>.bin`。资源摘要与路径在清单提交时一起发布。
 锁覆盖所有协作保存者，包括不同进程。对非协作写入的检测截至替换前最后一次比较。
 

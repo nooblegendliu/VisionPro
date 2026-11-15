@@ -127,3 +127,20 @@ add_test(NAME workflow.session_lifecycle COMMAND visionpro_workflow_session_test
 
 set_tests_properties(workflow.result_retention workflow.external_result_delivery
     workflow.run_observations workflow.session_lifecycle PROPERTIES TIMEOUT 30)
+
+if(VISIONPRO_WITH_OPENCV)
+    add_executable(visionpro_vision_integration_tests vision_integration_tests.cpp)
+    target_link_libraries(visionpro_vision_integration_tests PRIVATE
+        visionpro_vision_tools visionpro_simulation_tools visionpro_infrastructure visionpro_build_options)
+    add_test(NAME workflow.vision_single_chain COMMAND visionpro_vision_integration_tests single)
+    add_test(NAME workflow.vision_integration COMMAND visionpro_vision_integration_tests five)
+
+    add_executable(visionpro_vision_lifecycle_tests vision_lifecycle_tests.cpp)
+    target_link_libraries(visionpro_vision_lifecycle_tests PRIVATE
+        visionpro_vision_tools visionpro_workflow visionpro_build_options Threads::Threads)
+    add_test(NAME workflow.vision_lifecycle COMMAND visionpro_vision_lifecycle_tests)
+
+    set_tests_properties(workflow.vision_single_chain workflow.vision_integration workflow.vision_lifecycle PROPERTIES
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:opencv_core>"
+        TIMEOUT 30)
+endif()

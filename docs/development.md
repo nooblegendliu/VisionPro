@@ -28,7 +28,8 @@ S4.1 已接入现有 OpenCV Release 安装包并验证四个视觉工具的 Sche
 S4.2 接入图像桥接与 `visionpro.image.read_file`。S4.3 接入 ROI、冻结继承和掩膜求值。
 S4.4 接入 `visionpro.image.threshold`，验证正相、反相、独立输出、实际掩膜及继承诊断。
 S4.5 接入 `visionpro.image.blob` 和 `visionpro.judge.integer_range`，验证实际连通域、类型化绑定以及 OK/NG 后继。
-当前 Release 命令与实测结果见 [§3.21](#321-s45-release-构建与验证) 和 [§8.25](#825-s45-实现与验证记录)。
+S4.6 验证真实单链、五路汇合、ROI 继承与独立调用，补齐 CLI 摘要和外部图像方案保存重载。
+当前 Release 命令与实测结果见 [§3.22](#322-s46-release-构建与验证) 和 [§8.26](#826-s46-实现与验证记录)。
 
 开发顺序以 [requirements.md](requirements.md) 为准：
 
@@ -520,6 +521,23 @@ ctest --test-dir out/build/s44-off -C Release -R '^(core\.|workflow\.)' --output
 按固定像素、几何数值、选择器和控制行为验证，文件掩膜使用未配置摘要的 `PerInvocation` 外部资源。
 本轮未执行 SHA-256 校验，涉及摘要的方案存储与独立进程 CLI 往返回归留在后续闭环验收。
 
+### 3.22 S4.6 Release 构建与验证
+
+沿用 [§3.17](#317-s41-release-构建与验证) 中的 `OpenCV_DIR`。在仓库根目录的 PowerShell 中复用现有 ON/OFF 构建目录，单独记录 S4.6 日志。
+
+```powershell
+cmake -S . -B out/build/s44-on -G "Visual Studio 18 2026" -A x64 -DCMAKE_CONFIGURATION_TYPES=Release -DBUILD_TESTING=ON -DVISIONPRO_WITH_OPENCV=ON "-DOpenCV_DIR=$env:OpenCV_DIR"
+cmake --build out/build/s44-on --config Release --parallel 1 *> out/build/s44-on/build-s46.log
+ctest --test-dir out/build/s44-on -C Release -R '^(core\.|workflow\.|tools\.|app\.vision_(image_summary|roundtrip|diagnostics)$)' --output-on-failure --no-tests=error --output-log out/build/s44-on/ctest-s46.log
+
+cmake -S . -B out/build/s44-off -G "Visual Studio 18 2026" -A x64 -DCMAKE_CONFIGURATION_TYPES=Release -DBUILD_TESTING=ON -DVISIONPRO_WITH_OPENCV=OFF
+cmake --build out/build/s44-off --config Release --parallel 1 *> out/build/s44-off/build-s46.log
+ctest --test-dir out/build/s44-off -C Release -R '^(core\.|workflow\.)' --output-on-failure --no-tests=error --output-log out/build/s44-off/ctest-s46.log
+```
+
+视觉 CLI 测试使用未配置摘要的 `PerInvocation` 外部 PNG、BMP 文件，逐像素核对重载前后的结果。
+本轮未执行 SHA-256 校验，执行范围为上述 CTest 分组，含摘要校验的既有存储和模拟 CLI 回归未纳入。
+
 ## 4. 第一阶段验证
 
 2026-10-27 已按以下检查项完成文档审查，结果见 [§8.1](#81-s1-文档审查记录) 和 [§8.2](#82-s1-场景定义逐项审查)。
@@ -847,7 +865,7 @@ S3 结束前须同时满足：
 ## 7. 第四阶段实施与验收计划
 
 本计划制定于 2026-11-15，以提交 `cee6190` 的实际代码为起点。制定时复核 S3 Release 构建，CTest 82/82 通过。
-S4.1–S4.5 的完成记录见 [§8.21](#821-s41-实现与验证记录) 至 [§8.25](#825-s45-实现与验证记录)。
+S4.1–S4.6 的完成记录见 [§8.21](#821-s41-实现与验证记录) 至 [§8.26](#826-s46-实现与验证记录)。
 S4 目标是让同一磁盘方案通过现有无 GUI 入口完成“本地图像 → 二值化 → Blob 分析 → 结果判断”，
 并以像素、数值、来源和控制行为证明真实算法与 S3 的运行、存储契约一致。
 
@@ -992,20 +1010,20 @@ Schema 和桥接固定后，Blob 数学测试、CLI 类型输出可独立准备�
 S4.2 的 CLI 已支持 Image 元数据输出，包括宽高、深度、通道、current/root frame、origin、可选帧身份和采集时间。
 S4.4 已支持实际 `Region2D` 的形状、变换、排除和冻结来源摘要，以及 `RasterMask` 的映射、成员规则和直接映射掩膜的成员数。
 S4.5 支持 JSON 布尔值、带坐标系与单位的 Point2D，以及按字段 ID 递归序列化的 Record。Optional 无值时为 `null`，有值时递归序列化其内容。
-List 继续使用数组，Int64 保留十进制字符串。S4.6 计划补充 Float64、String/Enum 和完整的 Image 与掩膜摘要。
-图像摘要至少给出宽高、深度、通道、current/root frame、origin、可选帧身份及有效行像素的 SHA-256；mask 给出映射/成员规则与摘要。
-ROI 给出实际采用的形状、变换、排除和来源；不将整图数据塞进标准输出。
+List 继续使用数组，Int64 保留十进制字符串。S4.6 增加 Float64 数字、UTF-8 字符串与包含 `schema`、`version`、`member` 的枚举对象。
+UInt8 图像和掩膜像素增加有效行样本的最小值、最大值和非零数。CLI 使用这些统计及已有布局和来源字段，持久化验收另外直接核对有效像素。
 NG 维持成功退出码0；技术错误为非零，并同时保留已受理运行的终态摘要。
 本阶段文件图像由方案资源输入；真实 Image 请求注入由 C++ RunRequest 验证，不扩展通用 CLI 图像参数语言。
 
-计划测试分组为 `tools.image_bridge`、`tools.image_read`、`tools.roi`、`tools.mask`、`tools.threshold`、
-`tools.blob`、`tools.judgement`、`workflow.vision_integration`、`app.vision_roundtrip`、`app.vision_diagnostics`。
+测试分组包括 `tools.image_bridge`、`tools.image_read`、`tools.roi`、`tools.mask`、`tools.threshold`、
+`tools.blob`、`tools.judgement`、`workflow.vision_single_chain`、`workflow.vision_integration`、`workflow.vision_lifecycle`、
+`app.vision_roundtrip` 和 `app.vision_diagnostics`。
 各组包含有意义的成功/失败断言；实现时可按夹具规模拆分，不预先要求固定新增测试数量。
 `tests/tools` 验证算法本身，workflow/app 组必须走真实注册表和引擎；CLI 往返继续采用独立进程。
 V12 允许复用现有模拟 collect/deliver 检查交付次数，但读图、五路阈值、Blob和判断必须是真实工具。
 collect 的数据来源为各路 Blob.count（Int64），控制前驱为各路 judge；不能把 Bool 的 passed 绑定给现有整数集合输入。
 
-当前 ON/OFF 命令见 [§3.21](#321-s45-release-构建与验证)。S4.5 新增 `tools.blob` 和 `tools.judgement`，并扩展 `app.vision_image_summary`。
+当前 ON/OFF 命令见 [§3.22](#322-s46-release-构建与验证)。S4.6 的 CLI 往返从不同工作目录独立运行，核对各轮实际生产者身份，再比较稳定的来源和控制字段。
 S4.7 重跑 ON 的全部测试和独立 OFF 的 82 项回归，并确认 OFF 产物没有 OpenCV/Qt 的传递依赖。
 同时提供一个固定样例方案、所有资源/摘要、流程UUID和完整CLI命令，能在新进程中加载、运行、保存与重载。
 
@@ -1724,7 +1742,7 @@ CTest **80/80** 项通过，包含 3 项保存事务测试和 77 项回归。
 | `infrastructure.solution_save_conflict`（A20） | 第一个保存者暂停在提交前，第二个在进入暂存前等待。首个提交后，第二个收到 `SolutionSaveConflict`，重载保留首个修改并运行得到 `x`。同修订的外部字节修改和暂存期间的外部修改均报告冲突。重新加载后可继续保存配置并复用当前托管文件 | 22 通过 |
 | `infrastructure.solution_save_cleanup`（A19、A20） | 活动运行继续持有旧文件并读到 `a`。实际退出后重试清理删除旧文件，重载运行得到 `x`。提交后的注入清理故障单独报告。摘要不符和当前外部别名均保留对应文件 | 34 通过 |
 
-保存用 `LockFileEx` 独占包目录锁文件的字节范围，在同一锁内复核摘要，再用 `MoveFileExW` 同卷替换清单。
+S3.8 验证时，保存用 `LockFileEx` 独占包目录锁文件的字节范围，在同一锁内复核摘要，再用 `MoveFileExW` 同卷替换清单。S4.6 在该锁内改为逐字节比较清单原文。
 对非协作写入的检测截至替换前最后一次比较。断电恢复和网络共享属于后续后端验证范围。 [LockFileEx](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-lockfileex)、[MoveFileExW](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-movefileexw)
 
 接口、版本分配和清理重试见 [data-model.md §10.4.1](data-model.md#1041-s38-保存与清理接口)。
@@ -1849,3 +1867,18 @@ ON 的核心、流程、视觉工具和摘要 CTest **85/85** 项通过，OFF �
 | `tools.blob` 边界、空域及掩膜 | 验证 Reject、Intersect、Error 和 ValidEmptyOutput。经中文路径的 PNG 租约读取掩膜，阈值 129 的成员规则产生一个面积为 2 的组件，并核对实际资源引用。 |
 | `tools.judgement` 闭区间 | 覆盖区间内外、等值和 Int64 两端。OK 与 NG 均发布 Bool 并成功完成。反序区间在派发前报告 `ConstraintViolation`，定位到 `maximum`。 |
 | `app.vision_image_summary` V05 | `count=2` 对 `[2,2]` 判 OK、对 `[3,3]` 判 NG。NG 后继继续执行，以 `components[0].area_pixels` 绑定 6 并判 OK。第二轮空结果的最大面积摘要为 `null`，访问 `[0]` 得到定位到选择器的 `IndexOutOfRange`。 |
+
+### 8.26 S4.6 实现与验证记录
+
+2026-11-15 在 Windows x64、MSVC 19.51.36248.0、Release `/MD` 构建，沿用 OpenCV `4.14.0-pre`。
+ON 的核心、流程、视觉工具与 CLI CTest **90/90** 项通过，OFF 的核心与流程 CTest **74/74** 项通过。
+复现命令、日志路径及无 SHA-256 的验证范围见 [§3.22](#322-s46-release-构建与验证)。
+
+| 用例 | 实测结果 |
+|---|---|
+| `workflow.vision_single_chain` | 真实 BMP 读图、二值化和 Blob 得到面积 6、9。检测判定为 NG，技术运行成功。 |
+| `workflow.vision_integration` V12 | 按阈值 100、128、180、210、250 得计数 `[2,2,2,0,0]` 和判定 `[OK,OK,OK,NG,NG]`。五路各运行一次，AllActivated 汇合和模拟交付各一次。核对精确来源、结果存储和原图像素。 |
+| `workflow.vision_lifecycle` V15–V16 | 独立注入图像只执行目标阈值或 Blob。Busy 请求的图像未进入后续运行，编辑后的快照采用新阈值和 ROI，已持有的旧图像跨历史淘汰和引擎销毁仍可读。门闩暂停真实阈值返回，取消拦截输出与后继，实际退出后空图下一轮得到 0 个组件。 |
+| `app.vision_roundtrip` V08、V13 外部资源 | 独立 CLI 进程从不同工作目录执行、保存并重载含中文和空格路径的 PNG/BMP。修订 12→13，模拟条件分支也通过。逐像素检查读图、二值图和旋转掩膜。两路阈值分别提供整幅前景和冻结 ROI，平移并排除后 Blob 总面积为 6，核对当轮生产者与输出端口。清单同修订的空白变化触发 `SolutionSaveConflict`。 |
+| `app.vision_diagnostics` | 上轮有效图像被损坏后，本轮报告 `InvalidImage` 并给出终态摘要，后继按 FailFast 跳过。删除图像后在运行受理前报告 `ResourceNotFound`。 |
+| `app.vision_image_summary` | 验证 Float64、UTF-8 字符串和嵌套枚举，维持已有 Blob 和 ROI 摘要。带填充的图像按有效行统计，直接掩膜按成员规则计数。 |

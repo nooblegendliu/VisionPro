@@ -123,10 +123,7 @@ Check compare_manifest(const SolutionDocument& source, const fs::path& manifest)
         }
         return std::move(*failure);
     }
-    const auto& text = std::get<std::string>(bytes);
-    auto digest = detail::sha256(std::as_bytes(std::span{text.data(), text.size()}));
-    if (auto* failure = std::get_if<Diagnostic>(&digest)) { return std::move(*failure); }
-    if (std::get<std::string>(digest) != source.manifest_sha256()) {
+    if (!source.matches_manifest(std::get<std::string>(bytes))) {
         return error(ErrorCode::SolutionSaveConflict, source.solution(), "The on-disk manifest changed after this revision was loaded.");
     }
     return std::monostate{};

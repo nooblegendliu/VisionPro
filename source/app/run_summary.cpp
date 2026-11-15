@@ -1,6 +1,9 @@
 #include "run_summary.hpp"
 
 #include <algorithm>
+#include <array>
+#include <cmath>
+#include <numeric>
 #include <stdexcept>
 
 namespace visionpro::app {
@@ -464,9 +467,36 @@ json image_layout_json(const ImageHandle& image)
         {"origin", {{"x", image.origin_x()}, {"y", image.origin_y()}}}};
 }
 
+using UInt8SampleCounts = std::array<std::size_t, 256>;
+
+std::optional<UInt8SampleCounts> uint8_sample_counts(const ImageHandle& image)
+{
+    if (image.format().depth != PixelDepth::UInt8) { return std::nullopt; }
+    UInt8SampleCounts counts{};
+    for (std::size_t y = 0; y < image.height(); ++y) {
+        const auto row = std::get<std::span<const std::byte>>(image.row(y));
+        for (const auto sample : row) {
+            ++counts[std::to_integer<unsigned>(sample)];
+        }
+    }
+    return counts;
+}
+
+json sample_summary_json(const UInt8SampleCounts& counts)
+{
+    // Positive image dimensions guarantee at least one sample.
+    std::size_t minimum = 0;
+    std::size_t maximum = counts.size() - 1;
+    while (counts[minimum] == 0) { ++minimum; }
+    while (counts[maximum] == 0) { --maximum; }
+    return {{"minimum", minimum}, {"maximum", maximum},
+        {"nonzero_count", std::accumulate(counts.begin() + 1, counts.end(), std::size_t{0})}};
+}
+
 json image_json(const ImageFrame& frame)
 {
     auto result = image_layout_json(frame.image);
+    if (const auto counts = uint8_sample_counts(frame.image)) { result["samples"] = sample_summary_json(*counts); }
     result["frame"] = frame.frame ? json{{"source", id_text(frame.frame->source)},
         {"sequence", std::to_string(frame.frame->sequence)}} : json(nullptr);
     result["captured_at_unix_ns"] = frame.captured_at ? json(std::to_string(frame.captured_at->time_since_epoch().count())) : json(nullptr);
@@ -475,20 +505,17 @@ json image_json(const ImageFrame& frame)
 
 json raster_mask_json(const RasterMask& mask)
 {
-    json result{{"pixels", image_layout_json(mask.pixels)}, {"mapping", mask_mapping_json(mask.mapping)},
+    auto pixels = image_layout_json(mask.pixels);
+    const auto counts = uint8_sample_counts(mask.pixels);
+    if (counts) { pixels["samples"] = sample_summary_json(*counts); }
+    json result{{"pixels", std::move(pixels)}, {"mapping", mask_mapping_json(mask.mapping)},
         {"valid_pixels", mask_rule_json(mask.valid_pixels)}};
     // Only direct sampling makes source pixel counts the target membership counts.
-    if (mask.mapping.sampling == MaskSampling::None && !mask.mapping.transform
-        && mask.pixels.format() == PixelFormat{PixelDepth::UInt8, ChannelOrder::Mono}) {
-        std::size_t count = 0;
-        for (std::size_t y = 0; y < mask.pixels.height(); ++y) {
-            const auto row = std::get<std::span<const std::byte>>(mask.pixels.row(y));
-            count += static_cast<std::size_t>(std::ranges::count_if(row, [&](std::byte sample) {
-                const auto value = std::to_integer<unsigned>(sample);
-                return mask.valid_pixels.mode == MaskValueMode::NonZero ? value != 0 : value >= mask.valid_pixels.threshold;
-            }));
-        }
-        result["member_count"] = count;
+    if (counts && mask.mapping.sampling == MaskSampling::None && !mask.mapping.transform) {
+        // Valid UInt8 masks are single-channel and thresholds are in [0, 255].
+        const auto first = mask.valid_pixels.mode == MaskValueMode::NonZero
+            ? 1 : static_cast<int>(std::ceil(mask.valid_pixels.threshold));
+        result["member_count"] = std::accumulate(counts->begin() + first, counts->end(), std::size_t{0});
     }
     return result;
 }
@@ -497,6 +524,12 @@ json data_json(const DataValue& data)
 {
     if (const auto* flag = data.as_bool()) { return *flag; }
     if (const auto* number = data.as_int64()) { return std::to_string(*number); }
+    if (const auto* number = data.as_float64()) { return *number; }
+    if (const auto* value = data.as_string()) { return *value; }
+    if (const auto* member = data.as_enum()) {
+        return {{"schema", id_text(*data.type().schema_id())}, {"version", data.type().schema_version()},
+            {"member", id_text(*member)}};
+    }
     if (const auto* list = data.elements()) { return array_json(*list, data_json); }
     if (const auto* fields = data.fields()) {
         auto result = json::object();

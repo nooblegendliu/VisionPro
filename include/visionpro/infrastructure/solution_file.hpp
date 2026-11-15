@@ -21,7 +21,7 @@ public:
     [[nodiscard]] const std::filesystem::path& directory() const noexcept { return directory_; }
     [[nodiscard]] std::span<const core::Diagnostic> diagnostics() const noexcept { return diagnostics_; }
     [[nodiscard]] bool can_save() const noexcept { return complete_; }
-    [[nodiscard]] std::string_view manifest_sha256() const noexcept { return manifest_sha256_; }
+    [[nodiscard]] bool matches_manifest(std::string_view text) const noexcept { return manifest_ == text; }
     [[nodiscard]] std::span<const NamedResourceRoot> resource_roots() const noexcept { return roots_; }
 private:
     friend core::Result<SolutionDocument> load_solution(const std::filesystem::path&, const core::ToolRegistry&,
@@ -32,9 +32,9 @@ private:
 
     SolutionDocument(workflow::Solution solution, std::filesystem::path directory,
         std::vector<core::Diagnostic> diagnostics, bool complete, std::shared_ptr<FileResourceProvider> resources,
-        std::string manifest_sha256, std::span<const NamedResourceRoot> roots)
+        std::string manifest, std::span<const NamedResourceRoot> roots)
         : solution_(std::move(solution)), directory_(std::move(directory)), diagnostics_(std::move(diagnostics)),
-          complete_(complete), resources_(std::move(resources)), manifest_sha256_(std::move(manifest_sha256)),
+          complete_(complete), resources_(std::move(resources)), manifest_(std::move(manifest)),
           roots_(roots.begin(), roots.end()) {}
 
     workflow::Solution solution_;
@@ -42,7 +42,7 @@ private:
     std::vector<core::Diagnostic> diagnostics_;
     bool complete_;
     std::shared_ptr<FileResourceProvider> resources_;
-    std::string manifest_sha256_;
+    std::string manifest_;
     std::vector<NamedResourceRoot> roots_;
 };
 

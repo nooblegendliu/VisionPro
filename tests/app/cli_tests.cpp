@@ -2,6 +2,15 @@
 #include <visionpro/core/schema_id_factory.hpp>
 #include <visionpro/infrastructure/solution_file.hpp>
 
+#ifdef VISIONPRO_WITH_OPENCV
+#include "simulation.hpp"
+#include "vision/vision_tools.hpp"
+#include "../tools/image_fixtures.hpp"
+
+#include <array>
+#include <numbers>
+#endif
+
 #include <nlohmann/json.hpp>
 #include <windows.h>
 
@@ -399,6 +408,12 @@ Json comparable(Json report)
             for (auto& source : binding.at("sources")) {
                 for (const auto key : {"session", "snapshot", "run", "scope", "invocation", "attempt"}) { source.erase(key); }
             }
+            if (binding.contains("regions")) {
+                for (auto& region : binding.at("regions")) {
+                    auto& producer = region.at("producer");
+                    for (const auto key : {"session", "snapshot", "run", "scope", "invocation", "attempt"}) { producer.erase(key); }
+                }
+            }
         }
     }
     return report;
@@ -483,6 +498,310 @@ void diagnostics(const fs::path& executable)
     check(read_file(fixture.manifest) == original, "A missing resource leaves the loaded manifest unchanged.");
 }
 
+#ifdef VISIONPRO_WITH_OPENCV
+namespace vision = visionpro::tools::vision;
+
+CoordinateSystemId camera() { return key<CoordinateSystemId>("camera"); }
+constexpr auto pixel = MeasurementUnit::Pixel;
+
+Binding setting(std::string_view name, ConfigValue value)
+{ return {key<ParameterId>(name), {std::move(value)}}; }
+
+Binding enum_setting(std::string_view type, std::string_view name, std::string_view member)
+{
+    const auto descriptors = vision::tool_descriptors();
+    const auto descriptor = std::ranges::find_if(descriptors, [&](const ToolDescriptor& item) { return item.id.text() == type; });
+    check(descriptor != descriptors.end(), "The fixture uses a declared vision tool.");
+    const auto parameter = std::ranges::find(descriptor->parameters, key<ParameterId>(name), &ParameterDescriptor::id);
+    check(parameter != descriptor->parameters.end(), "The fixture uses a declared enum parameter.");
+    return setting(name, take(ConfigValue::enumeration(parameter->type, key<EnumMemberId>(member))));
+}
+
+Node image_reader(char id, const ResourceReference& source)
+{
+    constexpr auto type = "visionpro.image.read_file";
+    auto node = tool(id, type, "读图", {enum_setting(type, "decode_mode", "Gray8"),
+        setting("frame_origin", take(ConfigValue::point2d({camera(), pixel, 0, 0})))});
+    node.resources.push_back({key<SchemaId>("source"), source});
+    return node;
+}
+
+Node threshold(WorkflowId flow, char id, char reader, RegionShape shape)
+{
+    constexpr auto type = "visionpro.image.threshold";
+    const RegionDefinition roi{uuid<RegionId>(id), camera(), pixel, RegionPrimitive{camera(), pixel, std::move(shape)}, {}};
+    return tool(id, type, "二值化", {input_binding("image", output(flow, reader, "image")),
+        setting("roi", take(ConfigValue::region2d(roi))), setting("threshold", ConfigValue::integer(128)),
+        enum_setting(type, "mode", "Binary")});
+}
+
+Node blob(WorkflowId flow, char id, char binary)
+{
+    return tool(id, "visionpro.image.blob", "连通域", {input_binding("binary", output(flow, binary, "binary")),
+        setting("connectivity", ConfigValue::integer(8))});
+}
+
+Node judge(char id, OutputReference source, std::int64_t expected)
+{
+    return tool(id, "visionpro.judge.integer_range", "范围判断", {input_binding("value", std::move(source)),
+        setting("minimum", ConfigValue::integer(expected)), setting("maximum", ConfigValue::integer(expected))});
+}
+
+Workflow image_chain(const ResourceReference& source)
+{
+    const auto flow = uuid<WorkflowId>('1');
+    return {flow, "视觉单链", {key<SchemaId>("s46.single"), 1},
+        {image_reader('1', source), threshold(flow, '2', '1', FullImageRegion{}), blob(flow, '3', '2'),
+            judge('4', output(flow, '3', "count"), 2)},
+        {link('1', '1', '2'), link('2', '2', '3'), link('3', '3', '4')}, {}, {uuid<NodeId>('1')}, {}};
+}
+
+Workflow inherited_chain(const ResourceReference& source)
+{
+    const auto flow = uuid<WorkflowId>('3');
+    const Transform2D shift{camera(), camera(), pixel, pixel, TransformModel::Affine, {1, 0, 1, 0, 1, 0, 0, 0, 1}};
+    const RegionDefinition roi{uuid<RegionId>('8'), camera(), pixel,
+        InheritedRegion{flow, uuid<NodeId>('7'), key<OutputId>("effective_roi"), camera(), pixel, 0, shift},
+        {RegionPrimitive{camera(), pixel, AxisAlignedRect{5, 4, 1, 1}}}};
+    auto measured = blob(flow, '8', '6');
+    measured.bindings.push_back(setting("roi", ConfigValue::some(take(ConfigValue::region2d(roi)))));
+    return {flow, "继承旋转 ROI", {key<SchemaId>("s46.inherited"), 1},
+        {image_reader('5', source), threshold(flow, '6', '5', FullImageRegion{}),
+            threshold(flow, '7', '5', RotatedRect{4, 4, 4, 2, std::numbers::pi / 4}), std::move(measured),
+            judge('e', output(flow, '8', "total_area_pixels"), 6)},
+        {link('4', '5', '6'), link('5', '5', '7'), link('6', '6', '8'), link('7', '7', '8'), link('8', '8', 'e')},
+        {}, {uuid<NodeId>('5')}, {}};
+}
+
+std::string white_bmp()
+{
+    // 9 x 9 uncompressed BGR8. Each bottom-up row has 27 sample bytes and one padding byte.
+    constexpr unsigned char header[]{
+        0x42, 0x4d, 0x32, 0x01, 0, 0, 0, 0, 0, 0, 54, 0, 0, 0,
+        40, 0, 0, 0, 9, 0, 0, 0, 9, 0, 0, 0, 1, 0, 24, 0, 0, 0, 0, 0,
+        252, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+    static_assert(sizeof(header) == 54);
+    std::string bytes(reinterpret_cast<const char*>(header), sizeof(header));
+    for (int row = 0; row < 9; ++row) {
+        bytes.append(27, static_cast<char>(255));
+        bytes.push_back(0);
+    }
+    return bytes;
+}
+
+struct VisionFixture {
+    const fs::path cli;
+    const ScratchDirectory scratch;
+    const fs::path package = scratch.path / u8"视觉 方案";
+    const fs::path manifest = package / solution_manifest_name;
+    const fs::path first = scratch.path / u8"保存 前";
+    const fs::path second = scratch.path / u8"重载 后";
+    const fs::path png_path = package / u8"图像/灰度 图.png";
+    const fs::path bmp_path = package / u8"图像/旋转 图.bmp";
+
+    explicit VisionFixture(fs::path executable) : cli(std::move(executable))
+    {
+        fs::create_directories(first);
+        fs::create_directories(second);
+        const auto& png = visionpro::test_fixtures::png;
+        write_file(png_path, {reinterpret_cast<const char*>(png), sizeof(png)});
+        write_file(bmp_path, white_bmp());
+        const auto resource = [&](char id, const fs::path& path) {
+            const auto relative = path.lexically_relative(package).generic_u8string();
+            return ResourceDefinition{uuid<ResourceId>(id), "外部图像", ResourceKind::Image,
+                ExternalFileResource{{PathBase::SolutionDirectory, {relative.begin(), relative.end()}, {}},
+                    ResourceReadPolicy::PerInvocation, {}, {}}};
+        };
+        const auto png_resource = resource('1', png_path);
+        const auto bmp_resource = resource('2', bmp_path);
+        const CoordinateFrameDefinition coordinates{camera(), CoordinateKind::Image, pixel, {0, 0}, {1, 0}, {0, -1},
+            Handedness::LeftHanded};
+        const Solution solution{uuid<SolutionId>(), "真实视觉往返", solution_format_version, 12,
+            {image_chain({png_resource.id, png_resource.kind, {}}), branch_flow(), inherited_chain({bmp_resource.id, bmp_resource.kind, {}})},
+            {png_resource, bmp_resource}, {}, {}, {coordinates}, {}};
+        take(write_new_solution(package, solution));
+    }
+
+    CommandResult run(char flow, const fs::path& working) const
+    {
+        const auto id = uuid<WorkflowId>(flow).to_string();
+        const auto manifest_arg = manifest.lexically_relative(working).native();
+        const std::wstring flow_arg(id.begin(), id.end());
+        if (flow == '2') {
+            return invoke(cli, working, {L"run", L"--solution", manifest_arg, L"--workflow", flow_arg, L"--input", L"mask=3"});
+        }
+        return invoke(cli, working, {L"run", L"--solution", manifest_arg, L"--workflow", flow_arg});
+    }
+};
+
+void check_vision_report(const Json& report, char flow, std::string_view revision)
+{
+    if (flow == '2') { verify_branch(report, revision, 3); return; }
+    check_run(report, flow, revision);
+    const bool inherited = flow == '3';
+    const auto& reader = node(report, inherited ? '5' : '1');
+    const auto& measured = node(report, inherited ? '8' : '3');
+    const auto& judged = node(report, inherited ? 'e' : '4');
+    const auto& layout = produced(reader, "image");
+    const auto side = inherited ? 9 : 2;
+    check(layout.at("width") == side && layout.at("height") == side && layout.at("depth") == "UInt8"
+        && layout.at("channel_order") == "Mono" && layout.at("current_frame") == "camera"
+        && layout.at("root_frame") == "camera", "The CLI identifies the full decoded image and coordinates.");
+    check(layout.at("samples") == Json{{"minimum", inherited ? 255 : 0}, {"maximum", 255}, {"nonzero_count", inherited ? 81 : 3}},
+        "The CLI summarizes the valid samples of both file formats.");
+    const auto& lease = find_by(reader.at("resources"), "slot", "source");
+    check(lease.at("resource") == uuid<ResourceId>(inherited ? '2' : '1').to_string() && lease.at("kind") == "Image"
+        && lease.at("revision").is_null(),
+        "The CLI keeps the exact external image resource identity.");
+    check(produced(measured, "count") == "1" && produced(measured, "total_area_pixels") == (inherited ? "6" : "2")
+        && produced(measured, "largest_area_pixels") == (inherited ? "6" : "2"), "The CLI publishes the fixed component statistics.");
+    check(judged.at("status") == "Succeeded" && judged.at("judgement") == (inherited ? "OK" : "NG")
+        && produced(judged, "passed") == inherited, "The CLI accepts the business judgement as successful execution.");
+    for (const char id : std::string_view(inherited ? "45678" : "123")) { edge(report, id, true); }
+
+    if (inherited) {
+        check(sources(measured, "binary").at(0).at("node") == uuid<NodeId>('6').to_string(),
+            "Blob uses the whole binary image from the full-image threshold.");
+        const auto& frozen = find_by(measured.at("bindings"), "target", "roi").at("regions").at(0);
+        const auto& reference = frozen.at("reference");
+        const auto& producer = frozen.at("producer");
+        const auto& source = node(report, '7');
+        check(frozen.at("region") == uuid<RegionId>('7').to_string() && reference.at("kind") == "inherited"
+            && reference.at("transform").at("matrix") == Json::array({1, 0, 1, 0, 1, 0, 0, 0, 1}),
+            "The CLI preserves the frozen region and the position correction.");
+        check(producer.at("node") == source.at("id") && producer.at("output") == "effective_roi"
+            && producer.at("scope") == source.at("scope") && producer.at("invocation") == source.at("invocation")
+            && producer.at("attempt") == source.at("attempt") && producer.at("run") == report.at("run")
+            && producer.at("snapshot") == report.at("snapshot") && producer.at("session") == report.at("session")
+            && producer.at("workflow") == report.at("workflow"), "The inherited ROI references this exact producer and run.");
+    }
+}
+
+ToolRegistry full_catalog()
+{
+    auto registrations = visionpro::tools::simulation_registrations();
+    for (auto& item : vision::registrations()) { registrations.push_back(std::move(item)); }
+    return take(ToolRegistry::create(registrations));
+}
+
+void check_pixels(const SolutionDocument& document, const ToolRegistry& registry, char flow)
+{
+    const auto execution = take(open_solution_execution(document, registry));
+    const auto request = take(RunRequest::create(execution.snapshot, WorkflowTarget{uuid<WorkflowId>(flow)}, {},
+        {TriggerKind::Manual, key<SchemaId>("s46.pixels")}));
+    auto submitted = execution.engine->submit(request);
+    if (const auto* refused = std::get_if<RunRejected>(&submitted)) { throw std::runtime_error(refused->diagnostic.message); }
+    const auto& run = std::get<RunHandle>(submitted);
+    const auto waited = take(run.wait(RunWaitTarget::Quiescence, std::chrono::steady_clock::now() + std::chrono::seconds(5)));
+    check(waited.outcome == RunWaitOutcome::Satisfied && waited.progress.status == ExecutionStatus::Succeeded,
+        "The loaded configuration succeeds when checking image data directly.");
+    const auto value = [&](char id, std::string_view port) {
+        const auto invocation = std::ranges::find(waited.progress.nodes, uuid<NodeId>(id), &RunNodeProgress::node);
+        check(invocation != waited.progress.nodes.end() && invocation->invocation.has_value(), "The producer was invoked.");
+        const auto result = take(run.lookup(*invocation->invocation));
+        check(result.has_value(), "The producer result is retained.");
+        const auto* slot = result->output(key<OutputId>(port));
+        check(slot && std::holds_alternative<DataValue>(slot->content), "The binary image or mask was published.");
+        return std::get<DataValue>(slot->content);
+    };
+    const auto check_image = [&](const ImageHandle& image, std::size_t side, std::span<const unsigned char> samples) {
+        check(image.width() == side && image.height() == side && image.format() == PixelFormat{PixelDepth::UInt8, ChannelOrder::Mono}
+            && image.coordinate_frame() == camera() && image.root_frame() == camera() && image.origin_x() == 0 && image.origin_y() == 0
+            && std::ranges::equal(image.copy_pixels(), std::as_bytes(samples)), "Valid pixels, layout and coordinates match the fixed expectation.");
+    };
+    if (flow == '1') {
+        constexpr unsigned char binary[]{0, 0, 255, 255};
+        check_image(value('1', "image").as_image()->image, 2, visionpro::test_fixtures::mono_pixels);
+        check_image(value('2', "binary").as_image()->image, 2, binary);
+    } else {
+        std::array<unsigned char, 81> white;
+        white.fill(255);
+        check_image(value('5', "image").as_image()->image, 9, white);
+        check_image(value('6', "binary").as_image()->image, 9, white);
+        std::array<unsigned char, 81> rotated{};
+        for (const auto index : {30, 31, 39, 40, 41, 49, 50}) { rotated[index] = 255; }
+        check_image(value('7', "binary").as_image()->image, 9, rotated);
+        check_image(value('7', "roi_mask").as_raster_mask()->pixels, 9, rotated);
+    }
+}
+
+void vision_roundtrip(const fs::path& executable)
+{
+    const VisionFixture fixture(executable);
+    const auto registry = full_catalog();
+    const auto original = read_file(fixture.manifest);
+    const auto original_png = read_file(fixture.png_path);
+    const auto original_bmp = read_file(fixture.bmp_path);
+    const auto loaded = take(load_solution(fixture.package, registry));
+    check_pixels(loaded, registry, '1');
+    check_pixels(loaded, registry, '3');
+
+    std::vector<std::pair<char, Json>> before;
+    for (const char flow : {'1', '2', '3'}) {
+        auto report = success(fixture.run(flow, fixture.first));
+        check_vision_report(report, flow, "12");
+        before.emplace_back(flow, std::move(report));
+    }
+    check(read_file(fixture.manifest) == original, "Executing the package leaves its manifest unchanged.");
+
+    const auto changed = original + "\n";
+    write_file(fixture.manifest, changed);
+    const auto stale = save_solution(loaded, loaded.solution());
+    const auto* conflict = std::get_if<Diagnostic>(&stale);
+    check(conflict && conflict->code == ErrorCode::SolutionSaveConflict && read_file(fixture.manifest) == changed,
+        "A byte change in the same revision prevents a stale document from overwriting the manifest.");
+
+    const auto saved = success(invoke(executable, fixture.first, {L"save", L"--solution", fixture.manifest.native()}));
+    check(saved.at("status") == "Committed" && saved.at("revision") == "13" && saved.at("cleanup").at("diagnostics").empty(),
+        "The independent save process commits a new revision.");
+    auto expected = Json::parse(original);
+    expected["revision"] = "13";
+    check(Json::parse(read_file(fixture.manifest)) == expected, "The manifest keeps configuration and resource references across revisions.");
+    check(read_file(fixture.png_path) == original_png && read_file(fixture.bmp_path) == original_bmp,
+        "The external files retain their content after save.");
+
+    const auto reloaded = take(load_solution(fixture.package, registry));
+    check_pixels(reloaded, registry, '1');
+    check_pixels(reloaded, registry, '3');
+    for (const auto& [flow, previous] : before) {
+        const auto after = success(fixture.run(flow, fixture.second));
+        check_vision_report(after, flow, "13");
+        check(previous.at("session") != after.at("session") && comparable(previous) == comparable(after),
+            "Fresh CLI processes agree on values, binding sources and control from different working directories.");
+    }
+}
+
+void vision_diagnostics(const fs::path& executable)
+{
+    const VisionFixture fixture(executable);
+    const auto original = read_file(fixture.manifest);
+    const auto prior = success(fixture.run('1', fixture.first));
+    check_vision_report(prior, '1', "12");
+
+    write_file(fixture.png_path, "damaged image");
+    const auto damaged = fixture.run('1', fixture.second);
+    rejected(damaged, 1, "InvalidImage");
+    const auto report = Json::parse(damaged.output);
+    check(report.at("status") == "Failed" && report.at("quiescent") == true && report.at("session") != prior.at("session")
+        && node(report, '1').at("status") == "Failed", "An accepted decode failure reports the terminal state of this run.");
+    for (const auto& output : node(report, '1').at("outputs")) {
+        check(output.at("status") != "Produced", "The failed reader has no produced value.");
+    }
+    for (const char id : {'2', '3', '4'}) {
+        const auto& successor = node(report, id);
+        check(successor.at("status") == "Skipped" && successor.at("skip_reason") == "FailFast"
+            && successor.at("invocation").is_null() && successor.at("outputs").empty(),
+            "FailFast closes each successor without a stale result.");
+    }
+
+    check(fs::remove(fixture.png_path), "The fixture removed its external image.");
+    const auto missing = fixture.run('1', fixture.second);
+    rejected(missing, 1, "ResourceNotFound");
+    check(missing.output.empty(), "A missing required image fails before acceptance.");
+    check(read_file(fixture.manifest) == original, "Failed runs preserve the original manifest.");
+}
+#endif
+
 } // namespace
 
 int wmain(int argc, wchar_t** argv)
@@ -493,6 +812,10 @@ int wmain(int argc, wchar_t** argv)
         const std::wstring_view group(argv[2]);
         if (group == L"roundtrip") { roundtrip(cli); }
         else if (group == L"diagnostics") { diagnostics(cli); }
+#ifdef VISIONPRO_WITH_OPENCV
+        else if (group == L"vision-roundtrip") { vision_roundtrip(cli); }
+        else if (group == L"vision-diagnostics") { vision_diagnostics(cli); }
+#endif
         else { throw std::runtime_error("Unknown CLI test group."); }
         std::cout << checks << " checks passed\n";
         return 0;

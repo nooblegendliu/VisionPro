@@ -98,7 +98,7 @@ core::Result<SolutionDocument> load_solution(const fs::path& directory, const To
         const auto manifest = base / solution_manifest_name;
         auto bytes = detail::read_manifest(manifest);
         if (auto* failure = std::get_if<Diagnostic>(&bytes)) { return std::move(*failure); }
-        const auto& text = std::get<std::string>(bytes);
+        auto& text = std::get<std::string>(bytes);
         const auto json = detail::parse_manifest(text);
         std::vector<Diagnostic> diagnostics;
         auto solution = detail::decode_solution(detail::Reader{json, diagnostics});
@@ -122,10 +122,8 @@ core::Result<SolutionDocument> load_solution(const fs::path& directory, const To
         if (std::get<std::string>(confirmed) != text) {
             return error(ErrorCode::SolutionSaveConflict, "The manifest changed while its resources were being loaded.", solution.id);
         }
-        auto digest = detail::sha256(std::as_bytes(std::span{text.data(), text.size()}));
-        if (auto* failure = std::get_if<Diagnostic>(&digest)) { return std::move(*failure); }
         return SolutionDocument{std::move(solution), std::move(base), std::move(diagnostics), complete, std::move(provider),
-            std::get<std::string>(std::move(digest)), roots};
+            std::move(text), roots};
     } catch (detail::CodecError& failure) {
         return std::move(failure.diagnostic);
     } catch (const detail::Json::parse_error& failure) {

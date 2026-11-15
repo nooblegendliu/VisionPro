@@ -148,25 +148,33 @@ void image_summary()
     const auto node = [&](const NodeId& id) -> const json& { return find_entry(report.at("nodes"), "id", id.to_string()); };
     const json expected_native{{"width", 2}, {"height", 2}, {"depth", "UInt8"}, {"channel_order", "BGR"},
         {"current_frame", "camera"}, {"root_frame", "camera"}, {"origin", {{"x", 0}, {"y", 0}}},
+        {"samples", {{"minimum", 0}, {"maximum", 255}, {"nonzero_count", 6}}},
         {"frame", nullptr}, {"captured_at_unix_ns", nullptr}};
     if (produced_value(node(native.id), "image") != expected_native) {
         throw std::runtime_error("Unexpected Native8 image summary.");
     }
-    auto expected_binary = expected_native;
-    expected_binary["channel_order"] = "Mono";
-    if (produced_value(node(gray.id), "image") != expected_binary
-        || produced_value(node(first.id), "binary") != expected_binary || produced_value(node(second.id), "binary") != expected_binary) {
+    auto expected_gray = expected_native;
+    expected_gray["channel_order"] = "Mono";
+    expected_gray["samples"] = {{"minimum", 29}, {"maximum", 255}, {"nonzero_count", 4}};
+    auto expected_binary = expected_gray;
+    expected_binary["samples"] = {{"minimum", 0}, {"maximum", 255}, {"nonzero_count", 2}};
+    auto expected_inherited_binary = expected_binary;
+    expected_inherited_binary["samples"]["nonzero_count"] = 1;
+    if (produced_value(node(gray.id), "image") != expected_gray || produced_value(node(first.id), "binary") != expected_binary
+        || produced_value(node(second.id), "binary") != expected_inherited_binary) {
         throw std::runtime_error("Unexpected Gray8 or binary image summary.");
     }
 
     auto expected_pixels = expected_binary;
     expected_pixels.erase("frame");
     expected_pixels.erase("captured_at_unix_ns");
+    expected_pixels["samples"]["nonzero_count"] = 3;
     json expected_mask{{"pixels", expected_pixels}, {"mapping", {{"target_frame", "camera"}, {"target_width", 2},
         {"target_height", 2}, {"sampling", "None"}, {"transform", nullptr}}}, {"valid_pixels", {{"mode", "NonZero"}, {"threshold", 0}}},
         {"member_count", 3}};
     if (produced_value(node(first.id), "roi_mask") != expected_mask) { throw std::runtime_error("Unexpected ROI mask summary."); }
     expected_mask["member_count"] = 1;
+    expected_mask["pixels"]["samples"]["nonzero_count"] = 1;
     if (produced_value(node(second.id), "roi_mask") != expected_mask) {
         throw std::runtime_error("The inherited mask summary must reflect the translated pixels and exclusion.");
     }
@@ -300,6 +308,103 @@ void blob_judgement_summary()
         throw std::runtime_error("Wrong diagnostic location for the empty Blob list: " + location.dump());
     }
 }
+
+class SummaryFixtureTool final : public ToolInstance {
+public:
+    SummaryFixtureTool(const ToolExecutionConfiguration& configuration, const std::vector<ToolOutput>& outputs)
+        : ToolInstance(configuration), outputs_(outputs) {}
+
+private:
+    Result<InvocationStart> begin(std::shared_ptr<const InvocationContext> context, InvocationCompletion) override
+    {
+        return InvocationStart{ToolCompletion{context->data().identity, ToolCompletionStatus::Succeeded,
+            ToolJudgement::NotEvaluated, outputs_, {}}};
+    }
+
+    const std::vector<ToolOutput> outputs_;
+};
+
+class SummaryFixtureFactory final : public ToolInstanceFactory {
+public:
+    explicit SummaryFixtureFactory(std::vector<ToolOutput> outputs) : outputs_(std::move(outputs)) {}
+
+private:
+    Result<std::shared_ptr<ToolInstance>> create(const ToolExecutionConfiguration& configuration) override
+    {
+        return std::static_pointer_cast<ToolInstance>(std::make_shared<SummaryFixtureTool>(configuration, outputs_));
+    }
+
+    const std::vector<ToolOutput> outputs_;
+};
+
+void scalar_and_mask_summary()
+{
+    const auto enum_schema = key<SchemaId>("test.summary.mode");
+    const auto member = key<EnumMemberId>("Selected");
+    const auto mode = take(DataType::enumeration(enum_schema, 2, {{member, "Display name"}}));
+    const auto choices = take(DataValue::list(DataType::optional(mode),
+        {DataValue::some(take(DataValue::enumeration(mode, member))), DataValue::none(mode)}));
+    const auto number = key<FieldId>("number");
+    const auto label = key<FieldId>("label");
+    const auto modes = key<FieldId>("modes");
+    const auto record = take(DataType::record(key<SchemaId>("test.summary.payload"), 1,
+        {{number, DataType::real()}, {label, DataType::string()}, {modes, choices.type()}}));
+    const std::string text = "图像 摘要\n";
+    const auto value = take(DataValue::record(record,
+        {{number, take(DataValue::real(-1.25))}, {label, take(DataValue::string(text))}, {modes, choices}}));
+
+    constexpr std::array<unsigned char, 6> samples{127, 129, 0, 255, 64, 200};
+    const auto frame = key<CoordinateSystemId>("camera");
+    constexpr auto pixels = MeasurementUnit::Pixel;
+    const auto image = take(ImageHandle::copy({2, 2, 4, {PixelDepth::UInt8, ChannelOrder::Mono}},
+        std::as_bytes(std::span(samples)), frame));
+    const MaskValueRule rule{MaskValueMode::AtLeastThreshold, 129.5};
+    const Transform2D shift{frame, frame, pixels, pixels, TransformModel::Affine, {1, 0, 1, 0, 1, 0, 0, 0, 1}};
+    const auto direct = take(DataValue::raster_mask({image, {frame, 2, 2, {}, MaskSampling::None}, rule}));
+    const auto mapped = take(DataValue::raster_mask({image, {frame, 3, 2, shift, MaskSampling::Nearest}, rule}));
+    const auto value_out = key<OutputId>("payload");
+    const auto direct_out = key<OutputId>("direct");
+    const auto mapped_out = key<OutputId>("mapped");
+    const auto type = key<ToolTypeId>("test.summary");
+    const ToolDescriptor tool{type, "Summary fixture", 1, {key<SchemaId>("test.summary.tool"), 1}, {}, {},
+        {{value_out, "Payload", record}, {direct_out, "Direct mask", direct.type()}, {mapped_out, "Mapped mask", mapped.type()}}};
+    const auto factory = std::make_shared<SummaryFixtureFactory>(std::vector<ToolOutput>{
+        {value_out, value}, {direct_out, direct}, {mapped_out, mapped}});
+    const std::array catalog{ToolRegistration{tool, {tool.schema.id, 1, 1, {}}, factory}};
+    const auto registry = take(ToolRegistry::create(catalog));
+    const Node node{id<NodeId>(), "Summary fixture", ToolConfiguration{type, 1}};
+    const Workflow flow{id<WorkflowId>(), "Summary types", {key<SchemaId>("test.summary.flow"), 1, {}, {}, {}},
+        {node}, {}, {}, {node.id}};
+    const CoordinateFrameDefinition coordinates{frame, CoordinateKind::Image, pixels, {0, 0}, {1, 0}, {0, -1}, Handedness::LeftHanded};
+    const Solution solution{id<SolutionId>(), "Summary types", 1, 1, {flow}, {}, {}, {}, {coordinates}, {}};
+    const auto engine = take(WorkflowEngine::create(registry));
+    const auto revision = take(RuntimeIdFactory::from_value<ConfigSnapshotId>(1));
+    const auto snapshot = take(ConfigSnapshot::capture(solution, registry.descriptors(), {engine->session(), revision}));
+    const auto request = take(RunRequest::create(snapshot, WorkflowTarget{flow.id}, {},
+        {TriggerKind::Manual, key<SchemaId>("test.summary")}));
+    const auto summary = json::parse(execute_summary(*engine, request).dump());
+    if (summary.at("status") != "Succeeded") {
+        throw std::runtime_error("The scalar and mask workflow failed: " + summary.at("diagnostics").dump());
+    }
+
+    const auto& result = find_entry(summary.at("nodes"), "id", node.id.to_string());
+    const json expected_modes = json::array({{{"schema", "test.summary.mode"}, {"version", 2}, {"member", "Selected"}}, nullptr});
+    const auto& payload = produced_value(result, "payload");
+    if (!payload.at("number").is_number_float()
+        || payload != json{{"number", -1.25}, {"label", text}, {"modes", expected_modes}}) {
+        throw std::runtime_error("Unexpected scalar or nested Enum summary: " + payload.dump());
+    }
+
+    const json expected_samples{{"minimum", 64}, {"maximum", 200}, {"nonzero_count", 4}};
+    const auto& direct_mask = produced_value(result, "direct");
+    const auto& mapped_mask = produced_value(result, "mapped");
+    if (direct_mask.at("pixels").at("samples") != expected_samples || direct_mask.at("member_count") != 1
+        || direct_mask.at("valid_pixels").at("threshold") != 129.5
+        || mapped_mask.at("pixels").at("samples") != expected_samples || mapped_mask.contains("member_count")
+        || mapped_mask.at("mapping").at("transform").at("matrix") != json(shift.matrix)) {
+        throw std::runtime_error("Unexpected padded or transformed mask summary.");
+    }
+}
 } // namespace
 
 int main()
@@ -307,6 +412,7 @@ int main()
     try {
         image_summary();
         blob_judgement_summary();
+        scalar_and_mask_summary();
         return 0;
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
