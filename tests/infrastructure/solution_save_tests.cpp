@@ -13,6 +13,7 @@
 #include <iterator>
 #include <mutex>
 #include <stdexcept>
+#include <vector>
 
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -196,6 +197,8 @@ ToolRegistry registry(const std::shared_ptr<Gate>& gate)
     return take(ToolRegistry::create(registrations));
 }
 
+enum class PayloadStorage { Managed, External };
+
 struct Fixture {
     ScratchDirectory scratch;
     const fs::path package = scratch.path / u8"保存方案";
@@ -205,12 +208,17 @@ struct Fixture {
     const fs::path external = scratch.path / u8"外部.bin";
     const ToolRegistry tools;
 
-    explicit Fixture(const std::shared_ptr<Gate>& gate = {}) : tools(registry(gate))
+    explicit Fixture(const std::shared_ptr<Gate>& gate = {}, PayloadStorage storage = PayloadStorage::Managed)
+        : tools(registry(gate))
     {
         write(managed, original_bytes);
         write(external, "external");
-        const ResourceDefinition payload{id<ResourceId>('1'), "Managed", ResourceKind::Binary,
-            ManagedResource{{PathBase::SolutionDirectory, utf8(relative_managed), {}}, 7, std::string(original_digest)}};
+        const ResourcePath payload_path{PathBase::SolutionDirectory, utf8(relative_managed), {}};
+        const ResourceLocation payload_location = storage == PayloadStorage::Managed
+            ? ResourceLocation{ManagedResource{payload_path, 7, std::string(original_digest)}}
+            : ResourceLocation{ExternalFileResource{payload_path, ResourceReadPolicy::PerInvocation, {}, {}}};
+        const ResourceDefinition payload{id<ResourceId>('1'),
+            storage == PayloadStorage::Managed ? "Managed" : "Package payload", ResourceKind::Binary, payload_location};
         const ResourceDefinition attachment{id<ResourceId>('2'), "External", ResourceKind::Binary,
             ExternalFileResource{{PathBase::Absolute, utf8(external), {}}, ResourceReadPolicy::PerInvocation, {}, {}}};
         const Node reader{id<NodeId>(), "Read", ToolConfiguration{key<ToolTypeId>("s38.read"), 1}, {},
@@ -288,7 +296,7 @@ void verify_rollback(const Fixture& fixture, const std::string& original_manifes
 {
     check(read(fixture.manifest) == original_manifest, "Failed saves preserve the old manifest byte for byte.");
     check(read(fixture.managed) == original_bytes && read(fixture.external) == "external",
-        "Failed saves preserve both managed and external input bytes.");
+        "Failed saves preserve both input files.");
     check(payload_files(fixture) == 1, "Failed saves leave only the original package payload.");
     current_output_is(fixture, 'a');
 }
@@ -308,17 +316,20 @@ private:
     HANDLE file_;
 };
 
-void failures()
+void failures(PayloadStorage storage)
 {
-    Fixture fixture;
+    Fixture fixture({}, storage);
     const auto source = fixture.open();
     const auto original = read(fixture.manifest);
     auto edited = source.solution();
     edited.name = "Edited";
-    edited.resources.push_back({id<ResourceId>('3'), "New managed resource", ResourceKind::Binary, ManagedResource{}});
-    const std::array writes{payload(), payload("another managed file", '3')};
-    const std::array faults{std::pair{SaveStage::ResourceWrite, 2u}, std::pair{SaveStage::ManifestWrite, 3u},
-        std::pair{SaveStage::Commit, 4u}};
+    std::vector<ManagedResourceWrite> writes;
+    std::vector<std::pair<SaveStage, std::size_t>> faults{{SaveStage::ManifestWrite, 1}, {SaveStage::Commit, 2}};
+    if (storage == PayloadStorage::Managed) {
+        edited.resources.push_back({id<ResourceId>('3'), "New managed resource", ResourceKind::Binary, ManagedResource{}});
+        writes = {payload(), payload("another managed file", '3')};
+        faults = {{SaveStage::ResourceWrite, 2}, {SaveStage::ManifestWrite, 3}, {SaveStage::Commit, 4}};
+    }
     for (const auto& [fault, expected_files] : faults) {
         int resource_attempts = 0;
         std::size_t staged = 0;
@@ -359,9 +370,16 @@ void failures()
     check(read(fixture.manifest) == unknown_manifest, "Unsupported content stays byte for byte.");
 }
 
-void conflict()
+void conflict(PayloadStorage storage)
 {
-    Fixture fixture;
+    Fixture fixture({}, storage);
+    const bool replaces_payload = storage == PayloadStorage::Managed;
+    const auto first_payload = replace();
+    const auto second_payload = replace("different");
+    const std::span<const ManagedResourceWrite> first_writes = replaces_payload ? std::span<const ManagedResourceWrite>{first_payload}
+        : std::span<const ManagedResourceWrite>{};
+    const std::span<const ManagedResourceWrite> second_writes = replaces_payload ? std::span<const ManagedResourceWrite>{second_payload}
+        : std::span<const ManagedResourceWrite>{};
     const auto first_source = fixture.open();
     const auto second_source = fixture.open();
     const auto original_manifest = read(fixture.manifest);
@@ -378,14 +396,14 @@ void conflict()
     const ReleaseGate unblock{committing};
 
     first = std::async(std::launch::async, [&] {
-        return save_detail::save_solution(first_source, first_edit, replace(), [&](SaveStage stage) -> std::optional<Diagnostic> {
+        return save_detail::save_solution(first_source, first_edit, first_writes, [&](SaveStage stage) -> std::optional<Diagnostic> {
             if (stage == SaveStage::Commit) { committing.pause(); }
             return {};
         });
     });
-    check(committing.await(), "The first writer has staged its payload and manifest.");
+    check(committing.await(), "The first writer has staged its manifest.");
     second = std::async(std::launch::async, [&] {
-        return save_detail::save_solution(second_source, second_edit, replace("different"), [&](SaveStage stage) -> std::optional<Diagnostic> {
+        return save_detail::save_solution(second_source, second_edit, second_writes, [&](SaveStage stage) -> std::optional<Diagnostic> {
             if (stage == SaveStage::BeforeLock) { second_started.set_value(); }
             if (stage == SaveStage::ResourceWrite || stage == SaveStage::ManifestWrite) { second_staged = true; }
             return {};
@@ -398,14 +416,14 @@ void conflict()
     committing.release();
 
     const auto committed = take(first.get());
-    check(committed.solution.name == first_edit.name && committed.cleanup.removed == 1,
-        "The first writer commits and retires its predecessor.");
+    check(committed.solution.name == first_edit.name && committed.solution.revision == initial_revision + 1
+        && committed.cleanup.removed == (replaces_payload ? 1u : 0u), "The first writer commits the expected new revision.");
     rejected(second.get(), ErrorCode::SolutionSaveConflict, "The second writer is rejected with a stale revision conflict.");
     check(!second_staged && payload_files(fixture) == 1, "The stale writer stages no files.");
-    const auto installed = verify_replacement(fixture, committed.solution);
+    const auto installed = replaces_payload ? verify_replacement(fixture, committed.solution) : fixture.managed;
     const auto current = fixture.open();
     check(current.solution().name == first_edit.name, "The winning edit is present after reloading.");
-    current_output_is(fixture, 'x');
+    current_output_is(fixture, replaces_payload ? 'x' : 'a');
 
     const auto outside_edit = read(fixture.manifest) + " \n";
     write(fixture.manifest, outside_edit);
@@ -416,7 +434,7 @@ void conflict()
     check(read(fixture.manifest) == outside_edit, "The externally edited manifest is preserved.");
 
     const auto late_edit = outside_edit + " ";
-    const auto changed_during_save = save_detail::save_solution(outside, outside.solution(), replace("different"),
+    const auto changed_during_save = save_detail::save_solution(outside, outside.solution(), second_writes,
         [&](SaveStage stage) -> std::optional<Diagnostic> {
             if (stage == SaveStage::Commit) { write(fixture.manifest, late_edit); }
             return {};
@@ -432,7 +450,8 @@ void conflict()
     check(metadata_saved.solution.revision == refreshed.solution().revision + 1
         && fixture.open().solution().name == metadata_edit.name, "Reloading supplies the base for a new configuration save.");
     check(metadata_saved.cleanup.removed == 0 && metadata_saved.cleanup.deferred == 0 && metadata_saved.cleanup.diagnostics.empty()
-        && payload_files(fixture) == 1 && read(installed) == replacement_bytes, "A configuration save preserves the existing managed version.");
+        && payload_files(fixture) == 1 && read(installed) == (replaces_payload ? replacement_bytes : original_bytes)
+        && read(fixture.external) == "external", "A configuration save preserves the existing file bytes.");
 }
 
 void cleanup()
@@ -503,10 +522,12 @@ int main(int argc, char** argv)
 {
     try {
         const std::string_view group = argc == 2 ? argv[1] : "";
-        if (group == "failures") { failures(); }
-        else if (group == "conflict") { conflict(); }
+        if (group == "failures") { failures(PayloadStorage::Managed); }
+        else if (group == "conflict") { conflict(PayloadStorage::Managed); }
         else if (group == "cleanup") { cleanup(); }
-        else { throw std::runtime_error("Expected failures, conflict, or cleanup."); }
+        else if (group == "external-failures") { failures(PayloadStorage::External); }
+        else if (group == "external-conflict") { conflict(PayloadStorage::External); }
+        else { throw std::runtime_error("Expected failures, conflict, cleanup, external-failures or external-conflict."); }
         std::cout << checks << " checks passed\n";
         return 0;
     } catch (const std::exception& error) {

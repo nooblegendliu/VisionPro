@@ -9,7 +9,10 @@ add_dependencies(visionpro_cli_tests visionpro_cli)
 
 add_test(NAME app.cli_roundtrip COMMAND visionpro_cli_tests $<TARGET_FILE:visionpro_cli> roundtrip)
 add_test(NAME app.cli_diagnostics COMMAND visionpro_cli_tests $<TARGET_FILE:visionpro_cli> diagnostics)
-set_tests_properties(app.cli_roundtrip app.cli_diagnostics PROPERTIES TIMEOUT 60)
+add_test(NAME app.cli_external_roundtrip COMMAND visionpro_cli_tests $<TARGET_FILE:visionpro_cli> external-roundtrip)
+add_test(NAME app.cli_external_diagnostics COMMAND visionpro_cli_tests $<TARGET_FILE:visionpro_cli> external-diagnostics)
+set_tests_properties(app.cli_roundtrip app.cli_diagnostics app.cli_external_roundtrip app.cli_external_diagnostics
+    PROPERTIES TIMEOUT 60)
 
 if(VISIONPRO_WITH_OPENCV)
     target_compile_definitions(visionpro_cli_tests PRIVATE VISIONPRO_WITH_OPENCV)
@@ -24,7 +27,8 @@ if(VISIONPRO_WITH_OPENCV)
     target_link_libraries(visionpro_image_summary_tests PRIVATE visionpro_vision_tools visionpro_infrastructure visionpro_build_options)
     add_test(NAME app.vision_image_summary COMMAND visionpro_image_summary_tests)
     set_tests_properties(app.vision_image_summary PROPERTIES TIMEOUT 30)
-    set_tests_properties(app.cli_roundtrip app.cli_diagnostics app.vision_image_summary
+    set_tests_properties(app.cli_roundtrip app.cli_diagnostics app.cli_external_roundtrip app.cli_external_diagnostics
+        app.vision_image_summary
         app.vision_roundtrip app.vision_diagnostics PROPERTIES
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:opencv_core>"
     )

@@ -1,6 +1,7 @@
 #include <visionpro/core/id_factory.hpp>
 #include <visionpro/core/schema_id_factory.hpp>
 #include <visionpro/infrastructure/solution_file.hpp>
+#include <visionpro/workflow/execution_plan.hpp>
 
 #include <algorithm>
 #include <array>
@@ -144,6 +145,8 @@ Workflow flow(char suffix, char first, char second, const ResourceReference& res
         {probe, reader}, {{id<ControlLinkId>(suffix), probe.id, {}, reader.id}}, {}, {probe.id}, {}};
 }
 
+enum class ResourceFixtures { ProtectedFiles, ExternalFiles };
+
 struct Fixture {
     ScratchDirectory scratch;
     const fs::path package = scratch.path / u8"检测方案";
@@ -162,20 +165,29 @@ struct Fixture {
         write(dynamic, "abc");
     }
 
-    Solution model() const
+    Solution model(ResourceFixtures files = ResourceFixtures::ProtectedFiles) const
     {
-        const ResourceDefinition managed_file{id<ResourceId>('1'), "Managed", ResourceKind::Binary,
-            ManagedResource{{PathBase::SolutionDirectory, "resources/托管.bin", {}}, 7, std::string(digest)}};
-        const ResourceDefinition locked_file{id<ResourceId>('2'), "External", ResourceKind::Binary,
-            ExternalFileResource{{PathBase::NamedRoot, "外部.bin", roots.front().id}, ResourceReadPolicy::SnapshotLocked,
-                std::string(digest), 9}};
+        const bool use_digests = files == ResourceFixtures::ProtectedFiles;
+        const ResourcePath package_path{PathBase::SolutionDirectory, "resources/托管.bin", {}};
+        const ResourcePath named_path{PathBase::NamedRoot, "外部.bin", roots.front().id};
+        const auto per_invocation = [](ResourcePath path) -> ResourceLocation {
+            return ExternalFileResource{std::move(path), ResourceReadPolicy::PerInvocation, {}, {}};
+        };
+        const ResourceDefinition package_file{id<ResourceId>('1'), use_digests ? "Managed" : "Package file", ResourceKind::Binary,
+            use_digests ? ResourceLocation{ManagedResource{package_path, 7, std::string(digest)}} : per_invocation(package_path)};
+        const ResourceDefinition named_file{id<ResourceId>('2'), use_digests ? "External" : "Named file", ResourceKind::Binary,
+            use_digests ? ResourceLocation{ExternalFileResource{named_path, ResourceReadPolicy::SnapshotLocked, std::string(digest), 9}}
+                : per_invocation(named_path)};
         const ResourceDefinition changing_file{id<ResourceId>('3'), "Dynamic", ResourceKind::Binary,
-            ExternalFileResource{{PathBase::Absolute, utf8(dynamic), {}}, ResourceReadPolicy::PerInvocation, {}, {}}};
+            per_invocation({PathBase::Absolute, utf8(dynamic), {}})};
+        const auto version = [use_digests](std::uint64_t revision) {
+            return use_digests ? std::optional{revision} : std::nullopt;
+        };
         return {id<SolutionId>(), "文件验收", 1, 12,
-            {flow('1', '1', '2', {managed_file.id, ResourceKind::Binary, 7}),
-                flow('2', '3', '4', {locked_file.id, ResourceKind::Binary, 9}),
+            {flow('1', '1', '2', {package_file.id, ResourceKind::Binary, version(7)}),
+                flow('2', '3', '4', {named_file.id, ResourceKind::Binary, version(9)}),
                 flow('3', '5', '6', {changing_file.id, ResourceKind::Binary, {}})},
-            {managed_file, locked_file, changing_file}, {}, {}, {}, {}};
+            {package_file, named_file, changing_file}, {}, {}, {}, {}};
     }
 };
 
@@ -240,10 +252,52 @@ void execution()
     output_is(session->submit(request(active, '1')), 'a');
 }
 
-void diagnostics()
+void external_execution()
 {
     Fixture fixture;
-    auto valid = fixture.model();
+    const auto model = fixture.model(ResourceFixtures::ExternalFiles);
+    write(fixture.external, "named root");
+    write(fixture.dynamic, "direct file");
+    take(write_new_solution(fixture.package, model));
+    const auto document = take(load_solution(fixture.package, fixture.registry, fixture.roots));
+    check(document.can_save() && document.diagnostics().empty(), "All three external path bases resolve.");
+    auto session = take(WorkflowSession::create(fixture.registry));
+    const auto active = take(activate_solution(*session, document));
+    output_is(session->submit(request(active, '1')), 'a');
+    output_is(session->submit(request(active, '2')), 'n');
+    output_is(session->submit(request(active, '3')), 'd');
+
+    const auto plan = take(ExecutionPlan::create(request(active, '1'), fixture.registry,
+        {.resource_leases = {ResourceKind::Binary}}));
+    const auto provider = take(FileResourceProvider::create(model, fixture.package, fixture.roots));
+    const auto& reader = model.workflows.front().nodes.back();
+    const auto* planned = plan.tool(reader.id);
+    check(planned != nullptr, "The external reader is present in the execution plan.");
+    const auto& configuration = planned->configuration();
+    const auto lease = std::dynamic_pointer_cast<const FileResourceLease>(
+        take(provider->acquire(configuration, configuration.data().resources.front())));
+    check(lease && fs::equivalent(lease->path(), fixture.managed), "The lease resolves to the package-relative file.");
+    write(fixture.managed, "xyz");
+    constexpr std::string_view previous_bytes = "abc";
+    check(std::ranges::equal(lease->bytes(), std::as_bytes(std::span(previous_bytes))),
+        "An acquired external lease retains its bytes after the disk file changes.");
+    output_is(session->submit(request(active, '1')), 'x');
+
+    fs::remove(fixture.dynamic);
+    const int before = *fixture.calls;
+    rejected_run(session->submit(request(active, '3')), ErrorCode::ResourceNotFound,
+        "A missing external file is rejected during preflight.");
+    check(*fixture.calls == before, "Resource preflight creates no tool instances.");
+    rejected(load_and_activate_solution(*session, fixture.package, fixture.registry, fixture.roots), ErrorCode::ResourceNotFound,
+        "A candidate with a missing external file cannot replace the session.");
+    check(session->inspect().active->same_capture(active), "The missing file leaves the active capture intact.");
+    output_is(session->submit(request(active, '2')), 'n');
+}
+
+void diagnostics(ResourceFixtures files)
+{
+    Fixture fixture;
+    auto valid = fixture.model(files);
     take(write_new_solution(fixture.package, valid));
     const auto manifest = fixture.package / solution_manifest_name;
     const auto original = read(manifest);
@@ -315,8 +369,10 @@ int main(int argc, char** argv)
     try {
         const std::string_view test = argc == 2 ? argv[1] : "";
         if (test == "execution") { execution(); }
-        else if (test == "diagnostics") { diagnostics(); }
-        else { throw std::runtime_error("Expected execution or diagnostics."); }
+        else if (test == "diagnostics") { diagnostics(ResourceFixtures::ProtectedFiles); }
+        else if (test == "external-execution") { external_execution(); }
+        else if (test == "external-diagnostics") { diagnostics(ResourceFixtures::ExternalFiles); }
+        else { throw std::runtime_error("Expected execution, diagnostics, external-execution or external-diagnostics."); }
         std::cout << test << ": " << checks << " checks passed\n";
         return 0;
     } catch (const std::exception& failure) {

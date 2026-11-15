@@ -1,0 +1,376 @@
+{
+  "format": "visionpro.sample.inputs",
+  "format_version": 1,
+  "pixel_convention": "坐标从 0 起，x 向右，y 向下；矩形包含左上像素，右下边界不含在内。",
+  "resources": [
+    {
+      "channels": "Mono",
+      "coordinate_frame": "s4.sample.rectangles",
+      "decode_mode": "Gray8",
+      "decoded_channels": "Mono",
+      "decoded_samples": {
+        "maximum": 200,
+        "minimum": 10,
+        "nonzero_count": 120
+      },
+      "depth": "UInt8",
+      "encoded_size_bytes": 86,
+      "encoding": "PNG",
+      "height": 10,
+      "id": "5ca4f87a-ea1e-4d62-89b0-000000000201",
+      "kind": "image",
+      "path": "图像/双区域 输入.png",
+      "path_base": "solution_directory",
+      "pixels": {
+        "background": 10,
+        "rectangles": [
+          {
+            "height": 2,
+            "value": 200,
+            "width": 3,
+            "x": 1,
+            "y": 1
+          },
+          {
+            "height": 3,
+            "value": 200,
+            "width": 3,
+            "x": 7,
+            "y": 5
+          }
+        ]
+      },
+      "read_policy": "per_invocation",
+      "width": 12
+    },
+    {
+      "channels": "BGR",
+      "coordinate_frame": "s4.sample.rotated",
+      "decode_mode": "Gray8",
+      "decoded_channels": "Mono",
+      "decoded_samples": {
+        "maximum": 255,
+        "minimum": 255,
+        "nonzero_count": 81
+      },
+      "depth": "UInt8",
+      "encoded_size_bytes": 306,
+      "encoding": "BMP",
+      "height": 9,
+      "id": "5ca4f87a-ea1e-4d62-89b0-000000000202",
+      "kind": "image",
+      "path": "图像/旋转 输入.bmp",
+      "path_base": "solution_directory",
+      "pixels": {
+        "constant_bgr": [
+          255,
+          255,
+          255
+        ],
+        "constant_decoded": 255
+      },
+      "read_policy": "per_invocation",
+      "width": 9
+    }
+  ],
+  "solution": {
+    "format_version": 1,
+    "id": "5ca4f87a-ea1e-4d62-89b0-000000000001",
+    "path": "solution.json",
+    "revision": "1"
+  },
+  "tool_config_versions": {
+    "visionpro.image.blob": 1,
+    "visionpro.image.read_file": 1,
+    "visionpro.image.threshold": 1,
+    "visionpro.judge.integer_range": 1,
+    "visionpro.sim.collect": 1,
+    "visionpro.sim.deliver": 1
+  },
+  "workflows": [
+    {
+      "blob_node_id": "5ca4f87a-ea1e-4d62-89b0-000000001103",
+      "case": "single",
+      "connectivity": 8,
+      "expected": {
+        "binary_nonzero_count": 15,
+        "call_count": 4,
+        "component_count": 2,
+        "components": [
+          {
+            "area_pixels": 6,
+            "bounds": {
+              "height": 2,
+              "width": 3,
+              "x": 1,
+              "y": 1
+            },
+            "centroid": [
+              2,
+              1.5
+            ]
+          },
+          {
+            "area_pixels": 9,
+            "bounds": {
+              "height": 3,
+              "width": 3,
+              "x": 7,
+              "y": 5
+            },
+            "centroid": [
+              8,
+              6
+            ]
+          }
+        ],
+        "judgement": "OK",
+        "largest_area_pixels": 9,
+        "passed": true,
+        "run_status": "Succeeded",
+        "total_area_pixels": 15
+      },
+      "id": "5ca4f87a-ea1e-4d62-89b0-000000000101",
+      "input_resource_id": "5ca4f87a-ea1e-4d62-89b0-000000000201",
+      "judge_node_id": "5ca4f87a-ea1e-4d62-89b0-000000001104",
+      "judge_range": [
+        2,
+        2
+      ],
+      "name": "双区域单链",
+      "reader_node_id": "5ca4f87a-ea1e-4d62-89b0-000000001101",
+      "threshold": 128,
+      "threshold_node_id": "5ca4f87a-ea1e-4d62-89b0-000000001102"
+    },
+    {
+      "case": "five",
+      "collect_node_id": "5ca4f87a-ea1e-4d62-89b0-000000001211",
+      "connectivity": 8,
+      "deliver_node_id": "5ca4f87a-ea1e-4d62-89b0-000000001212",
+      "expected": {
+        "binary_nonzero_counts": [
+          15,
+          15,
+          15,
+          0,
+          0
+        ],
+        "call_count": 18,
+        "collect_calls": 1,
+        "component_counts": [
+          2,
+          2,
+          2,
+          0,
+          0
+        ],
+        "deliver_calls": 1,
+        "delivered_counts": [
+          2,
+          2,
+          2,
+          0,
+          0
+        ],
+        "judgements": [
+          "OK",
+          "OK",
+          "OK",
+          "NG",
+          "NG"
+        ],
+        "largest_area_pixels": [
+          9,
+          9,
+          9,
+          null,
+          null
+        ],
+        "passed": [
+          true,
+          true,
+          true,
+          false,
+          false
+        ],
+        "run_status": "Succeeded",
+        "total_area_pixels": [
+          15,
+          15,
+          15,
+          0,
+          0
+        ]
+      },
+      "id": "5ca4f87a-ea1e-4d62-89b0-000000000102",
+      "input_resource_id": "5ca4f87a-ea1e-4d62-89b0-000000000201",
+      "join_policy": "all_activated",
+      "judge_range": [
+        2,
+        2
+      ],
+      "lanes": [
+        {
+          "blob_node_id": "5ca4f87a-ea1e-4d62-89b0-000000001203",
+          "judge_node_id": "5ca4f87a-ea1e-4d62-89b0-000000001204",
+          "threshold": 100,
+          "threshold_node_id": "5ca4f87a-ea1e-4d62-89b0-000000001202"
+        },
+        {
+          "blob_node_id": "5ca4f87a-ea1e-4d62-89b0-000000001206",
+          "judge_node_id": "5ca4f87a-ea1e-4d62-89b0-000000001207",
+          "threshold": 128,
+          "threshold_node_id": "5ca4f87a-ea1e-4d62-89b0-000000001205"
+        },
+        {
+          "blob_node_id": "5ca4f87a-ea1e-4d62-89b0-000000001209",
+          "judge_node_id": "5ca4f87a-ea1e-4d62-89b0-00000000120a",
+          "threshold": 180,
+          "threshold_node_id": "5ca4f87a-ea1e-4d62-89b0-000000001208"
+        },
+        {
+          "blob_node_id": "5ca4f87a-ea1e-4d62-89b0-00000000120c",
+          "judge_node_id": "5ca4f87a-ea1e-4d62-89b0-00000000120d",
+          "threshold": 210,
+          "threshold_node_id": "5ca4f87a-ea1e-4d62-89b0-00000000120b"
+        },
+        {
+          "blob_node_id": "5ca4f87a-ea1e-4d62-89b0-00000000120f",
+          "judge_node_id": "5ca4f87a-ea1e-4d62-89b0-000000001210",
+          "threshold": 250,
+          "threshold_node_id": "5ca4f87a-ea1e-4d62-89b0-00000000120e"
+        }
+      ],
+      "name": "五路阈值汇合",
+      "reader_node_id": "5ca4f87a-ea1e-4d62-89b0-000000001201"
+    },
+    {
+      "blob_node_id": "5ca4f87a-ea1e-4d62-89b0-000000001304",
+      "case": "inherited_roi",
+      "connectivity": 8,
+      "expected": {
+        "call_count": 5,
+        "component_count": 1,
+        "components": [
+          {
+            "area_pixels": 6,
+            "bounds": {
+              "height": 3,
+              "width": 3,
+              "x": 4,
+              "y": 3
+            },
+            "centroid": [
+              5,
+              4
+            ]
+          }
+        ],
+        "full_binary_nonzero_count": 81,
+        "inherited_members": [
+          [
+            4,
+            3
+          ],
+          [
+            5,
+            3
+          ],
+          [
+            4,
+            4
+          ],
+          [
+            6,
+            4
+          ],
+          [
+            5,
+            5
+          ],
+          [
+            6,
+            5
+          ]
+        ],
+        "judgement": "OK",
+        "largest_area_pixels": 6,
+        "passed": true,
+        "rotated_mask_members": [
+          [
+            3,
+            3
+          ],
+          [
+            4,
+            3
+          ],
+          [
+            3,
+            4
+          ],
+          [
+            4,
+            4
+          ],
+          [
+            5,
+            4
+          ],
+          [
+            4,
+            5
+          ],
+          [
+            5,
+            5
+          ]
+        ],
+        "rotated_mask_nonzero_count": 7,
+        "run_status": "Succeeded",
+        "total_area_pixels": 6
+      },
+      "full_threshold_node_id": "5ca4f87a-ea1e-4d62-89b0-000000001302",
+      "id": "5ca4f87a-ea1e-4d62-89b0-000000000103",
+      "input_resource_id": "5ca4f87a-ea1e-4d62-89b0-000000000202",
+      "judge_node_id": "5ca4f87a-ea1e-4d62-89b0-000000001305",
+      "judge_range": [
+        6,
+        6
+      ],
+      "name": "旋转 ROI 继承",
+      "reader_node_id": "5ca4f87a-ea1e-4d62-89b0-000000001301",
+      "roi": {
+        "binary_source": {
+          "node_id": "5ca4f87a-ea1e-4d62-89b0-000000001302",
+          "port": "binary"
+        },
+        "exclusion": {
+          "height": 1,
+          "kind": "axis_aligned_rect",
+          "width": 1,
+          "x": 5,
+          "y": 4
+        },
+        "region_source": {
+          "node_id": "5ca4f87a-ea1e-4d62-89b0-000000001303",
+          "port": "effective_roi"
+        },
+        "rotated_rectangle": {
+          "angle_radians": 0.7853981633974483,
+          "center_x": 4,
+          "center_y": 4,
+          "height": 2,
+          "kind": "rotated_rect",
+          "width": 4
+        },
+        "translation": [
+          1,
+          0
+        ]
+      },
+      "rotated_threshold_node_id": "5ca4f87a-ea1e-4d62-89b0-000000001303",
+      "threshold": 128
+    }
+  ]
+}

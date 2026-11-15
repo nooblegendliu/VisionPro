@@ -219,21 +219,32 @@ Workflow branch_flow()
             link('e', 'a', 'c'), link('f', 'b', 'c'), link('0', 'c', 'd')}, {}, {uuid<NodeId>('9')}, {}};
 }
 
+enum class PayloadStorage { Managed, External };
+
 struct Fixture {
     const fs::path executable;
     const ScratchDirectory scratch;
     const fs::path package = scratch.path / u8"验收 方案";
     const fs::path manifest = package / "solution.json";
-    const fs::path managed = package / u8"resources/托管 文件.bin";
+    const fs::path payload_file;
+    const std::optional<std::uint64_t> payload_revision;
 
-    explicit Fixture(fs::path cli) : executable(std::move(cli))
+    Fixture(fs::path cli, PayloadStorage storage)
+        : executable(std::move(cli)),
+          payload_file(storage == PayloadStorage::Managed ? package / u8"resources/托管 文件.bin"
+                                                         : scratch.path / u8"外部 输入/文件.bin"),
+          payload_revision(storage == PayloadStorage::Managed ? std::optional<std::uint64_t>{7} : std::nullopt)
     {
-        write_file(managed, "abc");
-        const ResourceDefinition resource{uuid<ResourceId>(), "固定资源", ResourceKind::Binary,
-            ManagedResource{{PathBase::SolutionDirectory, "resources/托管 文件.bin", {}}, 7,
-                "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"}};
+        write_file(payload_file, "abc");
+        const auto relative = payload_file.lexically_relative(package).generic_u8string();
+        const ResourcePath path{PathBase::SolutionDirectory, {relative.begin(), relative.end()}, {}};
+        auto location = payload_revision
+            ? ResourceLocation{ManagedResource{path, *payload_revision,
+                "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"}}
+            : ResourceLocation{ExternalFileResource{path, ResourceReadPolicy::PerInvocation, {}, {}}};
+        const ResourceDefinition resource{uuid<ResourceId>(), "固定资源", ResourceKind::Binary, std::move(location)};
         const Solution solution{uuid<SolutionId>(), "命令行验收", solution_format_version, 12,
-            {fork_flow({resource.id, resource.kind, 7}), branch_flow()}, {resource}, {}, {}, {}, {}};
+            {fork_flow({resource.id, resource.kind, payload_revision}), branch_flow()}, {resource}, {}, {}, {}, {}};
         take(write_new_solution(package, solution));
     }
 
@@ -322,17 +333,19 @@ void check_run(const Json& report, char flow, std::string_view revision)
     }
 }
 
-void verify_fork(const Json& report, std::string_view revision)
+void verify_fork(const Json& report, std::string_view revision, std::optional<std::uint64_t> payload_revision)
 {
     check_run(report, '1', revision);
     const auto& order = report.at("call_order");
     check(order.size() == 8 && order.front() == uuid<NodeId>('1').to_string() && order[6] == uuid<NodeId>('7').to_string()
         && order.back() == uuid<NodeId>('8').to_string(), "Five lane calls complete between the entry and one invocation each of join and delivery.");
     const auto& entry = node(report, '1');
-    check(produced(entry) == "97", "The entry reads the first byte of the managed file.");
+    check(produced(entry) == "97", "The entry reads the first byte of the configured file.");
     const auto& leases = entry.at("resources");
+    const auto expected_revision = payload_revision ? Json(std::to_string(*payload_revision)) : Json(nullptr);
     check(leases.size() == 1 && leases.front().at("slot") == "payload" && leases.front().at("resource") == uuid<ResourceId>().to_string()
-        && leases.front().at("kind") == "Binary" && leases.front().at("revision") == "7", "The acquired resource has the expected identity and revision.");
+        && leases.front().at("kind") == "Binary" && leases.front().at("revision") == expected_revision,
+        "The acquired resource has the expected identity and revision.");
     for (const char id : std::string_view("23456")) {
         const auto identity = uuid<NodeId>(id).to_string();
         check(std::ranges::count_if(order, [&](const Json& call) { return call == identity; }) == 1, "Each measured lane runs exactly once.");
@@ -419,12 +432,12 @@ Json comparable(Json report)
     return report;
 }
 
-void roundtrip(const fs::path& executable)
+void roundtrip(const fs::path& executable, PayloadStorage storage)
 {
-    const Fixture fixture(executable);
+    const Fixture fixture(executable, storage);
     const auto original = read_file(fixture.manifest);
     const auto fork = success(fixture.run('1', L"offset=7"));
-    verify_fork(fork, "12");
+    verify_fork(fork, "12", fixture.payload_revision);
     std::vector<std::pair<int, Json>> branches;
     for (const int mask : {3, 1, 0}) {
         auto trace = success(fixture.run('2', L"mask=" + std::to_wstring(mask)));
@@ -437,9 +450,11 @@ void roundtrip(const fs::path& executable)
     const auto& cleanup = saved.at("cleanup");
     check(saved.at("status") == "Committed" && saved.at("revision") == "13" && saved.at("solution") == uuid<SolutionId>().to_string(),
         "The CLI commits the next revision of the same solution.");
-    check(cleanup.at("diagnostics").empty() && read_file(fixture.managed) == "abc", "The save retains the unchanged managed resource.");
+    check(cleanup.at("diagnostics").empty() && read_file(fixture.payload_file) == "abc", "The save retains the unchanged resource file.");
+    check(Json::parse(read_file(fixture.manifest)).at("resources") == Json::parse(original).at("resources"),
+        "The new solution revision retains the resource declaration.");
     const auto reloaded = success(fixture.run('1', L"offset=7"));
-    verify_fork(reloaded, "13");
+    verify_fork(reloaded, "13", fixture.payload_revision);
     check(fork.at("session") != reloaded.at("session"), "Reload and execution use a fresh process session.");
     check(comparable(fork) == comparable(reloaded), "Five-way business results, provenance and control agree after save and reload.");
     for (const auto& [mask, before] : branches) {
@@ -458,9 +473,9 @@ void rejected(const CommandResult& result, DWORD exit_code, std::string_view cod
         "Errors preserve the diagnostic code.");
 }
 
-void diagnostics(const fs::path& executable)
+void diagnostics(const fs::path& executable, PayloadStorage storage)
 {
-    const Fixture fixture(executable);
+    const Fixture fixture(executable, storage);
     const auto help = fixture.command({L"--help"});
     check(help.exit_code == 0 && help.error.empty() && help.output.find("--workflow") != std::string::npos
         && help.output.find("save") != std::string::npos,
@@ -488,12 +503,12 @@ void diagnostics(const fs::path& executable)
     const auto unknown = "{\"future_field\":true," + original.substr(1);
     write_file(fixture.manifest, unknown);
     rejected(fixture.save(), 1, "UnsupportedSolutionContent");
-    check(read_file(fixture.manifest) == unknown && read_file(fixture.managed) == "abc", "A rejected save preserves original bytes.");
+    check(read_file(fixture.manifest) == unknown && read_file(fixture.payload_file) == "abc", "A rejected save preserves original bytes.");
     write_file(fixture.manifest, "{invalid");
     rejected(fixture.run('1', L"offset=7"), 1, "InvalidSolutionManifest");
     write_file(fixture.manifest, original);
 
-    check(fs::remove(fixture.managed), "The fixture removed the managed source before another request.");
+    check(fs::remove(fixture.payload_file), "The fixture removed the resource file before another request.");
     rejected(fixture.run('1', L"offset=7"), 1, "ResourceNotFound");
     check(read_file(fixture.manifest) == original, "A missing resource leaves the loaded manifest unchanged.");
 }
@@ -810,8 +825,10 @@ int wmain(int argc, wchar_t** argv)
         if (argc != 3) { throw std::runtime_error("Expected CLI executable and test group."); }
         const auto cli = fs::absolute(argv[1]);
         const std::wstring_view group(argv[2]);
-        if (group == L"roundtrip") { roundtrip(cli); }
-        else if (group == L"diagnostics") { diagnostics(cli); }
+        if (group == L"roundtrip") { roundtrip(cli, PayloadStorage::Managed); }
+        else if (group == L"diagnostics") { diagnostics(cli, PayloadStorage::Managed); }
+        else if (group == L"external-roundtrip") { roundtrip(cli, PayloadStorage::External); }
+        else if (group == L"external-diagnostics") { diagnostics(cli, PayloadStorage::External); }
 #ifdef VISIONPRO_WITH_OPENCV
         else if (group == L"vision-roundtrip") { vision_roundtrip(cli); }
         else if (group == L"vision-diagnostics") { vision_diagnostics(cli); }

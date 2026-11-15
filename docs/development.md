@@ -29,7 +29,8 @@ S4.2 接入图像桥接与 `visionpro.image.read_file`。S4.3 接入 ROI、冻�
 S4.4 接入 `visionpro.image.threshold`，验证正相、反相、独立输出、实际掩膜及继承诊断。
 S4.5 接入 `visionpro.image.blob` 和 `visionpro.judge.integer_range`，验证实际连通域、类型化绑定以及 OK/NG 后继。
 S4.6 验证真实单链、五路汇合、ROI 继承与独立调用，补齐 CLI 摘要和外部图像方案保存重载。
-当前 Release 命令与实测结果见 [§3.22](#322-s46-release-构建与验证) 和 [§8.26](#826-s46-实现与验证记录)。
+S4.7 完成当前范围的整体验收，交付固定方案、输入清单和下一阶段运行入口。见 [S4 验收与交接](s4-acceptance.md)。
+当前 Release 命令与实测结果见 [§3.23](#323-s47-release-构建与回归) 和 [§8.27](#827-s47-整体验收与交接记录)。
 
 开发顺序以 [requirements.md](requirements.md) 为准：
 
@@ -538,6 +539,40 @@ ctest --test-dir out/build/s44-off -C Release -R '^(core\.|workflow\.)' --output
 视觉 CLI 测试使用未配置摘要的 `PerInvocation` 外部 PNG、BMP 文件，逐像素核对重载前后的结果。
 本轮未执行 SHA-256 校验，执行范围为上述 CTest 分组，含摘要校验的既有存储和模拟 CLI 回归未纳入。
 
+### 3.23 S4.7 Release 构建与回归
+
+沿用 [§3.17](#317-s41-release-构建与验证) 的 `OpenCV_DIR`。从仓库根目录运行，ON 和 OFF 使用独立构建目录。排除范围见 [S4 回归范围](s4-acceptance.md#release-回归范围)。
+
+```powershell
+$excluded = '^(app\.cli_(roundtrip|diagnostics)|infrastructure\.(file_resource_execution|solution_diagnostic_loading|solution_save_(failures|conflict|cleanup)))$'
+
+cmake -S . -B out/build/s47-on -G "Visual Studio 18 2026" -A x64 -DCMAKE_CONFIGURATION_TYPES=Release -DBUILD_TESTING=ON -DVISIONPRO_WITH_OPENCV=ON "-DOpenCV_DIR=$env:OpenCV_DIR"
+cmake --build out/build/s47-on --config Release --parallel 1 *> out/build/s47-on/build.log
+ctest --test-dir out/build/s47-on -C Release -E $excluded --output-on-failure --no-tests=error --output-log out/build/s47-on/ctest.log
+
+cmake -S . -B out/build/s47-off -G "Visual Studio 18 2026" -A x64 -DCMAKE_CONFIGURATION_TYPES=Release -DBUILD_TESTING=ON -DVISIONPRO_WITH_OPENCV=OFF
+cmake --build out/build/s47-off --config Release --parallel 1 *> out/build/s47-off/build.log
+ctest --test-dir out/build/s47-off -C Release -E $excluded --output-on-failure --no-tests=error --output-log out/build/s47-off/ctest.log
+```
+
+在已加载 MSVC 命令行工具的 PowerShell 中复核可执行文件导入。
+
+```powershell
+dumpbin /NOLOGO /DEPENDENTS out/build/s47-on/source/app/Release/visionpro_cli.exe
+
+$binaries = @(Get-ChildItem -File -Recurse -Filter '*.exe' -LiteralPath out/build/s47-off/source,out/build/s47-off/tests |
+    Where-Object { $_.Directory.Name -eq 'Release' })
+if (!$binaries.Count) { throw 'No OFF Release binaries found.' }
+foreach ($binary in $binaries) {
+    $imports = dumpbin /NOLOGO /DEPENDENTS $binary.FullName
+    if ($LASTEXITCODE -ne 0 -or ($imports -match '(?i)^\s*(opencv|qt)\S*\.dll\s*$')) {
+        throw "Unexpected dependency check result for $($binary.FullName)"
+    }
+}
+```
+
+固定方案的运行、保存和重载命令见 [样例复现](s4-acceptance.md#样例复现)。
+
 ## 4. 第一阶段验证
 
 2026-10-27 已按以下检查项完成文档审查，结果见 [§8.1](#81-s1-文档审查记录) 和 [§8.2](#82-s1-场景定义逐项审查)。
@@ -865,7 +900,7 @@ S3 结束前须同时满足：
 ## 7. 第四阶段实施与验收计划
 
 本计划制定于 2026-11-15，以提交 `cee6190` 的实际代码为起点。制定时复核 S3 Release 构建，CTest 82/82 通过。
-S4.1–S4.6 的完成记录见 [§8.21](#821-s41-实现与验证记录) 至 [§8.26](#826-s46-实现与验证记录)。
+S4.1–S4.7 的完成记录见 [§8.21](#821-s41-实现与验证记录) 至 [§8.27](#827-s47-整体验收与交接记录)。
 S4 目标是让同一磁盘方案通过现有无 GUI 入口完成“本地图像 → 二值化 → Blob 分析 → 结果判断”，
 并以像素、数值、来源和控制行为证明真实算法与 S3 的运行、存储契约一致。
 
@@ -968,7 +1003,7 @@ S4.5 按 V08 验证 Blob 分别绑定全前景图像与另一路阈值的有效 
 | S4.4 二值化工具 | threshold 调用 OpenCV，接入 ROI、独立图像输出、有效区域与 mask 结果 | 阈值边界和反相逐像素一致；真实工具不修改输入；空域和不支持图像路径符合契约 |
 | S4.5 Blob 与结果判断 | 连通域统计、确定性排序、类型化 Record/Optional 输出、integer_range 及组合参数检查 | 两组件、单像素、孔洞、4/8连通、裁剪坐标、空结果及 OK/NG 数值全部通过；实际通过字段/列表选择器绑定判断输入 |
 | S4.6 运行、CLI 与配置往返 | 完成真实工具装配与摘要；新增真实单链、五路、ROI继承及独立调用夹具；保存重载用独立 CLI 进程 | 真实算法经现有 WorkflowEngine 运行；NG继续、FailFast/取消/历史隔离通过；磁盘往返的结果、来源和控制一致，模拟方案仍可执行 |
-| S4.7 整体验收与交接 | 固定样例方案和输入清单，完成 ON/OFF 构建矩阵、完整回归、可复现命令及验收记录；同步已实现接口与文档 | §7.5–§7.7 全部满足；每项有输入摘要、期望值、实际值与日志；未达到门槛不能标记 S4 完成 |
+| S4.7 整体验收与交接 | 固定样例方案和输入清单，完成 ON/OFF 构建与无 SHA-256 回归，记录复现命令和交接入口 | §7.5–§7.7 的本轮场景有固定输入、数值断言、实际结果与日志 |
 
 主线顺序为 S4.1 → S4.2 → S4.3 → S4.4 → S4.5 → S4.6 → S4.7。
 Schema 和桥接固定后，Blob 数学测试、CLI 类型输出可独立准备，但只在真实集成验证后算完成。
@@ -976,7 +1011,7 @@ Schema 和桥接固定后，Blob 数学测试、CLI 类型输出可独立准备�
 
 ### 7.5 固定夹具与可复现验收数值
 
-验收图像优先使用小型无损文件和明确像素数组；固定文件提交生成说明、尺寸、格式及 SHA-256。
+验收图像使用小型无损文件和明确像素数组。固定输入清单记录格式、尺寸、文件字节数、有效像素规则和资源标识。
 期望值手算或由独立数学参考产生，不能用被测 OpenCV/ROI 函数重新生成“期望”。
 下表坐标均指像素中心，未另写时为输入当前图像坐标系。
 
@@ -1023,18 +1058,17 @@ NG 维持成功退出码0；技术错误为非零，并同时保留已受理运�
 V12 允许复用现有模拟 collect/deliver 检查交付次数，但读图、五路阈值、Blob和判断必须是真实工具。
 collect 的数据来源为各路 Blob.count（Int64），控制前驱为各路 judge；不能把 Bool 的 passed 绑定给现有整数集合输入。
 
-当前 ON/OFF 命令见 [§3.22](#322-s46-release-构建与验证)。S4.6 的 CLI 往返从不同工作目录独立运行，核对各轮实际生产者身份，再比较稳定的来源和控制字段。
-S4.7 重跑 ON 的全部测试和独立 OFF 的 82 项回归，并确认 OFF 产物没有 OpenCV/Qt 的传递依赖。
-同时提供一个固定样例方案、所有资源/摘要、流程UUID和完整CLI命令，能在新进程中加载、运行、保存与重载。
+当前 ON/OFF 命令见 [§3.23](#323-s47-release-构建与回归)。S4.7 在独立构建中运行适用的无 SHA-256 回归，核对 OFF 可执行文件的 OpenCV/Qt 导入。
+固定样例提供资源、流程 UUID 和输入规则。独立 CLI 在不同工作目录运行并重载，分别核对本轮生产者身份，再比较结果、来源和控制边。[样例与证据](s4-acceptance.md)
 
 ### 7.7 阶段退出条件与证据
 
-S4 必须同时满足以下条件才可标记完成：
+S4 完成条件如下。S4.7 的验证范围按本轮无 SHA-256 要求执行，具体覆盖与排除项见 [验收矩阵](s4-acceptance.md)。
 
-1. 四个真实工具及 ROI/掩膜支持范围按元数据实现；V01–V16 全部通过，未实现能力显式拒绝。
+1. 四个真实工具及 ROI/掩膜支持范围按元数据实现，V01–V16 的本轮纳入场景全部通过，未实现能力显式诊断。
 2. 单链、真实五路、继承ROI、单节点调用、失败与取消均使用现有运行服务；运行和保存不依赖窗口初始化。
-3. Release 的 ON 全量测试和 OFF 的82项回归通过；断言在 Release 有效。OpenCV 预编译包版本、文件摘要、组件、工具链兼容性和运行依赖可复现。
-4. 结果证据包含配置/Schema版本、输入文件摘要、预期像素或数值、实际结果、误差判定和诊断；绑定、ROI/资源及调用身份可追溯。
+3. Release 的 ON/OFF 构建和适用回归通过，断言在 Release 有效。OpenCV 预编译包版本、组件、工具链兼容性和运行依赖可复现。
+4. 结果证据包含配置和 Schema 版本、输入清单、预期像素或数值、实际结果、误差判定和诊断。绑定、ROI、资源及调用身份可追溯。
 5. 保存重载保持真实算法行为；不持久化运行图像、临时结果、cv::Mat或设备句柄。只新增工具/Record Schema时不机械升级方案格式；新增持久化字段时单独检查兼容性。
 6. S4记录与代码一致，已实现接口同步到data-model/architecture，构建与复现方式同步到本文件；README只在门槛通过后改为完成。
 
@@ -1882,3 +1916,11 @@ ON 的核心、流程、视觉工具与 CLI CTest **90/90** 项通过，OFF 的�
 | `app.vision_roundtrip` V08、V13 外部资源 | 独立 CLI 进程从不同工作目录执行、保存并重载含中文和空格路径的 PNG/BMP。修订 12→13，模拟条件分支也通过。逐像素检查读图、二值图和旋转掩膜。两路阈值分别提供整幅前景和冻结 ROI，平移并排除后 Blob 总面积为 6，核对当轮生产者与输出端口。清单同修订的空白变化触发 `SolutionSaveConflict`。 |
 | `app.vision_diagnostics` | 上轮有效图像被损坏后，本轮报告 `InvalidImage` 并给出终态摘要，后继按 FailFast 跳过。删除图像后在运行受理前报告 `ResourceNotFound`。 |
 | `app.vision_image_summary` | 验证 Float64、UTF-8 字符串和嵌套枚举，维持已有 Blob 和 ROI 摘要。带填充的图像按有效行统计，直接掩膜按成员规则计数。 |
+
+### 8.27 S4.7 整体验收与交接记录
+
+2026-11-15 使用 Windows x64、MSVC 19.51.36248.0、Windows SDK 10.0.26100.0 和 CMake/CTest 4.4.0，从两个独立目录完成 Release `/MD` 构建。ON 沿用 OpenCV `4.14.0-pre`，CLI 导入 `opencv_world4140.dll`。OFF 的 39 个 Release 可执行文件均无 OpenCV 或 Qt DLL 导入。
+
+ON 的 **97/97** 项和 OFF 的 **81/81** 项适用回归均通过。本轮两套矩阵各排除 7 项会实际核对摘要的既有用例，新增 6 项无摘要外部资源和 CLI 回归。
+固定方案的三条流程在修订 1 与保存后的修订 2 均成功运行，稳定输出、控制边和本轮来源关系一致。
+[构建命令与日志路径](#323-s47-release-构建与回归) [验收证据与交接](s4-acceptance.md)

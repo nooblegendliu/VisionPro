@@ -1,0 +1,2725 @@
+{
+  "coordinates": [
+    {
+      "handedness": "left_handed",
+      "id": "s4.sample.rectangles",
+      "kind": "image",
+      "origin": {
+        "x": 0.0,
+        "y": 0.0
+      },
+      "unit": "pixel",
+      "x_axis": {
+        "x": 1.0,
+        "y": 0.0
+      },
+      "y_axis": {
+        "x": 0.0,
+        "y": -1.0
+      }
+    },
+    {
+      "handedness": "left_handed",
+      "id": "s4.sample.rotated",
+      "kind": "image",
+      "origin": {
+        "x": 0.0,
+        "y": 0.0
+      },
+      "unit": "pixel",
+      "x_axis": {
+        "x": 1.0,
+        "y": 0.0
+      },
+      "y_axis": {
+        "x": 0.0,
+        "y": -1.0
+      }
+    }
+  ],
+  "format": "visionpro.solution",
+  "format_version": 1,
+  "id": "5ca4f87a-ea1e-4d62-89b0-000000000001",
+  "layouts": [],
+  "name": "第四阶段无 GUI 视觉闭环样例",
+  "queues": [],
+  "resources": [
+    {
+      "id": "5ca4f87a-ea1e-4d62-89b0-000000000201",
+      "kind": "image",
+      "location": {
+        "expected_sha256": null,
+        "kind": "external_file",
+        "path": {
+          "base": "solution_directory",
+          "named_root": null,
+          "path": "图像/双区域 输入.png"
+        },
+        "read_policy": "per_invocation",
+        "revision": null
+      },
+      "name": "双区域灰度 PNG"
+    },
+    {
+      "id": "5ca4f87a-ea1e-4d62-89b0-000000000202",
+      "kind": "image",
+      "location": {
+        "expected_sha256": null,
+        "kind": "external_file",
+        "path": {
+          "base": "solution_directory",
+          "named_root": null,
+          "path": "图像/旋转 输入.bmp"
+        },
+        "read_policy": "per_invocation",
+        "revision": null
+      },
+      "name": "纯白 BGR BMP"
+    }
+  ],
+  "revision": "1",
+  "variables": [],
+  "workflows": [
+    {
+      "containment": [],
+      "control_exports": [],
+      "control_links": [
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000003101",
+          "output": null,
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000001101",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000001102"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000003102",
+          "output": null,
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000001102",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000001103"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000003103",
+          "output": null,
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000001103",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000001104"
+        }
+      ],
+      "enabled": true,
+      "entries": [
+        "5ca4f87a-ea1e-4d62-89b0-000000001101"
+      ],
+      "id": "5ca4f87a-ea1e-4d62-89b0-000000000101",
+      "interface": {
+        "control_outputs": [],
+        "id": "s4.sample.single",
+        "inputs": [],
+        "outputs": [],
+        "version": 1
+      },
+      "name": "双区域单链",
+      "nodes": [
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "enum",
+                      "members": [
+                        {
+                          "display_name": "Gray8",
+                          "id": "Gray8"
+                        },
+                        {
+                          "display_name": "Native8",
+                          "id": "Native8"
+                        }
+                      ],
+                      "schema": "visionpro.image.read_file.decode_mode",
+                      "version": 1
+                    },
+                    "value": "Gray8"
+                  }
+                }
+              ],
+              "target": {
+                "id": "decode_mode",
+                "kind": "parameter"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "point2d"
+                    },
+                    "value": {
+                      "coordinate_frame": "s4.sample.rectangles",
+                      "unit": "pixel",
+                      "x": 0.0,
+                      "y": 0.0
+                    }
+                  }
+                }
+              ],
+              "target": {
+                "id": "frame_origin",
+                "kind": "parameter"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "type": "visionpro.image.read_file"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000001101",
+          "join": "all_activated",
+          "name": "读取灰度图",
+          "resources": [
+            {
+              "resource": {
+                "id": "5ca4f87a-ea1e-4d62-89b0-000000000201",
+                "kind": "image",
+                "revision": null
+              },
+              "slot": "source"
+            }
+          ]
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000001101",
+                    "output": {
+                      "id": "image",
+                      "kind": "port"
+                    },
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000000101"
+                  }
+                }
+              ],
+              "target": {
+                "id": "image",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "region2d"
+                    },
+                    "value": {
+                      "boundary_policy": "reject",
+                      "coordinate_frame": "s4.sample.rectangles",
+                      "empty_policy": "error",
+                      "exclusions": [],
+                      "fill": null,
+                      "id": "5ca4f87a-ea1e-4d62-89b0-000000004101",
+                      "source": {
+                        "coordinate_frame": "s4.sample.rectangles",
+                        "geometry": {
+                          "kind": "full_image"
+                        },
+                        "kind": "primitive",
+                        "local_direction_radians": 0.0,
+                        "transform": null,
+                        "unit": "pixel"
+                      },
+                      "unit": "pixel"
+                    }
+                  }
+                }
+              ],
+              "target": {
+                "id": "roi",
+                "kind": "parameter"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "128"
+                  }
+                }
+              ],
+              "target": {
+                "id": "threshold",
+                "kind": "parameter"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "enum",
+                      "members": [
+                        {
+                          "display_name": "Binary",
+                          "id": "Binary"
+                        },
+                        {
+                          "display_name": "Binary inverse",
+                          "id": "BinaryInverse"
+                        }
+                      ],
+                      "schema": "visionpro.image.threshold.mode",
+                      "version": 1
+                    },
+                    "value": "Binary"
+                  }
+                }
+              ],
+              "target": {
+                "id": "mode",
+                "kind": "parameter"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "type": "visionpro.image.threshold"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000001102",
+          "join": "all_activated",
+          "name": "阈值 128",
+          "resources": []
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000001102",
+                    "output": {
+                      "id": "binary",
+                      "kind": "port"
+                    },
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000000101"
+                  }
+                }
+              ],
+              "target": {
+                "id": "binary",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "8"
+                  }
+                }
+              ],
+              "target": {
+                "id": "connectivity",
+                "kind": "parameter"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "type": "visionpro.image.blob"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000001103",
+          "join": "all_activated",
+          "name": "测量连通域",
+          "resources": []
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000001103",
+                    "output": {
+                      "id": "count",
+                      "kind": "port"
+                    },
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000000101"
+                  }
+                }
+              ],
+              "target": {
+                "id": "value",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "2"
+                  }
+                }
+              ],
+              "target": {
+                "id": "minimum",
+                "kind": "parameter"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "2"
+                  }
+                }
+              ],
+              "target": {
+                "id": "maximum",
+                "kind": "parameter"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "type": "visionpro.judge.integer_range"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000001104",
+          "join": "all_activated",
+          "name": "判断范围 [2, 2]",
+          "resources": []
+        }
+      ],
+      "outputs": []
+    },
+    {
+      "containment": [],
+      "control_exports": [],
+      "control_links": [
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000003201",
+          "output": null,
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000001201",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000001202"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000003202",
+          "output": null,
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000001202",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000001203"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000003203",
+          "output": null,
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000001203",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000001204"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000003204",
+          "output": null,
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000001204",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000001211"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000003205",
+          "output": null,
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000001201",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000001205"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000003206",
+          "output": null,
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000001205",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000001206"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000003207",
+          "output": null,
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000001206",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000001207"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000003208",
+          "output": null,
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000001207",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000001211"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000003209",
+          "output": null,
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000001201",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000001208"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-00000000320a",
+          "output": null,
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000001208",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000001209"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-00000000320b",
+          "output": null,
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000001209",
+          "target": "5ca4f87a-ea1e-4d62-89b0-00000000120a"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-00000000320c",
+          "output": null,
+          "source": "5ca4f87a-ea1e-4d62-89b0-00000000120a",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000001211"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-00000000320d",
+          "output": null,
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000001201",
+          "target": "5ca4f87a-ea1e-4d62-89b0-00000000120b"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-00000000320e",
+          "output": null,
+          "source": "5ca4f87a-ea1e-4d62-89b0-00000000120b",
+          "target": "5ca4f87a-ea1e-4d62-89b0-00000000120c"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-00000000320f",
+          "output": null,
+          "source": "5ca4f87a-ea1e-4d62-89b0-00000000120c",
+          "target": "5ca4f87a-ea1e-4d62-89b0-00000000120d"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000003210",
+          "output": null,
+          "source": "5ca4f87a-ea1e-4d62-89b0-00000000120d",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000001211"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000003211",
+          "output": null,
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000001201",
+          "target": "5ca4f87a-ea1e-4d62-89b0-00000000120e"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000003212",
+          "output": null,
+          "source": "5ca4f87a-ea1e-4d62-89b0-00000000120e",
+          "target": "5ca4f87a-ea1e-4d62-89b0-00000000120f"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000003213",
+          "output": null,
+          "source": "5ca4f87a-ea1e-4d62-89b0-00000000120f",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000001210"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000003214",
+          "output": null,
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000001210",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000001211"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000003215",
+          "output": null,
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000001211",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000001212"
+        }
+      ],
+      "enabled": true,
+      "entries": [
+        "5ca4f87a-ea1e-4d62-89b0-000000001201"
+      ],
+      "id": "5ca4f87a-ea1e-4d62-89b0-000000000102",
+      "interface": {
+        "control_outputs": [],
+        "id": "s4.sample.five",
+        "inputs": [],
+        "outputs": [],
+        "version": 1
+      },
+      "name": "五路阈值汇合",
+      "nodes": [
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "enum",
+                      "members": [
+                        {
+                          "display_name": "Gray8",
+                          "id": "Gray8"
+                        },
+                        {
+                          "display_name": "Native8",
+                          "id": "Native8"
+                        }
+                      ],
+                      "schema": "visionpro.image.read_file.decode_mode",
+                      "version": 1
+                    },
+                    "value": "Gray8"
+                  }
+                }
+              ],
+              "target": {
+                "id": "decode_mode",
+                "kind": "parameter"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "point2d"
+                    },
+                    "value": {
+                      "coordinate_frame": "s4.sample.rectangles",
+                      "unit": "pixel",
+                      "x": 0.0,
+                      "y": 0.0
+                    }
+                  }
+                }
+              ],
+              "target": {
+                "id": "frame_origin",
+                "kind": "parameter"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "type": "visionpro.image.read_file"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000001201",
+          "join": "all_activated",
+          "name": "读取灰度图",
+          "resources": [
+            {
+              "resource": {
+                "id": "5ca4f87a-ea1e-4d62-89b0-000000000201",
+                "kind": "image",
+                "revision": null
+              },
+              "slot": "source"
+            }
+          ]
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000001201",
+                    "output": {
+                      "id": "image",
+                      "kind": "port"
+                    },
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000000102"
+                  }
+                }
+              ],
+              "target": {
+                "id": "image",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "region2d"
+                    },
+                    "value": {
+                      "boundary_policy": "reject",
+                      "coordinate_frame": "s4.sample.rectangles",
+                      "empty_policy": "error",
+                      "exclusions": [],
+                      "fill": null,
+                      "id": "5ca4f87a-ea1e-4d62-89b0-000000004201",
+                      "source": {
+                        "coordinate_frame": "s4.sample.rectangles",
+                        "geometry": {
+                          "kind": "full_image"
+                        },
+                        "kind": "primitive",
+                        "local_direction_radians": 0.0,
+                        "transform": null,
+                        "unit": "pixel"
+                      },
+                      "unit": "pixel"
+                    }
+                  }
+                }
+              ],
+              "target": {
+                "id": "roi",
+                "kind": "parameter"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "100"
+                  }
+                }
+              ],
+              "target": {
+                "id": "threshold",
+                "kind": "parameter"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "enum",
+                      "members": [
+                        {
+                          "display_name": "Binary",
+                          "id": "Binary"
+                        },
+                        {
+                          "display_name": "Binary inverse",
+                          "id": "BinaryInverse"
+                        }
+                      ],
+                      "schema": "visionpro.image.threshold.mode",
+                      "version": 1
+                    },
+                    "value": "Binary"
+                  }
+                }
+              ],
+              "target": {
+                "id": "mode",
+                "kind": "parameter"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "type": "visionpro.image.threshold"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000001202",
+          "join": "all_activated",
+          "name": "阈值 100",
+          "resources": []
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000001202",
+                    "output": {
+                      "id": "binary",
+                      "kind": "port"
+                    },
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000000102"
+                  }
+                }
+              ],
+              "target": {
+                "id": "binary",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "8"
+                  }
+                }
+              ],
+              "target": {
+                "id": "connectivity",
+                "kind": "parameter"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "type": "visionpro.image.blob"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000001203",
+          "join": "all_activated",
+          "name": "测量连通域",
+          "resources": []
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000001203",
+                    "output": {
+                      "id": "count",
+                      "kind": "port"
+                    },
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000000102"
+                  }
+                }
+              ],
+              "target": {
+                "id": "value",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "2"
+                  }
+                }
+              ],
+              "target": {
+                "id": "minimum",
+                "kind": "parameter"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "2"
+                  }
+                }
+              ],
+              "target": {
+                "id": "maximum",
+                "kind": "parameter"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "type": "visionpro.judge.integer_range"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000001204",
+          "join": "all_activated",
+          "name": "判断范围 [2, 2]",
+          "resources": []
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000001201",
+                    "output": {
+                      "id": "image",
+                      "kind": "port"
+                    },
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000000102"
+                  }
+                }
+              ],
+              "target": {
+                "id": "image",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "region2d"
+                    },
+                    "value": {
+                      "boundary_policy": "reject",
+                      "coordinate_frame": "s4.sample.rectangles",
+                      "empty_policy": "error",
+                      "exclusions": [],
+                      "fill": null,
+                      "id": "5ca4f87a-ea1e-4d62-89b0-000000004202",
+                      "source": {
+                        "coordinate_frame": "s4.sample.rectangles",
+                        "geometry": {
+                          "kind": "full_image"
+                        },
+                        "kind": "primitive",
+                        "local_direction_radians": 0.0,
+                        "transform": null,
+                        "unit": "pixel"
+                      },
+                      "unit": "pixel"
+                    }
+                  }
+                }
+              ],
+              "target": {
+                "id": "roi",
+                "kind": "parameter"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "128"
+                  }
+                }
+              ],
+              "target": {
+                "id": "threshold",
+                "kind": "parameter"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "enum",
+                      "members": [
+                        {
+                          "display_name": "Binary",
+                          "id": "Binary"
+                        },
+                        {
+                          "display_name": "Binary inverse",
+                          "id": "BinaryInverse"
+                        }
+                      ],
+                      "schema": "visionpro.image.threshold.mode",
+                      "version": 1
+                    },
+                    "value": "Binary"
+                  }
+                }
+              ],
+              "target": {
+                "id": "mode",
+                "kind": "parameter"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "type": "visionpro.image.threshold"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000001205",
+          "join": "all_activated",
+          "name": "阈值 128",
+          "resources": []
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000001205",
+                    "output": {
+                      "id": "binary",
+                      "kind": "port"
+                    },
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000000102"
+                  }
+                }
+              ],
+              "target": {
+                "id": "binary",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "8"
+                  }
+                }
+              ],
+              "target": {
+                "id": "connectivity",
+                "kind": "parameter"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "type": "visionpro.image.blob"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000001206",
+          "join": "all_activated",
+          "name": "测量连通域",
+          "resources": []
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000001206",
+                    "output": {
+                      "id": "count",
+                      "kind": "port"
+                    },
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000000102"
+                  }
+                }
+              ],
+              "target": {
+                "id": "value",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "2"
+                  }
+                }
+              ],
+              "target": {
+                "id": "minimum",
+                "kind": "parameter"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "2"
+                  }
+                }
+              ],
+              "target": {
+                "id": "maximum",
+                "kind": "parameter"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "type": "visionpro.judge.integer_range"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000001207",
+          "join": "all_activated",
+          "name": "判断范围 [2, 2]",
+          "resources": []
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000001201",
+                    "output": {
+                      "id": "image",
+                      "kind": "port"
+                    },
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000000102"
+                  }
+                }
+              ],
+              "target": {
+                "id": "image",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "region2d"
+                    },
+                    "value": {
+                      "boundary_policy": "reject",
+                      "coordinate_frame": "s4.sample.rectangles",
+                      "empty_policy": "error",
+                      "exclusions": [],
+                      "fill": null,
+                      "id": "5ca4f87a-ea1e-4d62-89b0-000000004203",
+                      "source": {
+                        "coordinate_frame": "s4.sample.rectangles",
+                        "geometry": {
+                          "kind": "full_image"
+                        },
+                        "kind": "primitive",
+                        "local_direction_radians": 0.0,
+                        "transform": null,
+                        "unit": "pixel"
+                      },
+                      "unit": "pixel"
+                    }
+                  }
+                }
+              ],
+              "target": {
+                "id": "roi",
+                "kind": "parameter"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "180"
+                  }
+                }
+              ],
+              "target": {
+                "id": "threshold",
+                "kind": "parameter"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "enum",
+                      "members": [
+                        {
+                          "display_name": "Binary",
+                          "id": "Binary"
+                        },
+                        {
+                          "display_name": "Binary inverse",
+                          "id": "BinaryInverse"
+                        }
+                      ],
+                      "schema": "visionpro.image.threshold.mode",
+                      "version": 1
+                    },
+                    "value": "Binary"
+                  }
+                }
+              ],
+              "target": {
+                "id": "mode",
+                "kind": "parameter"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "type": "visionpro.image.threshold"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000001208",
+          "join": "all_activated",
+          "name": "阈值 180",
+          "resources": []
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000001208",
+                    "output": {
+                      "id": "binary",
+                      "kind": "port"
+                    },
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000000102"
+                  }
+                }
+              ],
+              "target": {
+                "id": "binary",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "8"
+                  }
+                }
+              ],
+              "target": {
+                "id": "connectivity",
+                "kind": "parameter"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "type": "visionpro.image.blob"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000001209",
+          "join": "all_activated",
+          "name": "测量连通域",
+          "resources": []
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000001209",
+                    "output": {
+                      "id": "count",
+                      "kind": "port"
+                    },
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000000102"
+                  }
+                }
+              ],
+              "target": {
+                "id": "value",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "2"
+                  }
+                }
+              ],
+              "target": {
+                "id": "minimum",
+                "kind": "parameter"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "2"
+                  }
+                }
+              ],
+              "target": {
+                "id": "maximum",
+                "kind": "parameter"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "type": "visionpro.judge.integer_range"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-00000000120a",
+          "join": "all_activated",
+          "name": "判断范围 [2, 2]",
+          "resources": []
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000001201",
+                    "output": {
+                      "id": "image",
+                      "kind": "port"
+                    },
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000000102"
+                  }
+                }
+              ],
+              "target": {
+                "id": "image",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "region2d"
+                    },
+                    "value": {
+                      "boundary_policy": "reject",
+                      "coordinate_frame": "s4.sample.rectangles",
+                      "empty_policy": "error",
+                      "exclusions": [],
+                      "fill": null,
+                      "id": "5ca4f87a-ea1e-4d62-89b0-000000004204",
+                      "source": {
+                        "coordinate_frame": "s4.sample.rectangles",
+                        "geometry": {
+                          "kind": "full_image"
+                        },
+                        "kind": "primitive",
+                        "local_direction_radians": 0.0,
+                        "transform": null,
+                        "unit": "pixel"
+                      },
+                      "unit": "pixel"
+                    }
+                  }
+                }
+              ],
+              "target": {
+                "id": "roi",
+                "kind": "parameter"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "210"
+                  }
+                }
+              ],
+              "target": {
+                "id": "threshold",
+                "kind": "parameter"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "enum",
+                      "members": [
+                        {
+                          "display_name": "Binary",
+                          "id": "Binary"
+                        },
+                        {
+                          "display_name": "Binary inverse",
+                          "id": "BinaryInverse"
+                        }
+                      ],
+                      "schema": "visionpro.image.threshold.mode",
+                      "version": 1
+                    },
+                    "value": "Binary"
+                  }
+                }
+              ],
+              "target": {
+                "id": "mode",
+                "kind": "parameter"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "type": "visionpro.image.threshold"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-00000000120b",
+          "join": "all_activated",
+          "name": "阈值 210",
+          "resources": []
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-00000000120b",
+                    "output": {
+                      "id": "binary",
+                      "kind": "port"
+                    },
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000000102"
+                  }
+                }
+              ],
+              "target": {
+                "id": "binary",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "8"
+                  }
+                }
+              ],
+              "target": {
+                "id": "connectivity",
+                "kind": "parameter"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "type": "visionpro.image.blob"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-00000000120c",
+          "join": "all_activated",
+          "name": "测量连通域",
+          "resources": []
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-00000000120c",
+                    "output": {
+                      "id": "count",
+                      "kind": "port"
+                    },
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000000102"
+                  }
+                }
+              ],
+              "target": {
+                "id": "value",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "2"
+                  }
+                }
+              ],
+              "target": {
+                "id": "minimum",
+                "kind": "parameter"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "2"
+                  }
+                }
+              ],
+              "target": {
+                "id": "maximum",
+                "kind": "parameter"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "type": "visionpro.judge.integer_range"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-00000000120d",
+          "join": "all_activated",
+          "name": "判断范围 [2, 2]",
+          "resources": []
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000001201",
+                    "output": {
+                      "id": "image",
+                      "kind": "port"
+                    },
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000000102"
+                  }
+                }
+              ],
+              "target": {
+                "id": "image",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "region2d"
+                    },
+                    "value": {
+                      "boundary_policy": "reject",
+                      "coordinate_frame": "s4.sample.rectangles",
+                      "empty_policy": "error",
+                      "exclusions": [],
+                      "fill": null,
+                      "id": "5ca4f87a-ea1e-4d62-89b0-000000004205",
+                      "source": {
+                        "coordinate_frame": "s4.sample.rectangles",
+                        "geometry": {
+                          "kind": "full_image"
+                        },
+                        "kind": "primitive",
+                        "local_direction_radians": 0.0,
+                        "transform": null,
+                        "unit": "pixel"
+                      },
+                      "unit": "pixel"
+                    }
+                  }
+                }
+              ],
+              "target": {
+                "id": "roi",
+                "kind": "parameter"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "250"
+                  }
+                }
+              ],
+              "target": {
+                "id": "threshold",
+                "kind": "parameter"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "enum",
+                      "members": [
+                        {
+                          "display_name": "Binary",
+                          "id": "Binary"
+                        },
+                        {
+                          "display_name": "Binary inverse",
+                          "id": "BinaryInverse"
+                        }
+                      ],
+                      "schema": "visionpro.image.threshold.mode",
+                      "version": 1
+                    },
+                    "value": "Binary"
+                  }
+                }
+              ],
+              "target": {
+                "id": "mode",
+                "kind": "parameter"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "type": "visionpro.image.threshold"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-00000000120e",
+          "join": "all_activated",
+          "name": "阈值 250",
+          "resources": []
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-00000000120e",
+                    "output": {
+                      "id": "binary",
+                      "kind": "port"
+                    },
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000000102"
+                  }
+                }
+              ],
+              "target": {
+                "id": "binary",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "8"
+                  }
+                }
+              ],
+              "target": {
+                "id": "connectivity",
+                "kind": "parameter"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "type": "visionpro.image.blob"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-00000000120f",
+          "join": "all_activated",
+          "name": "测量连通域",
+          "resources": []
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-00000000120f",
+                    "output": {
+                      "id": "count",
+                      "kind": "port"
+                    },
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000000102"
+                  }
+                }
+              ],
+              "target": {
+                "id": "value",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "2"
+                  }
+                }
+              ],
+              "target": {
+                "id": "minimum",
+                "kind": "parameter"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "2"
+                  }
+                }
+              ],
+              "target": {
+                "id": "maximum",
+                "kind": "parameter"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "type": "visionpro.judge.integer_range"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000001210",
+          "join": "all_activated",
+          "name": "判断范围 [2, 2]",
+          "resources": []
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "multiple_sources",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000001203",
+                    "output": {
+                      "id": "count",
+                      "kind": "port"
+                    },
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000000102"
+                  }
+                },
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000001206",
+                    "output": {
+                      "id": "count",
+                      "kind": "port"
+                    },
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000000102"
+                  }
+                },
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000001209",
+                    "output": {
+                      "id": "count",
+                      "kind": "port"
+                    },
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000000102"
+                  }
+                },
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-00000000120c",
+                    "output": {
+                      "id": "count",
+                      "kind": "port"
+                    },
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000000102"
+                  }
+                },
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-00000000120f",
+                    "output": {
+                      "id": "count",
+                      "kind": "port"
+                    },
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000000102"
+                  }
+                }
+              ],
+              "target": {
+                "id": "values",
+                "kind": "input"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "type": "visionpro.sim.collect"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000001211",
+          "join": "all_activated",
+          "name": "收集五路连通域数量",
+          "resources": []
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000001211",
+                    "output": {
+                      "id": "values",
+                      "kind": "port"
+                    },
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000000102"
+                  }
+                }
+              ],
+              "target": {
+                "id": "values",
+                "kind": "input"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "type": "visionpro.sim.deliver"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000001212",
+          "join": "all_activated",
+          "name": "交付五路结果",
+          "resources": []
+        }
+      ],
+      "outputs": []
+    },
+    {
+      "containment": [],
+      "control_exports": [],
+      "control_links": [
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000003301",
+          "output": null,
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000001301",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000001302"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000003302",
+          "output": null,
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000001301",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000001303"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000003303",
+          "output": null,
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000001302",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000001304"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000003304",
+          "output": null,
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000001303",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000001304"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000003305",
+          "output": null,
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000001304",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000001305"
+        }
+      ],
+      "enabled": true,
+      "entries": [
+        "5ca4f87a-ea1e-4d62-89b0-000000001301"
+      ],
+      "id": "5ca4f87a-ea1e-4d62-89b0-000000000103",
+      "interface": {
+        "control_outputs": [],
+        "id": "s4.sample.roi",
+        "inputs": [],
+        "outputs": [],
+        "version": 1
+      },
+      "name": "旋转 ROI 继承",
+      "nodes": [
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "enum",
+                      "members": [
+                        {
+                          "display_name": "Gray8",
+                          "id": "Gray8"
+                        },
+                        {
+                          "display_name": "Native8",
+                          "id": "Native8"
+                        }
+                      ],
+                      "schema": "visionpro.image.read_file.decode_mode",
+                      "version": 1
+                    },
+                    "value": "Gray8"
+                  }
+                }
+              ],
+              "target": {
+                "id": "decode_mode",
+                "kind": "parameter"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "point2d"
+                    },
+                    "value": {
+                      "coordinate_frame": "s4.sample.rotated",
+                      "unit": "pixel",
+                      "x": 0.0,
+                      "y": 0.0
+                    }
+                  }
+                }
+              ],
+              "target": {
+                "id": "frame_origin",
+                "kind": "parameter"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "type": "visionpro.image.read_file"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000001301",
+          "join": "all_activated",
+          "name": "读取灰度图",
+          "resources": [
+            {
+              "resource": {
+                "id": "5ca4f87a-ea1e-4d62-89b0-000000000202",
+                "kind": "image",
+                "revision": null
+              },
+              "slot": "source"
+            }
+          ]
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000001301",
+                    "output": {
+                      "id": "image",
+                      "kind": "port"
+                    },
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000000103"
+                  }
+                }
+              ],
+              "target": {
+                "id": "image",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "region2d"
+                    },
+                    "value": {
+                      "boundary_policy": "reject",
+                      "coordinate_frame": "s4.sample.rotated",
+                      "empty_policy": "error",
+                      "exclusions": [],
+                      "fill": null,
+                      "id": "5ca4f87a-ea1e-4d62-89b0-000000004301",
+                      "source": {
+                        "coordinate_frame": "s4.sample.rotated",
+                        "geometry": {
+                          "kind": "full_image"
+                        },
+                        "kind": "primitive",
+                        "local_direction_radians": 0.0,
+                        "transform": null,
+                        "unit": "pixel"
+                      },
+                      "unit": "pixel"
+                    }
+                  }
+                }
+              ],
+              "target": {
+                "id": "roi",
+                "kind": "parameter"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "128"
+                  }
+                }
+              ],
+              "target": {
+                "id": "threshold",
+                "kind": "parameter"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "enum",
+                      "members": [
+                        {
+                          "display_name": "Binary",
+                          "id": "Binary"
+                        },
+                        {
+                          "display_name": "Binary inverse",
+                          "id": "BinaryInverse"
+                        }
+                      ],
+                      "schema": "visionpro.image.threshold.mode",
+                      "version": 1
+                    },
+                    "value": "Binary"
+                  }
+                }
+              ],
+              "target": {
+                "id": "mode",
+                "kind": "parameter"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "type": "visionpro.image.threshold"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000001302",
+          "join": "all_activated",
+          "name": "阈值 128",
+          "resources": []
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000001301",
+                    "output": {
+                      "id": "image",
+                      "kind": "port"
+                    },
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000000103"
+                  }
+                }
+              ],
+              "target": {
+                "id": "image",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "region2d"
+                    },
+                    "value": {
+                      "boundary_policy": "reject",
+                      "coordinate_frame": "s4.sample.rotated",
+                      "empty_policy": "error",
+                      "exclusions": [],
+                      "fill": null,
+                      "id": "5ca4f87a-ea1e-4d62-89b0-000000004302",
+                      "source": {
+                        "coordinate_frame": "s4.sample.rotated",
+                        "geometry": {
+                          "angle_radians": 0.7853981633974483,
+                          "center_x": 4.0,
+                          "center_y": 4.0,
+                          "height": 2.0,
+                          "kind": "rotated_rect",
+                          "width": 4.0
+                        },
+                        "kind": "primitive",
+                        "local_direction_radians": 0.0,
+                        "transform": null,
+                        "unit": "pixel"
+                      },
+                      "unit": "pixel"
+                    }
+                  }
+                }
+              ],
+              "target": {
+                "id": "roi",
+                "kind": "parameter"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "128"
+                  }
+                }
+              ],
+              "target": {
+                "id": "threshold",
+                "kind": "parameter"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "enum",
+                      "members": [
+                        {
+                          "display_name": "Binary",
+                          "id": "Binary"
+                        },
+                        {
+                          "display_name": "Binary inverse",
+                          "id": "BinaryInverse"
+                        }
+                      ],
+                      "schema": "visionpro.image.threshold.mode",
+                      "version": 1
+                    },
+                    "value": "Binary"
+                  }
+                }
+              ],
+              "target": {
+                "id": "mode",
+                "kind": "parameter"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "type": "visionpro.image.threshold"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000001303",
+          "join": "all_activated",
+          "name": "阈值 128",
+          "resources": []
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000001302",
+                    "output": {
+                      "id": "binary",
+                      "kind": "port"
+                    },
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000000103"
+                  }
+                }
+              ],
+              "target": {
+                "id": "binary",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "8"
+                  }
+                }
+              ],
+              "target": {
+                "id": "connectivity",
+                "kind": "parameter"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "element": {
+                        "kind": "region2d"
+                      },
+                      "kind": "optional"
+                    },
+                    "value": {
+                      "type": {
+                        "kind": "region2d"
+                      },
+                      "value": {
+                        "boundary_policy": "reject",
+                        "coordinate_frame": "s4.sample.rotated",
+                        "empty_policy": "error",
+                        "exclusions": [
+                          {
+                            "coordinate_frame": "s4.sample.rotated",
+                            "geometry": {
+                              "height": 1.0,
+                              "kind": "axis_aligned_rect",
+                              "width": 1.0,
+                              "x": 5.0,
+                              "y": 4.0
+                            },
+                            "kind": "primitive",
+                            "local_direction_radians": 0.0,
+                            "transform": null,
+                            "unit": "pixel"
+                          }
+                        ],
+                        "fill": null,
+                        "id": "5ca4f87a-ea1e-4d62-89b0-000000004303",
+                        "source": {
+                          "coordinate_frame": "s4.sample.rotated",
+                          "kind": "inherited",
+                          "local_direction_radians": 0.0,
+                          "node": "5ca4f87a-ea1e-4d62-89b0-000000001303",
+                          "output": "effective_roi",
+                          "transform": {
+                            "calibration": null,
+                            "from": "s4.sample.rotated",
+                            "from_unit": "pixel",
+                            "matrix": [
+                              1.0,
+                              0.0,
+                              1.0,
+                              0.0,
+                              1.0,
+                              0.0,
+                              0.0,
+                              0.0,
+                              1.0
+                            ],
+                            "model": "affine",
+                            "to": "s4.sample.rotated",
+                            "to_unit": "pixel",
+                            "valid_domain": null
+                          },
+                          "unit": "pixel",
+                          "workflow": "5ca4f87a-ea1e-4d62-89b0-000000000103"
+                        },
+                        "unit": "pixel"
+                      }
+                    }
+                  }
+                }
+              ],
+              "target": {
+                "id": "roi",
+                "kind": "parameter"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "type": "visionpro.image.blob"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000001304",
+          "join": "all_activated",
+          "name": "测量连通域",
+          "resources": []
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000001304",
+                    "output": {
+                      "id": "total_area_pixels",
+                      "kind": "port"
+                    },
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000000103"
+                  }
+                }
+              ],
+              "target": {
+                "id": "value",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "6"
+                  }
+                }
+              ],
+              "target": {
+                "id": "minimum",
+                "kind": "parameter"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "6"
+                  }
+                }
+              ],
+              "target": {
+                "id": "maximum",
+                "kind": "parameter"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "type": "visionpro.judge.integer_range"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000001305",
+          "join": "all_activated",
+          "name": "判断范围 [6, 6]",
+          "resources": []
+        }
+      ],
+      "outputs": []
+    }
+  ]
+}
