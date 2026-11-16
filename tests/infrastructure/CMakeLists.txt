@@ -18,10 +18,12 @@ add_test(NAME infrastructure.solution_save_conflict COMMAND visionpro_solution_s
 add_test(NAME infrastructure.solution_save_cleanup COMMAND visionpro_solution_save_tests cleanup)
 add_test(NAME infrastructure.external_solution_save_failures COMMAND visionpro_solution_save_tests external-failures)
 add_test(NAME infrastructure.external_solution_save_conflict COMMAND visionpro_solution_save_tests external-conflict)
+add_test(NAME infrastructure.solution_transfer COMMAND visionpro_solution_save_tests transfer)
 
 set_tests_properties(infrastructure.solution_roundtrip infrastructure.file_resource_execution
     infrastructure.solution_diagnostic_loading infrastructure.solution_save_failures
     infrastructure.solution_save_conflict infrastructure.solution_save_cleanup
     infrastructure.external_file_resource_execution infrastructure.external_solution_diagnostic_loading
     infrastructure.file_draft_publication
-    infrastructure.external_solution_save_failures infrastructure.external_solution_save_conflict PROPERTIES TIMEOUT 30)
+    infrastructure.external_solution_save_failures infrastructure.external_solution_save_conflict
+    infrastructure.solution_transfer PROPERTIES TIMEOUT 30)

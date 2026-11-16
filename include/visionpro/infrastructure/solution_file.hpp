@@ -22,6 +22,7 @@ public:
     [[nodiscard]] std::span<const core::Diagnostic> diagnostics() const noexcept { return diagnostics_; }
     [[nodiscard]] bool can_save() const noexcept { return complete_; }
     [[nodiscard]] bool matches_manifest(std::string_view text) const noexcept { return manifest_ == text; }
+    [[nodiscard]] bool same_manifest(const SolutionDocument& other) const noexcept { return manifest_ == other.manifest_; }
     [[nodiscard]] std::span<const NamedResourceRoot> resource_roots() const noexcept { return roots_; }
 private:
     friend core::Result<SolutionDocument> load_solution(const std::filesystem::path&, const core::ToolRegistry&,
@@ -50,6 +51,9 @@ private:
 // drafts retain diagnostics. Invalid or unsupported representations fail.
 [[nodiscard]] core::Result<SolutionDocument> load_solution(const std::filesystem::path& directory,
     const core::ToolRegistry& registry, std::span<const NamedResourceRoot> roots = {});
+// Obtains the exact committed manifest as the next save baseline.
+[[nodiscard]] core::Result<SolutionDocument> reload_saved_solution(const std::filesystem::path& directory,
+    const workflow::Solution& saved, const core::ToolRegistry& registry, std::span<const NamedResourceRoot> roots = {});
 
 // Publishes a new manifest only. The caller supplies any package resources.
 // Use the provenance overload for a configuration edited from a loaded file.
@@ -57,6 +61,24 @@ private:
     const workflow::Solution& solution);
 [[nodiscard]] core::Result<std::monostate> write_new_solution(const std::filesystem::path& directory,
     const SolutionDocument& source, const workflow::Solution& edited);
+
+enum class SolutionTransfer { SaveAs, IndependentCopy };
+struct SolutionTransferResult {
+    workflow::Solution solution;
+    std::vector<std::filesystem::path> external_dependencies;
+    std::vector<core::SchemaId> unresolved_roots;
+};
+
+// Publishes a new package without replacing an existing manifest. A loaded
+// source provides path provenance; otherwise destination and roots are the first bases.
+[[nodiscard]] core::Result<SolutionTransferResult> transfer_solution(const std::filesystem::path& destination,
+    const workflow::Solution& draft, SolutionTransfer operation, const SolutionDocument* source = nullptr,
+    std::span<const NamedResourceRoot> roots = {});
+
+// Creates a separate package file for an explicitly copied external resource.
+// The application may use the returned relative path in its draft.
+[[nodiscard]] core::Result<core::ResourcePath> copy_external_resource_into_solution(const SolutionDocument& source,
+    const core::ExternalFileResource& resource);
 
 struct ManagedResourceWrite {
     core::ResourceId resource;

@@ -164,6 +164,24 @@ core::Result<std::monostate> write_new_solution(const fs::path& directory, const
     return write_new_solution(directory, edited);
 }
 
+core::Result<SolutionDocument> reload_saved_solution(const fs::path& directory,
+    const Solution& saved, const ToolRegistry& registry, std::span<const NamedResourceRoot> roots)
+{
+    try {
+        const auto expected = detail::serialize_manifest(detail::encode_solution(saved));
+        auto loaded = load_solution(directory, registry, roots);
+        if (auto* failure = std::get_if<Diagnostic>(&loaded)) { return std::move(*failure); }
+        if (!std::get<SolutionDocument>(loaded).matches_manifest(expected)) {
+            return error(ErrorCode::SolutionSaveConflict, "The manifest changed before refreshing the save baseline.", saved.id);
+        }
+        return loaded;
+    } catch (detail::CodecError& failure) {
+        return std::move(failure.diagnostic);
+    } catch (...) {
+        return error(ErrorCode::SolutionIoFailure, "Could not refresh the saved solution baseline.", saved.id);
+    }
+}
+
 core::Result<LoadedSolutionExecution> open_solution_execution(const SolutionDocument& document,
     const ToolRegistry& registry, WorkflowEngineOptions options)
 {

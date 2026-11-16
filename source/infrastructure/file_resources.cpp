@@ -2,6 +2,7 @@
 #include <visionpro/workflow/execution_plan.hpp>
 
 #include "managed_cleanup.hpp"
+#include "resource_files.hpp"
 #include "solution_storage.hpp"
 
 #include <windows.h>
@@ -26,19 +27,18 @@ constexpr std::array file_kinds{ResourceKind::Image, ResourceKind::Mask, Resourc
 Diagnostic error(ErrorCode code, std::string message)
 { return {code, Severity::Error, {}, std::move(message)}; }
 
-struct ResourcePaths {
-    fs::path directory;
-    std::map<SchemaId, fs::path> roots;
-};
+} // namespace
 
-Result<ResourcePaths> resource_paths(const fs::path& directory, std::span<const NamedResourceRoot> roots)
+namespace detail {
+Result<ResourcePaths> resource_paths(const fs::path& directory, std::span<const NamedResourceRoot> roots,
+    bool require_existing_directory)
 {
     if (!directory.is_absolute()) {
         return error(ErrorCode::InvalidPath, "Solution directory must be an explicit absolute path.");
     }
     std::error_code io;
-    auto base = fs::canonical(directory, io);
-    if (io || !fs::is_directory(base, io) || io) {
+    auto base = require_existing_directory ? fs::canonical(directory, io) : fs::weakly_canonical(directory, io);
+    if (io || (require_existing_directory && (!fs::is_directory(base, io) || io))) {
         return error(ErrorCode::InvalidPath, "Solution directory must name an existing directory.");
     }
     ResourcePaths paths{std::move(base), {}};
@@ -78,7 +78,7 @@ Result<fs::path> absolute_path(const ResourcePath& declaration, const ResourcePa
 }
 
 Result<fs::path> existing_path(const ResourcePath& declaration, const ResourcePaths& paths,
-    bool managed = false, bool directory = false)
+    bool managed, bool directory)
 {
     const auto located = absolute_path(declaration, paths, managed);
     if (const auto* invalid = std::get_if<Diagnostic>(&located)) { return *invalid; }
@@ -99,6 +99,14 @@ Result<fs::path> existing_path(const ResourcePath& declaration, const ResourcePa
     }
     return canonical;
 }
+
+} // namespace detail
+
+namespace {
+using detail::absolute_path;
+using detail::existing_path;
+using detail::ResourcePaths;
+using detail::resource_paths;
 
 struct FileDeclaration {
     const ResourcePath& path;
@@ -209,27 +217,36 @@ std::variant<std::vector<std::byte>, FileReadFailure> read_bytes(HANDLE handle, 
     return bytes;
 }
 
+Result<std::shared_ptr<const std::vector<std::byte>>> read_file_contents(
+    const fs::path& path, std::string_view label, std::optional<std::string_view> digest, DWORD sharing)
+{
+    NativeFile handle(CreateFileW(path.c_str(), GENERIC_READ, sharing,
+        nullptr, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, nullptr));
+    if (!handle.valid()) {
+        const auto code = GetLastError();
+        return file_error(missing_file(code) ? ErrorCode::ResourceNotFound : ErrorCode::InvalidResource,
+            "Could not open the resource", label, code);
+    }
+    auto contents = read_bytes(handle.get(), label);
+    if (auto* failure = std::get_if<FileReadFailure>(&contents)) { return std::move(failure->diagnostic); }
+    auto bytes = std::get<std::vector<std::byte>>(std::move(contents));
+    if (digest) {
+        if (auto checked = check_digest(bytes, *digest); const auto* invalid = std::get_if<Diagnostic>(&checked)) {
+            return *invalid;
+        }
+    }
+    return std::make_shared<const std::vector<std::byte>>(std::move(bytes));
+}
+
 Result<FileContents> read_file(const FileDeclaration& file, const ResourcePaths& paths)
 {
     auto located = existing_path(file.path, paths, file.managed);
     if (const auto* invalid = std::get_if<Diagnostic>(&located)) { return *invalid; }
     auto path = std::get<fs::path>(std::move(located));
-    NativeFile handle(CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-        nullptr, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, nullptr));
-    if (!handle.valid()) {
-        const auto code = GetLastError();
-        return file_error(missing_file(code) ? ErrorCode::ResourceNotFound : ErrorCode::InvalidResource,
-            "Could not open the resource", file.path.path, code);
-    }
-    auto contents = read_bytes(handle.get(), file.path.path);
-    if (auto* failure = std::get_if<FileReadFailure>(&contents)) { return std::move(failure->diagnostic); }
-    auto bytes = std::get<std::vector<std::byte>>(std::move(contents));
-    if (file.digest) {
-        if (auto checked = check_digest(bytes, *file.digest); const auto* invalid = std::get_if<Diagnostic>(&checked)) {
-            return *invalid;
-        }
-    }
-    return FileContents{std::move(path), std::make_shared<const std::vector<std::byte>>(std::move(bytes))};
+    auto contents = read_file_contents(path, file.path.path, file.digest,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE);
+    if (auto* failure = std::get_if<Diagnostic>(&contents)) { return std::move(*failure); }
+    return FileContents{std::move(path), std::get<std::shared_ptr<const std::vector<std::byte>>>(std::move(contents))};
 }
 
 using ProtectedFiles = std::set<fs::path>;
@@ -257,33 +274,56 @@ Check protect_file(ProtectedFiles& files, const ResourcePath& path, const Resour
     return std::monostate{};
 }
 
-Check protect_sequence(ProtectedFiles& files, const DirectorySelection& selection, const ResourcePaths& paths)
+} // namespace
+
+Result<std::vector<fs::path>> detail::sequence_files(const fs::path& directory, std::string_view pattern)
 {
-    auto resolved = referenced_path(selection.directory, paths, false, true);
-    if (auto* invalid = std::get_if<Diagnostic>(&resolved)) { return std::move(*invalid); }
-    const auto& directory = std::get<std::optional<fs::path>>(resolved);
-    if (!directory) { return std::monostate{}; }
-    const auto search_path = *directory / utf8_path(selection.filename_pattern);
+    const auto search_path = directory / utf8_path(pattern);
     WIN32_FIND_DATAW entry{};
     struct Search {
         HANDLE handle;
         ~Search() { if (handle != INVALID_HANDLE_VALUE) { FindClose(handle); } }
     } search{FindFirstFileW(search_path.c_str(), &entry)};
     const auto search_error = [&](DWORD code) {
-        return file_error(ErrorCode::InvalidPath, "Could not check selected sequence files", selection.directory.path, code);
+        return file_error(ErrorCode::InvalidPath, "Could not check selected sequence files", pattern, code);
     };
+    std::vector<fs::path> files;
     if (search.handle == INVALID_HANDLE_VALUE) {
         const auto code = GetLastError();
-        if (missing_file(code)) { return std::monostate{}; }
+        if (missing_file(code)) { return files; }
         return search_error(code);
     }
     do {
         if ((entry.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
-            files.insert(*directory / entry.cFileName);
+            files.push_back(directory / entry.cFileName);
         }
     } while (FindNextFileW(search.handle, &entry));
     const auto code = GetLastError();
     if (code != ERROR_NO_MORE_FILES) { return search_error(code); }
+    return files;
+}
+
+Check detail::copy_resource_file(const fs::path& source, const fs::path& destination, std::optional<std::string_view> digest)
+{
+    const auto spelling = source.generic_u8string();
+    auto contents = read_file_contents(source, std::string_view(reinterpret_cast<const char*>(spelling.data()), spelling.size()),
+        digest, FILE_SHARE_READ | FILE_SHARE_DELETE);
+    if (auto* failure = std::get_if<Diagnostic>(&contents)) { return std::move(*failure); }
+    return write_staged_file(destination, *std::get<std::shared_ptr<const std::vector<std::byte>>>(contents));
+}
+
+namespace {
+
+Check protect_sequence(ProtectedFiles& files, const DirectorySelection& selection, const ResourcePaths& paths)
+{
+    auto resolved = referenced_path(selection.directory, paths, false, true);
+    if (auto* invalid = std::get_if<Diagnostic>(&resolved)) { return std::move(*invalid); }
+    const auto& directory = std::get<std::optional<fs::path>>(resolved);
+    if (!directory) { return std::monostate{}; }
+    auto selected = detail::sequence_files(*directory, selection.filename_pattern);
+    if (auto* invalid = std::get_if<Diagnostic>(&selected)) { return std::move(*invalid); }
+    const auto& members = std::get<std::vector<fs::path>>(selected);
+    files.insert(members.begin(), members.end());
     return std::monostate{};
 }
 

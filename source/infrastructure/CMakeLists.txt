@@ -8,6 +8,7 @@ add_library(visionpro_infrastructure STATIC
     solution_file.cpp
     solution_storage.cpp
     solution_save.cpp
+    solution_transfer.cpp
 )
 add_library(visionpro::infrastructure ALIAS visionpro_infrastructure)
 

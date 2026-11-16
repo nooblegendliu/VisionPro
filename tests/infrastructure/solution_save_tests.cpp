@@ -3,6 +3,7 @@
 #include <visionpro/core/id_factory.hpp>
 #include <visionpro/core/schema_id_factory.hpp>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -239,9 +240,9 @@ ManagedResourceWrite payload(std::string_view bytes = replacement_bytes, char re
 
 std::array<ManagedResourceWrite, 1> replace(std::string_view bytes = replacement_bytes) { return {payload(bytes)}; }
 
-RunHandle start(LoadedSolutionExecution& execution)
+RunHandle start(LoadedSolutionExecution& execution, WorkflowId workflow = id<WorkflowId>())
 {
-    const auto request = take(RunRequest::create(execution.snapshot, WorkflowTarget{id<WorkflowId>()}, {},
+    const auto request = take(RunRequest::create(execution.snapshot, WorkflowTarget{workflow}, {},
         {TriggerKind::Manual, key<SchemaId>("s38.test")}));
     auto submitted = execution.engine->submit(request);
     if (const auto* failure = std::get_if<RunRejected>(&submitted)) { throw std::runtime_error(failure->diagnostic.message); }
@@ -266,6 +267,177 @@ void current_output_is(const Fixture& fixture, std::int64_t byte)
     check(document.can_save() && document.diagnostics().empty(), "The committed package reloads without diagnostics.");
     auto execution = take(open_solution_execution(document, fixture.tools));
     output_is(start(execution), byte);
+}
+
+void transfer_packages()
+{
+    Fixture fixture;
+    const auto root_id = key<SchemaId>("test.external");
+    const auto unresolved_id = key<SchemaId>("test.unresolved");
+    const std::array roots{NamedResourceRoot{root_id, fixture.scratch.path}};
+    const auto source = take(load_solution(fixture.package, fixture.tools, roots));
+    const auto original = read(fixture.manifest);
+    auto draft = source.solution();
+    const auto workflow = draft.workflows.front().id;
+    const auto node = draft.workflows.front().nodes.front().id;
+    draft.layouts = {{workflow, {{node, 23, -17}}}};
+    draft.name = "已编辑";
+    draft.resources.push_back({id<ResourceId>('3'), "Named external", ResourceKind::Binary, ExternalFileResource{
+        {PathBase::NamedRoot, utf8(fixture.external.filename()), root_id}, ResourceReadPolicy::PerInvocation, {}, {}}});
+    draft.resources.push_back({id<ResourceId>('4'), "Relative external", ResourceKind::Binary, ExternalFileResource{
+        {PathBase::SolutionDirectory, "../" + utf8(fixture.external.filename()), {}}, ResourceReadPolicy::PerInvocation, {}, {}}});
+    draft.resources.push_back({id<ResourceId>('5'), "Unconfigured root", ResourceKind::Binary, ExternalFileResource{
+        {PathBase::NamedRoot, "camera.bin", unresolved_id}, ResourceReadPolicy::PerInvocation, {}, {}}});
+    draft.resources.push_back({id<ResourceId>('6'), "Package sequence", ResourceKind::DirectorySequence, ImageSequenceResource{
+        DirectorySelection{{PathBase::SolutionDirectory, "images", {}}, "*.bin"}, SequenceSort::NameAscending,
+        SequenceAdvance::PerInvocation, SequenceRepeat::Stop, SequenceMissing::Fail, SequenceTrigger::Manual, 0}});
+    draft.resources.push_back({id<ResourceId>('7'), "Package output", ResourceKind::OutputPath, OutputPathResource{
+        {PathBase::SolutionDirectory, "outputs", {}}, OutputNaming::FixedName, "image", "bin", OutputOverwrite::Fail, 1000}});
+    const auto& relative = std::get<ManagedResource>(draft.resources.front().location).path;
+    const auto alias_path = relative.path;
+    draft.resources.push_back({id<ResourceId>('8'), "Aliased payload", ResourceKind::Binary, ExternalFileResource{
+        {PathBase::SolutionDirectory, alias_path, {}}, ResourceReadPolicy::PerInvocation, {}, {}}});
+    write(fixture.package / "images" / u8"帧.bin", "selected");
+    write(fixture.package / "images" / "notes.txt", "unselected");
+    write(fixture.package / "outputs" / "previous.bin", "historical data");
+    write(fixture.package / "unrelated.bin", "not a resource");
+
+    const auto destination = fixture.scratch.path / u8"另存方案";
+    write(destination / "sentinel.txt", "unrelated destination file");
+    const auto saved = take(transfer_solution(destination, draft, SolutionTransfer::SaveAs, &source));
+    const auto document = take(reload_saved_solution(destination, saved.solution, fixture.tools, roots));
+    const auto& restored = document.solution();
+    check(restored.id == draft.id && restored.revision == draft.revision && restored.name == draft.name
+        && restored.workflows.front().id == workflow && restored.workflows.front().nodes.front().id == node,
+        "Save As retains stable identities and persists the draft without incrementing its old revision.");
+    check(restored.layouts.front().workflow == workflow && restored.layouts.front().nodes.front().node == node
+        && restored.layouts.front().nodes.front().x == 23 && restored.layouts.front().nodes.front().y == -17,
+        "Layout round-trips with the same workflow and node identities.");
+    const auto relative_to = [&](const ResourcePath& path) { return destination / fs::path(std::u8string(path.path.begin(), path.path.end())); };
+    const auto& copied = std::get<ManagedResource>(restored.resources[0].location);
+    const auto& old = std::get<ManagedResource>(draft.resources[0].location);
+    check(copied.path.base == PathBase::SolutionDirectory && copied.path.path != old.path.path
+        && copied.revision == old.revision && copied.sha256 == old.sha256
+        && read(relative_to(copied.path)) == original_bytes, "The package copy relocates the referenced managed bytes.");
+    const auto& alias = std::get<ExternalFileResource>(restored.resources.back().location);
+    check(alias.path.base == PathBase::SolutionDirectory && alias.path.path == copied.path.path,
+        "Different declarations for the same payload keep a shared target.");
+    const auto& outside = std::get<ExternalFileResource>(restored.resources[3].location);
+    check(outside.path.base == PathBase::Absolute
+        && fs::equivalent(fs::path(std::u8string(outside.path.path.begin(), outside.path.path.end())), fixture.external)
+        && std::get<ExternalFileResource>(restored.resources[2].location).path.named_root == root_id
+        && saved.unresolved_roots == std::vector{unresolved_id}
+        && std::ranges::all_of(saved.external_dependencies, [&](const auto& path) { return fs::equivalent(path, fixture.external); })
+        && !saved.external_dependencies.empty(), "Outside files keep their targets and named-root requirements are reported.");
+    const auto& selection = std::get<DirectorySelection>(std::get<ImageSequenceResource>(restored.resources[5].location).selection);
+    const auto& outputs = std::get<OutputPathResource>(restored.resources[6].location);
+    check(selection.filename_pattern == "*.bin" && read(relative_to(selection.directory) / u8"帧.bin") == "selected"
+        && !fs::exists(relative_to(selection.directory) / "notes.txt")
+        && fs::is_empty(relative_to(outputs.directory)) && !fs::exists(destination / "unrelated.bin"),
+        "Sequence transfer keeps only matching files and output directories start empty.");
+    check(read(destination / "sentinel.txt") == "unrelated destination file"
+        && read(fixture.manifest) == original && read(fixture.managed) == original_bytes,
+        "The source package and pre-existing destination files keep their bytes.");
+
+    auto execution = take(open_solution_execution(document, fixture.tools));
+    output_is(start(execution), 'a');
+    const auto independent_dir = fixture.scratch.path / u8"独立副本";
+    const auto independent = take(transfer_solution(independent_dir, draft, SolutionTransfer::IndependentCopy, &source));
+    const auto clone = take(reload_saved_solution(independent_dir, independent.solution, fixture.tools, roots));
+    const auto& cloned_flow = clone.solution().workflows.front();
+    const auto& cloned_node = cloned_flow.nodes.front();
+    check(clone.solution().id != draft.id && clone.solution().revision == 1 && cloned_flow.id != workflow
+        && cloned_node.id != node && cloned_flow.entries == std::vector{cloned_node.id}
+        && clone.solution().resources.front().id != draft.resources.front().id
+        && cloned_node.resources.front().resource.id == clone.solution().resources.front().id,
+        "Independent copies allocate identities and remap entries plus resource-slot references.");
+    check(clone.solution().layouts.front().workflow == cloned_flow.id && clone.solution().layouts.front().nodes.front().node == cloned_node.id,
+        "Independent copies remap layout identities with the domain objects.");
+    auto copied_execution = take(open_solution_execution(clone, fixture.tools));
+    output_is(start(copied_execution, cloned_flow.id), 'a');
+
+    const auto later = take(save_solution(document, restored));
+    rejected(reload_saved_solution(destination, saved.solution, fixture.tools, roots), ErrorCode::SolutionSaveConflict,
+        "Refreshing a stale save baseline cannot adopt a later manifest.");
+    const auto current = take(reload_saved_solution(destination, later.solution, fixture.tools, roots));
+    check(current.same_manifest(take(load_solution(destination, fixture.tools, roots))) && !current.same_manifest(document),
+        "Refresh identifies the exact committed manifest bytes.");
+
+    const auto empty_package = fixture.scratch.path / u8"首次显式目录";
+    auto new_draft = draft;
+    new_draft.resources.erase(new_draft.resources.begin() + 3, new_draft.resources.end());
+    new_draft.resources.front().location = ExternalFileResource{{PathBase::SolutionDirectory, "payload.bin", {}},
+        ResourceReadPolicy::PerInvocation, {}, {}};
+    write(empty_package / "payload.bin", "first");
+    const auto new_save = take(transfer_solution(empty_package, new_draft, SolutionTransfer::SaveAs, nullptr, roots));
+    const auto new_document = take(reload_saved_solution(empty_package, new_save.solution, fixture.tools, roots));
+    auto new_execution = take(open_solution_execution(new_document, fixture.tools));
+    output_is(start(new_execution), 'f');
+    check(new_save.solution.id == new_draft.id && new_save.unresolved_roots.empty()
+        && std::get<ExternalFileResource>(new_save.solution.resources.front().location).path.path == "payload.bin",
+        "Initial publication uses its explicit destination as the first relative base.");
+}
+
+void transfer_failures_and_explicit_copy()
+{
+    Fixture fixture;
+    const auto source = fixture.open();
+    const auto manifest = read(fixture.manifest);
+    const auto& external = std::get<ExternalFileResource>(source.solution().resources.back().location);
+    const auto path = take(copy_external_resource_into_solution(source, external));
+    const auto installed = fixture.package / fs::path(std::u8string(path.path.begin(), path.path.end()));
+    check(path.base == PathBase::SolutionDirectory && read(installed) == "external"
+        && read(fixture.external) == "external" && read(fixture.manifest) == manifest,
+        "An explicit copy creates a separate package file and leaves declarations unchanged until save.");
+    write(fixture.external, "changed input");
+    check(read(installed) == "external", "The copied file does not follow writes to the original external file.");
+    rejected(transfer_solution(fixture.package, source.solution(), SolutionTransfer::SaveAs, &source),
+        ErrorCode::SolutionAlreadyExists, "A transfer cannot replace an existing manifest.");
+
+    auto draft = source.solution();
+    draft.resources.push_back({id<ResourceId>('3'), "Digest mismatch after staging", ResourceKind::Binary,
+        ExternalFileResource{{PathBase::SolutionDirectory, path.path, {}}, ResourceReadPolicy::PerInvocation,
+            std::string(original_digest), {}}});
+    const auto existing_target = fixture.scratch.path / "existing-destination";
+    write(existing_target / "sentinel.bin", "keep");
+    rejected(transfer_solution(existing_target, draft, SolutionTransfer::SaveAs, &source),
+        ErrorCode::ResourceVersionMismatch, "A content mismatch fails the staged transfer.");
+    check(std::distance(fs::directory_iterator(existing_target), fs::directory_iterator{}) == 1
+        && read(existing_target / "sentinel.bin") == "keep", "Rollback removes staged assets without touching pre-existing contents.");
+    const auto absent_parent = fixture.scratch.path / "absent-parent";
+    rejected(transfer_solution(absent_parent / "new-destination", draft, SolutionTransfer::SaveAs, &source),
+        ErrorCode::ResourceVersionMismatch, "A failed transfer can target an absent package directory.");
+    check(!fs::exists(absent_parent) && read(fixture.manifest) == manifest && read(fixture.managed) == original_bytes,
+        "Failed publication removes newly created empty directories and preserves the source files.");
+
+    const auto competing_target = fixture.scratch.path / "competing-transfer";
+    const auto export_model = [&] {
+        return transfer_solution(competing_target, source.solution(), SolutionTransfer::SaveAs, &source);
+    };
+    auto first = std::async(std::launch::async, export_model);
+    auto second = std::async(std::launch::async, export_model);
+    const auto a = first.get();
+    const auto b = second.get();
+    check(std::holds_alternative<SolutionTransferResult>(a) != std::holds_alternative<SolutionTransferResult>(b),
+        "Competing transfers admit a single package publication.");
+    const auto& committed = std::holds_alternative<SolutionTransferResult>(a) ? a : b;
+    const auto& refused = std::holds_alternative<SolutionTransferResult>(a) ? b : a;
+    rejected(refused, ErrorCode::SolutionAlreadyExists, "The competing transfer reports the occupied destination.");
+    const auto loaded = take(reload_saved_solution(competing_target, std::get<SolutionTransferResult>(committed).solution, fixture.tools));
+    check(loaded.diagnostics().empty()
+        && std::distance(fs::directory_iterator(competing_target), fs::directory_iterator{}) == 2,
+        "The published manifest only refers to the winning transfer's assets.");
+
+    const auto partial = std::string{"{\n  \"future_option\": true,"} + manifest.substr(1);
+    write(fixture.manifest, partial);
+    const auto unknown = fixture.open();
+    const auto untouched = fixture.scratch.path / "uncreated";
+    rejected(transfer_solution(untouched, unknown.solution(), SolutionTransfer::IndependentCopy, &unknown),
+        ErrorCode::UnsupportedSolutionContent, "Unknown fields are protected from lossy transfer.");
+    rejected(copy_external_resource_into_solution(unknown, external), ErrorCode::UnsupportedSolutionContent,
+        "Unknown metadata also prevents explicit package resource changes.");
+    check(!fs::exists(untouched) && read(fixture.manifest) == partial,
+        "Rejected transfers leave the source manifest and target untouched.");
 }
 
 fs::path verify_replacement(const Fixture& fixture, const Solution& solution)
@@ -527,7 +699,10 @@ int main(int argc, char** argv)
         else if (group == "cleanup") { cleanup(); }
         else if (group == "external-failures") { failures(PayloadStorage::External); }
         else if (group == "external-conflict") { conflict(PayloadStorage::External); }
-        else { throw std::runtime_error("Expected failures, conflict, cleanup, external-failures or external-conflict."); }
+        else if (group == "transfer") {
+            transfer_packages();
+            transfer_failures_and_explicit_copy();
+        } else { throw std::runtime_error("Expected failures, conflict, cleanup, external-failures, external-conflict or transfer."); }
         std::cout << checks << " checks passed\n";
         return 0;
     } catch (const std::exception& error) {
