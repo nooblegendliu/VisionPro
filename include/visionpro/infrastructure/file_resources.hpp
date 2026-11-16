@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -37,6 +38,11 @@ public:
     [[nodiscard]] static core::Result<std::shared_ptr<FileResourceProvider>> create(
         const workflow::Solution& solution, const std::filesystem::path& solution_directory,
         std::span<const NamedResourceRoot> roots = {});
+    // Read one catalog file with the same path, revision and content checks as execution.
+    [[nodiscard]] static core::Result<std::shared_ptr<const FileResourceLease>> read_resource(
+        const workflow::Solution& solution, const core::ResourceReference& reference,
+        const std::optional<std::filesystem::path>& solution_directory,
+        std::span<const NamedResourceRoot> roots = {});
     [[nodiscard]] std::span<const core::Diagnostic> diagnostics() const noexcept;
     [[nodiscard]] std::span<const core::ResourceKind> kinds() const noexcept override;
     [[nodiscard]] core::Result<std::monostate> preflight(const workflow::ExecutionPlan& plan) const override;
@@ -47,5 +53,8 @@ private:
     explicit FileResourceProvider(std::shared_ptr<const Storage> storage);
     std::shared_ptr<const Storage> storage_;
 };
+
+[[nodiscard]] core::Result<std::shared_ptr<const std::vector<std::byte>>> read_file_bytes(
+    const std::filesystem::path& absolute_file);
 
 } // namespace visionpro::infrastructure

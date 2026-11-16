@@ -3,6 +3,9 @@ add_library(visionpro_ui STATIC
     control_scene.cpp control_scene.hpp
     editor_window.cpp editor_window.hpp editor_documents.cpp
     editor_inspector.cpp editor_inspector.hpp
+    image_panel.cpp image_panel.hpp
+    image_view.cpp image_view.hpp
+    roi_editor.cpp roi_editor.hpp
 )
 set_target_properties(visionpro_ui PROPERTIES AUTOMOC ON)
 target_include_directories(visionpro_ui PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>")
@@ -10,6 +13,10 @@ target_link_libraries(visionpro_ui
     PUBLIC visionpro_workflow Qt6::Widgets QtNodes::QtNodes
     PRIVATE visionpro_build_options visionpro_infrastructure
 )
+if(VISIONPRO_WITH_OPENCV)
+    target_compile_definitions(visionpro_ui PRIVATE VISIONPRO_WITH_OPENCV)
+    target_link_libraries(visionpro_ui PRIVATE visionpro_visual_preview)
+endif()
 
 qt_add_executable(visionpro_gui WIN32
     main.cpp

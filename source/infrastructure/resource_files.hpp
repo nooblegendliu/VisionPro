@@ -12,7 +12,7 @@ struct ResourcePaths {
     std::map<core::SchemaId, std::filesystem::path> roots;
 };
 
-[[nodiscard]] core::Result<ResourcePaths> resource_paths(const std::filesystem::path& directory,
+[[nodiscard]] core::Result<ResourcePaths> resource_paths(const std::optional<std::filesystem::path>& directory,
     std::span<const NamedResourceRoot> roots, bool require_existing_directory = true);
 [[nodiscard]] std::filesystem::path utf8_path(std::string_view spelling);
 [[nodiscard]] core::Result<std::filesystem::path> absolute_path(

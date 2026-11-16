@@ -14,14 +14,15 @@ namespace visionpro::tools::vision {
 namespace {
 using namespace core;
 
-enum class DecodeMode { Gray8, Native8 };
 constexpr PixelFormat mono8{PixelDepth::UInt8, ChannelOrder::Mono};
 constexpr PixelFormat bgr8{PixelDepth::UInt8, ChannelOrder::BGR};
 
 Diagnostic error(ErrorCode code, std::string message)
 { return {code, Severity::Error, {}, std::move(message)}; }
+} // namespace
 
-Result<ImageHandle> decode_image(std::span<const std::byte> bytes, DecodeMode mode, const CoordinateSystemId& coordinates)
+core::Result<core::ImageHandle> decode_file_image(std::span<const std::byte> bytes,
+    FileImageDecodeMode mode, const core::CoordinateSystemId& coordinates)
 {
     auto decoded = decode_image_bytes(bytes);
     if (auto* failure = std::get_if<Diagnostic>(&decoded)) { return std::move(*failure); }
@@ -30,7 +31,7 @@ Result<ImageHandle> decode_image(std::span<const std::byte> bytes, DecodeMode mo
     if (pixels.type() != CV_8UC3) {
         return error(ErrorCode::UnsupportedPixelFormat, "Decoded images must be UInt8 Mono or BGR.");
     }
-    if (mode == DecodeMode::Native8) { return copy_from_cv_mat(pixels, bgr8, coordinates); }
+    if (mode == FileImageDecodeMode::Native8) { return copy_from_cv_mat(pixels, bgr8, coordinates); }
     cv::Mat gray;
     try {
         cv::cvtColor(pixels, gray, cv::COLOR_BGR2GRAY);
@@ -40,9 +41,10 @@ Result<ImageHandle> decode_image(std::span<const std::byte> bytes, DecodeMode mo
     return copy_from_cv_mat(gray, mono8, coordinates);
 }
 
+namespace {
 class ReadFileTool final : public ToolInstance {
 public:
-    ReadFileTool(const ToolExecutionConfiguration& configuration, CoordinateSystemId coordinates, DecodeMode mode)
+    ReadFileTool(const ToolExecutionConfiguration& configuration, CoordinateSystemId coordinates, FileImageDecodeMode mode)
         : ToolInstance(configuration), coordinates_(std::move(coordinates)), mode_(mode) {}
 
 private:
@@ -60,7 +62,7 @@ private:
             failure.location.resource = source->lease->reference().id;
             return failure;
         }
-        auto decoded = decode_image(file->bytes(), mode_, coordinates_);
+        auto decoded = decode_file_image(file->bytes(), mode_, coordinates_);
         if (auto* failure = std::get_if<Diagnostic>(&decoded)) {
             failure->location.resource = file->reference().id;
             return std::move(*failure);
@@ -73,7 +75,7 @@ private:
     }
 
     CoordinateSystemId coordinates_;
-    DecodeMode mode_;
+    FileImageDecodeMode mode_;
 };
 
 class ReadFileFactory final : public ToolInstanceFactory {
@@ -95,7 +97,7 @@ public:
         if (auto checked = validate_file_frame_origin(point); const auto* failure = std::get_if<Diagnostic>(&checked)) {
             return *failure;
         }
-        const auto decode_mode = mode->as_enum()->text() == "Gray8" ? DecodeMode::Gray8 : DecodeMode::Native8;
+        const auto decode_mode = mode->as_enum()->text() == "Gray8" ? FileImageDecodeMode::Gray8 : FileImageDecodeMode::Native8;
         return std::shared_ptr<ToolInstance>{std::make_shared<ReadFileTool>(configuration, point.coordinate_frame, decode_mode)};
     }
 };

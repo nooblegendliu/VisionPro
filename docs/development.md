@@ -35,6 +35,7 @@ S4.7 完成当前范围的整体验收，交付固定方案、输入清单和下
 2026-11-16，S5.1 完成 Qt 6.11.1 Widgets 和 QtNodes 3.0.16 接入，已验证桌面启动、控制画布及独立无 GUI 构建。
 S5.2 接通同会话草稿发布与资源隔离，已验证切换和关闭协调。
 S5.3 完成桌面草稿编辑、作用域定位和方案文件往返，已验证独立 CLI 可运行编辑器保存的方案。
+S5.4 完成 UInt8 灰度和 BGR 查看、ROI 编辑及有效成员预览，已用 S4 固定样例验证同轮结果叠加。
 后续实施与验收安排见 [§9](#9-第五阶段实施与验收计划)。
 
 开发顺序以 [requirements.md](requirements.md) 为准：
@@ -45,7 +46,7 @@ S5.3 完成桌面草稿编辑、作用域定位和方案文件往返，已验证
 | 2. 核心模型与绑定验证 | S2.1–S2.7 完成；14 项必需子范围和 Release 验证通过，整体记录见 §8.10 |
 | 3. 无 GUI 执行与配置往返验证 | S3.1–S3.9 完成。Release 82/82 项通过，26 项 S3 必验范围全部通过 |
 | 4. 无 GUI 视觉闭环 | 使用少量真实 OpenCV 工具及固定图像验证结果 |
-| 5. 基础可视化界面 | S5.1 画布接入、S5.2 同会话发布、S5.3 方案和流程编辑已验收，后续见 §9 |
+| 5. 基础可视化界面 | S5.1–S5.4 已验收。运行调试与整体验收见 §9 |
 | 6. 后续能力 | 完整循环、多流程并行、触发、共享服务、设备及扩展工具 |
 
 绑定校验与解析先于或伴随执行器实现。
@@ -670,6 +671,38 @@ cmake --install $guiBuild --config Release --prefix $installPrefix --component V
 从 **File** 保存到方案目录，另存和独立复制选择尚无 `solution.json` 的目标目录。外部引用和待配置的命名根显示在诊断面板。
 
 定向复测使用 `-R '^(visionpro_(canvas|editor|inspector)_tests|infrastructure\.solution_transfer)$'`。
+
+### 3.27 S5.4 Release 构建与测试
+
+沿用 [§3.24](#324-s51-release-构建测试与启动) 的 `$qtPrefix`、`$env:OpenCV_DIR` 和 QtNodes 固定归档配置。从仓库根目录执行。将 `$vsRoot` 指向 Visual Studio 安装目录，使用其 x64 开发环境及 Ninja。
+
+```powershell
+$vsRoot = 'C:/Program Files/Microsoft Visual Studio/18/Professional'
+& "$vsRoot/Common7/Tools/Launch-VsDevShell.ps1" -VsInstallationPath $vsRoot -Arch amd64 -HostArch amd64 -SkipAutomaticLocation
+$ninja = "$vsRoot/Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja/ninja.exe"
+$archive = (Resolve-Path -LiteralPath 'out/deps/qtnodes-3.0.16-7c6341a.tar.gz').Path
+$guiBuild = 'out/build/s54-ninja'
+$headlessBuild = 'out/build/s54-headless'
+
+cmake -S . -B $guiBuild -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TRY_COMPILE_CONFIGURATION=Release -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded -DBUILD_TESTING=ON -DVISIONPRO_WITH_GUI=ON -DVISIONPRO_WITH_OPENCV=ON "-DCMAKE_MAKE_PROGRAM=$ninja" "-DCMAKE_PREFIX_PATH=$qtPrefix" "-DOpenCV_DIR=$env:OpenCV_DIR" "-DVISIONPRO_QTNODES_ARCHIVE=$archive"
+cmake --build $guiBuild --parallel 8
+ctest --test-dir $guiBuild -C Release --parallel 4 --output-on-failure --no-tests=error --output-log "$guiBuild/ctest.log"
+
+cmake -S . -B $headlessBuild -G "Visual Studio 18 2026" -A x64 -DCMAKE_CONFIGURATION_TYPES=Release -DBUILD_TESTING=ON -DVISIONPRO_WITH_GUI=OFF -DVISIONPRO_WITH_OPENCV=OFF
+cmake --build $headlessBuild --config Release --parallel 4
+ctest --test-dir $headlessBuild -C Release --parallel 4 --output-on-failure --no-tests=error --output-log "$headlessBuild/ctest.log"
+
+$installPrefix = Join-Path (Get-Location) 'out/install/s54-gui'
+cmake --install $guiBuild --config Release --prefix $installPrefix --component VisionProGui
+& (Join-Path $installPrefix 'bin/visionpro_gui.exe')
+```
+
+从 **File → Open Solution…** 打开 `samples/s4`，选择 **旋转 ROI 继承** 流程。
+从 **View → Open Image Resource…** 选择 **纯白 BGR BMP**，选择 `s4.sample.rotated` 和 **Grayscale UInt8**。
+选中旋转阈值节点 `…1303` 后从 **View → Preview Selected ROI** 查看 7 个成员像素。选中 **测量连通域** 节点 `…1304` 后预览其继承和修正后的 6 个成员像素。
+在 **Properties → Edit ROI…** 修改区域。坐标匹配时可在图像上拖绘矩形，旋转角使用度输入。掩膜通过方案中的 Mask 资源选择。完成编辑后重新预览查看成员变化。
+
+定向复测使用 `-R '^visionpro_(image_view|visual)_tests$'`。
 
 ## 4. 第一阶段验证
 
@@ -2025,7 +2058,7 @@ ON 的 **97/97** 项和 OFF 的 **81/81** 项适用回归均通过。本轮两�
 
 ## 9. 第五阶段实施与验收计划
 
-2026-11-16 完成 **S5.1–S5.3** 验收，S5.4–S5.6 按以下顺序实施。
+2026-11-16 完成 **S5.1–S5.4** 验收，S5.5 和 S5.6 按以下顺序实施。
 功能范围由 [requirements §7](requirements.md#7-第五阶段基础可视化界面) 定义，
 界面适配职责见 [architecture §4](architecture.md#4-配置模型与编辑器)，运行与持久化契约见 [data-model](data-model.md)。
 本节记录实施顺序和验证安排，不把已有 S3/S4 测试或本机依赖安装记录作为 S5 完成证据。
@@ -2042,14 +2075,14 @@ ON 的 **97/97** 项和 OFF 的 **81/81** 项适用回归均通过。本轮两�
 
 ### 9.2 子阶段与完成条件
 
-已完成项目见 [S5.1 验收](#95-s51-接入与验收记录)、[S5.2 验收](#96-s52-应用服务验收记录) 和 [S5.3 验收](#97-s53-方案与流程编辑验收记录)。其余子阶段按表中的完成条件验收。
+已完成项目见 [S5.1 验收](#95-s51-接入与验收记录)、[S5.2 验收](#96-s52-应用服务验收记录)、[S5.3 验收](#97-s53-方案与流程编辑验收记录) 和 [S5.4 验收](#98-s54-图像与-roi-验收记录)。其余子阶段按表中的完成条件验收。
 
 | 子阶段 | 交付 | 可观察完成条件 |
 |---|---|---|
 | S5.1 Qt 与 QtNodes 接入（已完成） | 现有 Qt 的 GUI 构建与启动、QtNodes 版本及依赖锁定、领域模型适配验证 | 多前驱汇合、多后继分叉、命名出口、统一撤销及 Group 层级切换可表达；记录适配问题并解决；无 GUI 构建仍可独立运行 |
 | S5.2 应用服务衔接（已完成） | WorkflowSession 同会话配置发布、对应资源提供方固定、方案切换与关闭协调 | 旧运行不受编辑影响，下一次启动使用新配置；改名/布局保留兼容状态；资源修改不串到旧运行；发布失败不静默执行旧稿 |
 | S5.3 方案与流程编辑（已完成） | 节点/流程、控制、绑定、基本 Group、复制粘贴、撤销重做、布局及文件操作 | 非相邻绑定和分支/汇合可操作；作用域错误可定位；新建、保存、另存、独立复制及重载保持约定的身份、引用和资源目标 |
-| S5.4 图像与 ROI | UInt8 灰度/BGR 查看、像素检查、Blob/ROI/掩膜叠加及首批 ROI 编辑 | 几何轮廓与有效像素对应，缩放/平移不改变业务坐标；旋转、继承、修正、排除与边界行为可对照固定夹具 |
+| S5.4 图像与 ROI（已完成） | UInt8 灰度/BGR 查看、像素检查、Blob/ROI/掩膜叠加及首批 ROI 编辑 | 几何轮廓与有效像素对应，缩放/平移保持业务坐标。旋转、继承、修正、排除与边界行为可对照固定夹具 |
 | S5.5 运行与调试 | 流程启动/取消、单节点一次性输入、隔离调试、历史与诊断 | 目标外节点不补跑，调试不污染活动状态；技术状态与 OK/NG 分开；逻辑终态与实际退出明确显示；慢显示和关闭面板不阻塞业务完成 |
 | S5.6 综合验收 | GUI/CLI 对照、交互生命周期回归、负载测量及证据交接 | 覆盖 §9.3 全部必验范围，记录 Qt/QtNodes 及工具版本、输入、结果和限制；必需项未通过时保持 S5 未完成 |
 
@@ -2081,7 +2114,7 @@ S5 不据此宣称完整托管导入已验证；后续扩大到该交付时，�
 
 | 待落实项 | 落点 |
 |---|---|
-| 图像与运行面板布局、控件交互及显示样式 | S5.4–S5.5 随功能实现细化，保持业务配置与显示设置分离 |
+| 运行面板布局、控件交互及显示样式 | S5.5 随运行调试功能细化 |
 | 合并刷新间隔和性能通过阈值 | 以 §9.3 负载实测，S5.6 验收前收敛；没有测量结果前不承诺响应时间或吞吐率 |
 
 ### 9.5 S5.1 接入与验收记录
@@ -2130,5 +2163,20 @@ GUI 运行控件由 S5.5 接入。本轮验收使用应用服务和文件方案�
 | Windows 部署 | 使用部署目录内的 Qt 和 OpenCV DLL 创建桌面编辑器窗口，正常关闭并返回 0 |
 
 剪贴板在当前编辑器的原流程及 Group 层内使用。普通保存保留编辑历史，另存和独立复制打开目标文档并开始新的历史。
-ROI 专用编辑和完整 GUI/CLI 结果对照分别由 S5.4、S5.6 验收。
+ROI 专用编辑见 §9.8，完整 GUI/CLI 结果对照由 S5.6 验收。
 构建与回归日志见 `out/build/s53-gui` 和 `out/build/s53-headless` 的 `build.log`、`ctest.log`，部署启动见 GUI 构建目录的 `launch.log`。
+
+### 9.8 S5.4 图像与 ROI 验收记录
+
+2026-11-16 使用 Windows x64 Release、MSVC 19.51、Qt 6.11.1、QtNodes 3.0.16 和 OpenCV 4.14.0-pre 验证。见[复现命令](#327-s54-release-构建与测试)。
+
+| 范围 | 实测结果 |
+|---|---|
+| 图像查看 | `visionpro_image_view_tests` 核对带行填充的裁剪 BGR、灰度和原图所有权。验证缩放、平移、适应窗口和拖绘保持局部 Pixel 坐标，像素检查同时报告裁剪根坐标 |
+| 真实几何和输出 | `visionpro_visual_tests` 对照 S4 固定方案，逐像素核对旋转区域的 7 个成员及继承、修正、排除后的 6 个成员。由同一轮实际输出验证 Blob 面积 6、质心 (5, 4)、3 × 3 包围框及结果叠加，拒绝混合不同运行的输出 |
+| 交互、掩膜和策略 | Qt 集成测试覆盖打开文件与方案图像、选中节点预览、保留符号 ROI 的修正编辑、直接 Mask 资源槽的联动及统一撤销。求值测试覆盖 Reject、Intersect、有效空域、掩膜阈值及目标尺寸校验 |
+| Release 回归 | GUI 与 OpenCV 配置 **113/113** 项 CTest 通过。无 GUI 和无 OpenCV 配置 **92/92** 项通过，CLI 可启动，DLL 导入检查无 Qt 或 OpenCV |
+| Windows 部署 | `VisionProGui` 安装组件使用部署目录内的 Qt 和 OpenCV DLL 创建原生窗口，正常退出并返回 0 |
+
+草稿预览使用当前图像和可静态解析的同作用域阈值继承链。运行态绑定和结果历史由 S5.5 的运行入口提供。S5.6 负责完整的 GUI/CLI 结果对照。
+构建和测试日志见 `out/build/s54-ninja` 与 `out/build/s54-headless` 的 `build.log`、`ctest.log`。部署启动见 GUI 构建目录的 `launch.log`。

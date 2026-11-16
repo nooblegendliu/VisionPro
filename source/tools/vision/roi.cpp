@@ -260,14 +260,14 @@ RegionPrimitive pin_mask(RegionPrimitive primitive, const std::optional<Resource
     return primitive;
 }
 
-Result<RegionDefinition> effective_region(const RegionDefinition& region, const ResolvedRegionInput* frozen,
+Result<RegionDefinition> effective_region(const RegionDefinition& region, const RegionDefinition* inherited_source,
     RegionPrimitive primary, const std::vector<Layer>& layers, const std::optional<ResourceReference>& mask)
 {
     auto effective = region;
-    if (frozen) {
+    if (inherited_source) {
         const auto& inherited = std::get<InheritedRegion>(region.source);
-        if (frozen->value.boundary_policy == RegionBoundaryPolicy::Reject) { effective.boundary_policy = RegionBoundaryPolicy::Reject; }
-        if (frozen->value.empty_policy == EmptyRegionPolicy::Error) {
+        if (inherited_source->boundary_policy == RegionBoundaryPolicy::Reject) { effective.boundary_policy = RegionBoundaryPolicy::Reject; }
+        if (inherited_source->empty_policy == EmptyRegionPolicy::Error) {
             const auto has_exclusion = std::ranges::any_of(region.exclusions, [](const RegionSource& exclusion) {
                 return !std::holds_alternative<EmptyRegionShape>(std::get<RegionPrimitive>(exclusion).geometry);
             });
@@ -277,7 +277,7 @@ Result<RegionDefinition> effective_region(const RegionDefinition& region, const 
             effective.empty_policy = EmptyRegionPolicy::Error;
         }
         primary.local_direction_radians = inherited.local_direction_radians;
-        const auto& native = std::get<RegionPrimitive>(frozen->value.source);
+        const auto& native = std::get<RegionPrimitive>(inherited_source->source);
         if (native.transform) {
             auto inverse = inverse_linear(*native.transform);
             if (auto* failure = std::get_if<Diagnostic>(&inverse)) { return std::move(*failure); }
@@ -295,11 +295,8 @@ Result<RegionDefinition> effective_region(const RegionDefinition& region, const 
     if (auto checked = validate_region_support(effective); auto* failure = std::get_if<Diagnostic>(&checked)) { return std::move(*failure); }
     return effective;
 }
-} // namespace
-
-core::Result<RoiEvaluation> evaluate_roi(const core::ImageHandle& image, const core::RegionDefinition& region,
-    const core::ToolValueTarget& binding, std::span<const core::ResolvedRegionInput> regions,
-    std::span<const core::InvocationResourceLease> resources)
+Result<std::monostate> validate_target(const ImageHandle& image, const RegionDefinition& region,
+    const ToolValueTarget& binding)
 {
     if (auto valid = validate_region_support(region); auto* failure = std::get_if<Diagnostic>(&valid)) {
         return locate(std::move(*failure), region, binding);
@@ -307,11 +304,15 @@ core::Result<RoiEvaluation> evaluate_roi(const core::ImageHandle& image, const c
     if (region.coordinate_frame != image.coordinate_frame() || region.unit != MeasurementUnit::Pixel) {
         return locate(error(ErrorCode::CoordinateMismatch, "ROI must map to the input image's current Pixel coordinate frame."), region, binding);
     }
-    auto selected = frozen_source(region, binding, regions);
-    if (auto* failure = std::get_if<Diagnostic>(&selected)) { return locate(std::move(*failure), region, binding, {field("source")}); }
-    const auto* frozen = std::get<const ResolvedRegionInput*>(selected);
-    const auto& base = frozen ? frozen->value : region;
-    if (frozen) {
+    return std::monostate{};
+}
+
+Result<RoiEvaluation> evaluate_layers(const ImageHandle& image, const RegionDefinition& region,
+    const ToolValueTarget& binding, const RegionDefinition* inherited_source,
+    std::optional<ToolInvocationIdentity> producer, std::span<const InvocationResourceLease> resources)
+{
+    const auto& base = inherited_source ? *inherited_source : region;
+    if (inherited_source) {
         if (auto valid = validate_region_support(base); auto* failure = std::get_if<Diagnostic>(&valid)) {
             return locate(std::move(*failure), base, binding);
         }
@@ -326,7 +327,7 @@ core::Result<RoiEvaluation> evaluate_roi(const core::ImageHandle& image, const c
     const auto& inclusion = std::get<PlacedShape>(prepared);
 
     std::vector<Layer> layers;
-    auto source = prepare_layer(base, binding, image, correction, frozen ? std::optional{frozen->producer} : std::nullopt,
+    auto source = prepare_layer(base, binding, image, correction, std::move(producer),
         primary.local_direction_radians, primary.transform, masks);
     if (auto* failure = std::get_if<Diagnostic>(&source)) { return std::move(*failure); }
     layers.push_back(std::get<Layer>(std::move(source)));
@@ -373,7 +374,7 @@ core::Result<RoiEvaluation> evaluate_roi(const core::ImageHandle& image, const c
     auto copied = image.copy_with_pixels(layout, pixels);
     if (auto* failure = std::get_if<Diagnostic>(&copied)) { return locate(std::move(*failure), region, binding); }
     const auto mask_resource = masks.reference();
-    auto effective = effective_region(region, frozen, std::move(primary), layers, mask_resource);
+    auto effective = effective_region(region, inherited_source, std::move(primary), layers, mask_resource);
     if (auto* failure = std::get_if<Diagnostic>(&effective)) { *failure = locate(std::move(*failure), region, binding); }
     const auto count = layers.back().trace.member_count;
     const auto direction = layers.back().trace.direction;
@@ -383,6 +384,45 @@ core::Result<RoiEvaluation> evaluate_roi(const core::ImageHandle& image, const c
     return RoiEvaluation{{std::get<ImageHandle>(std::move(copied)),
         {image.coordinate_frame(), layout.width, layout.height, {}, MaskSampling::None}, {}},
         count, direction, std::move(trace), mask_resource, std::move(effective)};
+}
+} // namespace
+
+core::Result<RoiEvaluation> evaluate_roi(const core::ImageHandle& image, const core::RegionDefinition& region,
+    const core::ToolValueTarget& binding, std::span<const core::ResolvedRegionInput> regions,
+    std::span<const core::InvocationResourceLease> resources)
+{
+    if (auto checked = validate_target(image, region, binding); auto* failure = std::get_if<Diagnostic>(&checked)) {
+        return std::move(*failure);
+    }
+    auto selected = frozen_source(region, binding, regions);
+    if (auto* failure = std::get_if<Diagnostic>(&selected)) { return locate(std::move(*failure), region, binding, {field("source")}); }
+    const auto* frozen = std::get<const ResolvedRegionInput*>(selected);
+    return evaluate_layers(image, region, binding, frozen ? &frozen->value : nullptr,
+        frozen ? std::optional{frozen->producer} : std::nullopt, resources);
+}
+
+core::Result<RoiEvaluation> evaluate_roi_preview(const core::ImageHandle& image, const core::RegionDefinition& region,
+    const core::ToolValueTarget& binding, const core::RegionDefinition* inherited_source,
+    std::span<const core::InvocationResourceLease> resources)
+{
+    if (auto checked = validate_target(image, region, binding); auto* failure = std::get_if<Diagnostic>(&checked)) {
+        return std::move(*failure);
+    }
+    const auto fail = [&](ErrorCode code, std::string message) {
+        return locate(error(code, std::move(message)), region, binding, {field("source")});
+    };
+    const auto* reference = std::get_if<InheritedRegion>(&region.source);
+    if (reference && !inherited_source) { return fail(ErrorCode::InputUnavailable, "Inherited ROI has no configured preview source."); }
+    if (!reference && inherited_source) { return fail(ErrorCode::InvalidValue, "Primitive ROI cannot use an inherited preview source."); }
+    if (reference) {
+        if (inherited_source->coordinate_frame != reference->coordinate_frame || inherited_source->unit != reference->unit) {
+            return fail(ErrorCode::CoordinateMismatch, "Preview source frame and unit must match the inherited reference before correction.");
+        }
+        if (!std::holds_alternative<RegionPrimitive>(inherited_source->source)) {
+            return fail(ErrorCode::UnsupportedRegion, "Preview source must have a self-contained primary shape.");
+        }
+    }
+    return evaluate_layers(image, region, binding, inherited_source, {}, resources);
 }
 
 } // namespace visionpro::tools::vision

@@ -1,9 +1,15 @@
 #include "editor_window.hpp"
 
 #include "control_scene.hpp"
+#include "image_panel.hpp"
+
+#ifdef VISIONPRO_WITH_OPENCV
+#include "visual_preview.hpp"
+#endif
 
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QDockWidget>
 #include <QInputDialog>
 #include <QLineEdit>
 #include <QStringList>
@@ -52,6 +58,51 @@ Result<SolutionDocument> current_baseline(std::optional<SolutionDocument> source
     if (expected) { return reload_saved_solution(directory, *expected, registry, roots); }
     return file_error(ErrorCode::SolutionSaveConflict, "The document has no confirmed save baseline. Open the saved solution again.");
 }
+
+#ifdef VISIONPRO_WITH_OPENCV
+struct PreviewSettings {
+    CoordinateSystemId frame;
+    bool grayscale;
+};
+
+std::optional<PreviewSettings> image_settings(QWidget* owner, const Solution& solution,
+    const std::optional<ImageHandle>& current)
+{
+    QStringList labels;
+    std::vector<CoordinateSystemId> frames;
+    int initial = 0;
+    for (const auto& frame : solution.coordinates) {
+        if (frame.kind != CoordinateKind::Image || frame.unit != MeasurementUnit::Pixel) { continue; }
+        if (current && current->coordinate_frame() == frame.id) { initial = labels.size(); }
+        labels.push_back(QString::fromStdString(std::string(frame.id.text())));
+        frames.push_back(frame.id);
+    }
+    if (frames.empty()) {
+        frames.push_back(std::get<CoordinateSystemId>(SchemaIdFactory::parse<CoordinateSystemId>("visionpro.image.pixels")));
+        labels.push_back(QStringLiteral("Local preview pixels"));
+    }
+    bool accepted = true;
+    const auto frame = labels.size() == 1 ? labels.front() : QInputDialog::getItem(owner, QStringLiteral("Open Image"),
+        QStringLiteral("Pixel frame"), labels, initial, false, &accepted);
+    if (!accepted) { return std::nullopt; }
+    const QStringList modes{QStringLiteral("Native UInt8 (gray or BGR)"), QStringLiteral("Grayscale UInt8")};
+    const auto mode = QInputDialog::getItem(owner, QStringLiteral("Open Image"), QStringLiteral("Image format"),
+        modes, 0, false, &accepted);
+    if (!accepted) { return std::nullopt; }
+    return PreviewSettings{frames[static_cast<std::size_t>(labels.indexOf(frame))], mode == modes.back()};
+}
+
+const RegionDefinition* configured_region(const Node& node, const ParameterDescriptor& target)
+{
+    const auto binding = std::ranges::find(node.bindings, BindingTarget{target.id}, &Binding::target);
+    const auto* value = target.default_value ? &*target.default_value : nullptr;
+    if (binding != node.bindings.end()) {
+        value = binding->sources.size() == 1 ? std::get_if<ConfigValue>(&binding->sources.front()) : nullptr;
+    }
+    if (value && value->type().kind() == TypeKind::Optional) { value = value->optional_value(); }
+    return value ? value->as_region2d() : nullptr;
+}
+#endif
 } // namespace
 
 struct EditorWindow::CommittedDocument {
@@ -308,6 +359,7 @@ void EditorWindow::choose_resource_root()
     else { existing->directory = file_path(folder); }
     if (!directory_) {
         roots_ = std::move(mappings);
+        images_->clear_overlays();
         show_status(QStringLiteral("Named root configured."));
         return;
     }
@@ -325,11 +377,132 @@ void EditorWindow::choose_resource_root()
         [this, mappings = std::move(mappings)](SolutionDocument source) {
             file_notices_ = file_issues(source);
             roots_ = std::move(mappings);
+            images_->clear_overlays();
             source_ = std::move(source);
             pending_baseline_.reset();
             render_diagnostics();
             show_status(QStringLiteral("Named root configured."));
         });
+}
+
+void EditorWindow::choose_preview_image()
+{
+#ifdef VISIONPRO_WITH_OPENCV
+    if (busy_) { return; }
+    const auto path = QFileDialog::getOpenFileName(this, QStringLiteral("Open Image"), {},
+        QStringLiteral("Images (*.bmp *.png *.jpg *.jpeg *.tif *.tiff *.pgm *.ppm);;All files (*)"));
+    if (path.isEmpty()) { return; }
+    if (const auto settings = image_settings(this, draft(), images_->frame())) {
+        open_preview_image(file_path(path), settings->frame, settings->grayscale);
+    }
+#endif
+}
+
+void EditorWindow::choose_preview_resource()
+{
+#ifdef VISIONPRO_WITH_OPENCV
+    if (busy_) { return; }
+    QStringList labels;
+    std::vector<ResourceId> ids;
+    for (const auto& resource : draft().resources) {
+        if (resource.kind != ResourceKind::Image) { continue; }
+        labels.push_back(QStringLiteral("%1  [%2]").arg(QString::fromStdString(resource.name),
+            QString::fromStdString(resource.id.to_string())));
+        ids.push_back(resource.id);
+    }
+    if (ids.empty()) { return; }
+    bool accepted = false;
+    const auto label = QInputDialog::getItem(this, QStringLiteral("Open Image Resource"), QStringLiteral("Image resource"),
+        labels, 0, false, &accepted);
+    if (!accepted) { return; }
+    if (const auto settings = image_settings(this, draft(), images_->frame())) {
+        open_preview_resource({ids[static_cast<std::size_t>(labels.indexOf(label))], ResourceKind::Image, {}},
+            settings->frame, settings->grayscale);
+    }
+#endif
+}
+
+void EditorWindow::open_preview_image(const fs::path& file, CoordinateSystemId frame, bool grayscale)
+{
+#ifdef VISIONPRO_WITH_OPENCV
+    start_file_task(QStringLiteral("Opening image…"),
+        [file, frame = std::move(frame), grayscale] { return app::read_preview_image(file, frame, grayscale); },
+        [this](ImageHandle image) { accept_preview_frame(image); });
+#else
+    Q_UNUSED(file);
+    Q_UNUSED(frame);
+    Q_UNUSED(grayscale);
+#endif
+}
+
+void EditorWindow::open_preview_resource(ResourceReference resource, CoordinateSystemId frame, bool grayscale)
+{
+#ifdef VISIONPRO_WITH_OPENCV
+    start_file_task(QStringLiteral("Opening image resource…"),
+        [solution = draft(), resource, frame = std::move(frame), grayscale, directory = directory_, roots = roots_] {
+            return app::read_preview_resource(solution, resource, frame, grayscale, directory, roots);
+        },
+        [this](ImageHandle image) { accept_preview_frame(image); });
+#else
+    Q_UNUSED(resource);
+    Q_UNUSED(frame);
+    Q_UNUSED(grayscale);
+#endif
+}
+
+void EditorWindow::accept_preview_frame(const ImageHandle& image)
+{
+    if (const auto shown = images_->set_frame(image); const auto* failure = std::get_if<Diagnostic>(&shown)) {
+        report_error(QString::fromStdString(failure->message));
+        return;
+    }
+    images_dock_->show();
+    images_dock_->raise();
+    show_status(QStringLiteral("Image ready."));
+}
+
+void EditorWindow::preview_selected_roi()
+{
+#ifdef VISIONPRO_WITH_OPENCV
+    if (busy_ || !images_->frame()) { return; }
+    const auto selected = scene_->selected_nodes();
+    const auto id = model_->workflow_id();
+    const auto& solution = draft();
+    const auto* flow = id ? find_workflow(solution, *id) : nullptr;
+    const auto* node = flow && selected.size() == 1 ? find_node(*flow, selected.front()) : nullptr;
+    const auto* tool = node ? std::get_if<ToolConfiguration>(&node->configuration) : nullptr;
+    const auto* descriptor = tool ? registry_.find_descriptor(tool->type) : nullptr;
+    images_->clear_overlays();
+    if (!descriptor || !descriptor->region_capabilities || descriptor->config_version != tool->config_version) {
+        report_error(QStringLiteral("Select a vision tool with ROI settings."));
+        return;
+    }
+    const auto parameter = std::ranges::find_if(descriptor->parameters,
+        [](const ParameterDescriptor& target) { return target.id.text() == "roi"; });
+    const auto* region = parameter != descriptor->parameters.end() ? configured_region(*node, *parameter) : nullptr;
+    if (!region) {
+        report_error(QStringLiteral("The selected ROI has no configured region available for preview."));
+        return;
+    }
+    start_file_task(QStringLiteral("Evaluating ROI…"),
+        [image = *images_->frame(), solution, flow = *id, node = node->id, target = parameter->id,
+            region = *region, directory = directory_, roots = roots_] {
+            return app::preview_roi(image, solution, flow, node, target, region, directory, roots);
+        },
+        [this, id = *id, selected](app::RoiPreview preview) {
+            if (model_->workflow_id() != id || scene_->selected_nodes() != selected) { return; }
+            const auto shown = images_->set_overlays(preview.effective_region, preview.mask);
+            if (const auto* failure = std::get_if<Diagnostic>(&shown)) {
+                report_error(QString::fromStdString(failure->message));
+                return;
+            }
+            images_dock_->show();
+            images_dock_->raise();
+            auto summary = QStringLiteral("ROI contains %1 pixels.").arg(preview.member_count);
+            if (preview.outline_issue) { summary += QStringLiteral(" %1").arg(QString::fromStdString(preview.outline_issue->message)); }
+            show_status(summary);
+        });
+#endif
 }
 
 } // namespace visionpro::ui

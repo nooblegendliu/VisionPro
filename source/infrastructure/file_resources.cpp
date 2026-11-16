@@ -30,18 +30,20 @@ Diagnostic error(ErrorCode code, std::string message)
 } // namespace
 
 namespace detail {
-Result<ResourcePaths> resource_paths(const fs::path& directory, std::span<const NamedResourceRoot> roots,
+Result<ResourcePaths> resource_paths(const std::optional<fs::path>& directory, std::span<const NamedResourceRoot> roots,
     bool require_existing_directory)
 {
-    if (!directory.is_absolute()) {
-        return error(ErrorCode::InvalidPath, "Solution directory must be an explicit absolute path.");
+    ResourcePaths paths;
+    if (directory) {
+        if (!directory->is_absolute()) {
+            return error(ErrorCode::InvalidPath, "Solution directory must be an explicit absolute path.");
+        }
+        std::error_code io;
+        paths.directory = require_existing_directory ? fs::canonical(*directory, io) : fs::weakly_canonical(*directory, io);
+        if (io || (require_existing_directory && (!fs::is_directory(paths.directory, io) || io))) {
+            return error(ErrorCode::InvalidPath, "Solution directory must name an existing directory.");
+        }
     }
-    std::error_code io;
-    auto base = require_existing_directory ? fs::canonical(directory, io) : fs::weakly_canonical(directory, io);
-    if (io || (require_existing_directory && (!fs::is_directory(base, io) || io))) {
-        return error(ErrorCode::InvalidPath, "Solution directory must name an existing directory.");
-    }
-    ResourcePaths paths{std::move(base), {}};
     for (const auto& root : roots) {
         if (!root.directory.is_absolute()) {
             return error(ErrorCode::InvalidPath, "Named resource roots must be explicit absolute paths.");
@@ -68,7 +70,10 @@ Result<fs::path> absolute_path(const ResourcePath& declaration, const ResourcePa
         return error(ErrorCode::InvalidPath, "Absolute resource path requires an explicit filesystem root.");
     }
     if (path.has_root_path()) { return error(ErrorCode::InvalidPath, "Relative resource path has a filesystem root."); }
-    if (declaration.base == PathBase::SolutionDirectory) { return paths.directory / path; }
+    if (declaration.base == PathBase::SolutionDirectory) {
+        if (paths.directory.empty()) { return error(ErrorCode::InvalidPath, "This resource requires an explicit solution directory."); }
+        return paths.directory / path;
+    }
     const auto root = paths.roots.find(*declaration.named_root);
     if (root == paths.roots.end()) {
         return error(ErrorCode::ResourceNotFound, "Named resource root is not configured: "
@@ -666,6 +671,50 @@ FileResourceLease::FileResourceLease(core::ResourceReference reference, fs::path
 }
 
 FileResourceProvider::FileResourceProvider(std::shared_ptr<const Storage> storage) : storage_(std::move(storage)) {}
+
+Result<std::shared_ptr<const std::vector<std::byte>>> read_file_bytes(const fs::path& absolute_file)
+{
+    try {
+        const auto spelling = absolute_file.u8string();
+        const ResourcePath path{PathBase::Absolute, std::string(spelling.begin(), spelling.end()), {}};
+        auto contents = read_file({path, {}, {}, false, false}, {});
+        if (auto* failure = std::get_if<Diagnostic>(&contents)) { return std::move(*failure); }
+        return std::get<FileContents>(std::move(contents)).bytes;
+    } catch (const fs::filesystem_error&) {
+        return error(ErrorCode::InvalidPath, "Could not interpret the input file path.");
+    } catch (...) {
+        return error(ErrorCode::ExecutionBoundaryFailure, "Could not read the input file.");
+    }
+}
+
+Result<std::shared_ptr<const FileResourceLease>> FileResourceProvider::read_resource(const Solution& solution,
+    const ResourceReference& reference, const std::optional<fs::path>& solution_directory,
+    std::span<const NamedResourceRoot> roots)
+{
+    const auto fail = [&](Diagnostic diagnostic) -> Result<std::shared_ptr<const FileResourceLease>> {
+        diagnostic.location.solution = solution.id;
+        diagnostic.location.resource = reference.id;
+        return diagnostic;
+    };
+    try {
+        if (auto checked = validate_resource_reference(reference, solution.resources);
+            auto* failure = std::get_if<Diagnostic>(&checked)) { return fail(std::move(*failure)); }
+        const auto found = std::ranges::find(solution.resources, reference.id, &ResourceDefinition::id);
+        const auto file = file_declaration(*found);
+        if (!file) { return fail(error(ErrorCode::MissingCapability, "Resource does not identify a file.")); }
+        auto paths = resource_paths(solution_directory, roots);
+        if (auto* failure = std::get_if<Diagnostic>(&paths)) { return fail(std::move(*failure)); }
+        auto contents = read_file(*file, std::get<ResourcePaths>(paths));
+        if (auto* failure = std::get_if<Diagnostic>(&contents)) { return fail(std::move(*failure)); }
+        auto captured = std::get<FileContents>(std::move(contents));
+        return std::shared_ptr<const FileResourceLease>(new FileResourceLease(
+            {reference.id, reference.kind, file->revision}, std::move(captured.path), std::move(captured.bytes), file->managed));
+    } catch (const fs::filesystem_error&) {
+        return fail(error(ErrorCode::InvalidPath, "Could not interpret the file resource path."));
+    } catch (...) {
+        return fail(error(ErrorCode::ExecutionBoundaryFailure, "Could not read the file resource."));
+    }
+}
 
 Result<std::shared_ptr<FileResourceProvider>> FileResourceProvider::create(const Solution& solution,
     const fs::path& solution_directory, std::span<const NamedResourceRoot> roots)

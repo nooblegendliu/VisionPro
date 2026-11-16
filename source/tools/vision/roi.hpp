@@ -30,4 +30,10 @@ struct RoiEvaluation {
     std::span<const core::ResolvedRegionInput> regions = {},
     std::span<const core::InvocationResourceLease> resources = {});
 
+// Evaluate draft geometry with a separately resolved, self-contained configuration source.
+[[nodiscard]] core::Result<RoiEvaluation> evaluate_roi_preview(const core::ImageHandle& image,
+    const core::RegionDefinition& region, const core::ToolValueTarget& binding,
+    const core::RegionDefinition* inherited_source,
+    std::span<const core::InvocationResourceLease> resources = {});
+
 } // namespace visionpro::tools::vision

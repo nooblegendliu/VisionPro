@@ -1,5 +1,6 @@
 #include "editor_inspector.hpp"
 #include "control_scene.hpp"
+#include "roi_editor.hpp"
 
 #include <visionpro/core/id_factory.hpp>
 #include <visionpro/core/schema_id_factory.hpp>
@@ -517,27 +518,14 @@ std::optional<ConfigValue> point_constant(QWidget* owner, const Solution& soluti
     return constant_result(owner, ConfigValue::point2d({selected.id, selected.unit, x_value, y_value}));
 }
 
-std::optional<ConfigValue> region_constant(QWidget* owner, const Solution& solution,
-    const ValueSemantics& semantics, const ConfigValue* prior)
+std::optional<ConfigValue> region_constant(QWidget* owner, const RoiEditContext& context, const ConfigValue* prior)
 {
-    if (prior && prior->as_region2d()) {
-        warn(owner, QStringLiteral("This editor supports creating a full-image region."));
-        return std::nullopt;
-    }
-    auto frame = choose(owner, QStringLiteral("Full-image ROI"), QStringLiteral("Frame"), frame_choices(solution, semantics));
-    if (!frame) { return std::nullopt; }
-    auto created = IdFactory::generate<RegionId>();
-    if (const auto* failure = std::get_if<Diagnostic>(&created)) {
-        warn(owner, qtext(failure->message));
-        return std::nullopt;
-    }
-    const RegionPrimitive primitive{frame->id, frame->unit, FullImageRegion{}, 0.0, {}};
-    return constant_result(owner, ConfigValue::region2d({std::get<RegionId>(created), frame->id, frame->unit,
-        primitive, {}, RegionBoundaryPolicy::Reject, {}, EmptyRegionPolicy::Error}));
+    auto region = edit_roi(owner, context, prior ? prior->as_region2d() : nullptr);
+    return region ? constant_result(owner, ConfigValue::region2d(*region)) : std::nullopt;
 }
 
-std::optional<ConfigValue> edit_constant(QWidget* owner, const Solution& solution, const DataType& type,
-    const ValueSemantics& semantics, const ConfigValue* prior)
+std::optional<ConfigValue> edit_constant(QWidget* owner, const RoiEditContext& context, const DataType& type,
+    const ConfigValue* prior)
 {
     if (prior && prior->type() != type) { prior = nullptr; }
     const auto initial = prior ? constant_text(*prior) : QString{};
@@ -584,11 +572,11 @@ std::optional<ConfigValue> edit_constant(QWidget* owner, const Solution& solutio
             inner ? 1 : 0);
         if (!present) { return std::nullopt; }
         if (!*present) { return ConfigValue::none(*type.element_type()); }
-        auto value = edit_constant(owner, solution, *type.element_type(), semantics, inner);
+        auto value = edit_constant(owner, context, *type.element_type(), inner);
         return value ? std::optional<ConfigValue>{ConfigValue::some(*value)} : std::nullopt;
     }
-    case TypeKind::Point2D: return point_constant(owner, solution, semantics, prior);
-    case TypeKind::Region2D: return region_constant(owner, solution, semantics, prior);
+    case TypeKind::Point2D: return point_constant(owner, context.solution, context.semantics, prior);
+    case TypeKind::Region2D: return region_constant(owner, context, prior);
     default:
         warn(owner, QStringLiteral("This type has no constant editor. Choose a typed source or keep the existing value."));
         return std::nullopt;
@@ -659,9 +647,8 @@ Choices<TypedSource> binding_choices(const Solution& solution, const Workflow& f
 }
 
 template<class Target>
-std::optional<BindingSource> edit_source(QWidget* owner, const Solution& solution, const Workflow& flow,
-    const NodeId& node, const ToolRegistry& registry, const Target& target, ConversionKind conversion,
-    const BindingSource* current)
+std::optional<BindingSource> edit_source(QWidget* owner, const RoiEditContext& context, const Target& target,
+    ConversionKind conversion, const BindingSource* current)
 {
     Choices<BindingSourceKind> kinds;
     std::size_t previous_kind = 0;
@@ -674,7 +661,8 @@ std::optional<BindingSource> edit_source(QWidget* owner, const Solution& solutio
         : choose(owner, QStringLiteral("Binding source"), QStringLiteral("Source kind"), kinds, previous_kind);
     if (!kind) { return std::nullopt; }
     if (*kind != BindingSourceKind::Constant) {
-        auto source = choose_reference(owner, binding_choices(solution, flow, node, registry, *kind, current), current,
+        auto source = choose_reference(owner, binding_choices(context.solution, *context.workflow, context.node->id,
+            context.registry, *kind, current), current,
             [&](BindingSourceKind selected, const DataType& type, const ValueSemantics& semantics) -> Check {
                 const auto checked = validate_binding(target, selected, type, conversion);
                 if (const auto* failure = std::get_if<Diagnostic>(&checked)) { return *failure; }
@@ -705,7 +693,7 @@ std::optional<BindingSource> edit_source(QWidget* owner, const Solution& solutio
         auto value = choose(owner, QStringLiteral("Constant"), QStringLiteral("Value"), allowed, index);
         return value ? std::optional<BindingSource>{std::move(*value)} : std::nullopt;
     }
-    auto value = edit_constant(owner, solution, type, target.semantics, initial);
+    auto value = edit_constant(owner, context, type, initial);
     return value ? std::optional<BindingSource>{std::move(*value)} : std::nullopt;
 }
 
@@ -743,8 +731,8 @@ struct BindingEdit {
 };
 
 template<class Target>
-std::optional<BindingEdit> edit_binding(QWidget* owner, const Solution& solution, const Workflow& flow,
-    const NodeId& node, const ToolRegistry& registry, const Target& target, const Binding* existing)
+std::optional<BindingEdit> edit_binding(QWidget* owner, const RoiEditContext& context, const Target& target,
+    const Binding* existing)
 {
     QDialog dialog(owner);
     dialog.setWindowTitle(QStringLiteral("Edit binding • %1").arg(qtext(target.display_name)));
@@ -773,7 +761,7 @@ std::optional<BindingEdit> edit_binding(QWidget* owner, const Solution& solution
     const auto refresh = [&](int index) {
         sources->clear();
         for (const auto& source : values) {
-            sources->addItem(QStringLiteral("%1 • %2").arg(kind_text(source_kind(source)), source_text(solution, source)));
+            sources->addItem(QStringLiteral("%1 • %2").arg(kind_text(source_kind(source)), source_text(context.solution, source)));
         }
         if (!values.empty()) { sources->setCurrentRow(std::clamp(index, 0, sources->count() - 1)); }
     };
@@ -782,7 +770,7 @@ std::optional<BindingEdit> edit_binding(QWidget* owner, const Solution& solution
     auto* edits = new QHBoxLayout;
     const auto update_source = [&](int index) {
         const auto* original = index >= 0 ? &values[static_cast<std::size_t>(index)] : nullptr;
-        auto edited = edit_source(&dialog, solution, flow, node, registry, target, mode(), original);
+        auto edited = edit_source(&dialog, context, target, mode(), original);
         if (!edited) { return; }
         if (index < 0) {
             index = static_cast<int>(values.size());
@@ -842,11 +830,34 @@ std::optional<BindingEdit> edit_binding(QWidget* owner, const Solution& solution
     return result;
 }
 
+template<class Target>
+std::optional<BindingEdit> edit_region_binding(QWidget* owner, const RoiEditContext& context, const Target& target,
+    const Binding* existing)
+{
+    const auto conversion = existing ? existing->conversion : ConversionKind::Exact;
+    const auto* initial = existing ? std::get_if<ConfigValue>(&existing->sources.front())
+        : (target.default_value ? &*target.default_value : nullptr);
+    const bool optional = target.type.kind() == TypeKind::Optional && conversion == ConversionKind::Exact;
+    auto value = region_constant(owner, context, initial && optional ? initial->optional_value() : initial);
+    if (!value) { return std::nullopt; }
+    if (optional) { value = ConfigValue::some(*value); }
+    Binding binding{target.id, {std::move(*value)}, target.binding.cardinality, conversion,
+        existing ? existing->availability : AvailabilityPolicy{}};
+    for (const auto checked : {validate_binding_shape(binding), check_constants(target, binding)}) {
+        if (const auto* failure = std::get_if<Diagnostic>(&checked)) {
+            warn(owner, qtext(failure->message));
+            return std::nullopt;
+        }
+    }
+    return BindingEdit{std::move(binding)};
+}
+
 struct InspectorContext {
     ControlGraphModel& model;
     ControlScene& scene;
     const ToolRegistry& registry;
     QWidget* owner;
+    const std::optional<ImageHandle>& preview_image;
 
     template<class Change>
     bool edit_flow(const WorkflowId& id, const QString& label, const Change& change) const
@@ -1007,8 +1018,58 @@ void node_properties(QVBoxLayout& panel, const InspectorContext& context, const 
     form->addRow(QStringLiteral("Parent"), ownership);
 }
 
+void write_resource_binding(Node& node, const ResourceRequirement& slot, const std::optional<ResourceReference>& resource)
+{
+    const auto current = std::ranges::find(node.resources, slot.slot, &NodeResourceBinding::slot);
+    if (current != node.resources.end()) {
+        if (resource) { current->resource = *resource; }
+        else { node.resources.erase(current); }
+    } else if (resource) { node.resources.push_back({slot.slot, *resource}); }
+}
+
+Check bind_roi_mask(const Solution& solution, Node& node, const ResourceRequirement& slot, const ConfigValue& value)
+{
+    const auto* concrete = value.type().kind() == TypeKind::Optional ? value.optional_value() : &value;
+    if (!concrete) {
+        write_resource_binding(node, slot, {});
+        return std::monostate{};
+    }
+    const auto* region = concrete->as_region2d();
+    if (!region) { return std::monostate{}; }
+    std::optional<ResourceReference> resource;
+    bool inherited = false;
+    const auto collect = [&](const RegionSource& source) -> Check {
+        const auto* primitive = std::get_if<RegionPrimitive>(&source);
+        if (!primitive) {
+            inherited = true;
+            return std::monostate{};
+        }
+        const auto* config = std::get_if<MaskConfig>(&primitive->geometry);
+        if (!config) { return std::monostate{}; }
+        const auto& reference = config->resource;
+        if (resource && (resource->id != reference.id
+                || (resource->revision && reference.revision && resource->revision != reference.revision))) {
+            return error(ErrorCode::InvalidResource, "Use one mask resource and revision for the ROI and its exclusions.");
+        }
+        if (!resource || reference.revision) { resource = reference; }
+        return std::monostate{};
+    };
+    if (auto checked = collect(region->source); std::holds_alternative<Diagnostic>(checked)) { return checked; }
+    for (const auto& exclusion : region->exclusions) {
+        if (auto checked = collect(exclusion); std::holds_alternative<Diagnostic>(checked)) { return checked; }
+    }
+    if (resource) {
+        if (auto checked = validate_resource_reference(*resource, solution.resources); std::holds_alternative<Diagnostic>(checked)) {
+            return checked;
+        }
+    }
+    if (resource || !inherited) { write_resource_binding(node, slot, resource); }
+    return std::monostate{};
+}
+
 template<class Target>
-void open_binding(const InspectorContext& context, const WorkflowId& id, const NodeId& selected, const Target& target)
+void open_binding(const InspectorContext& context, const WorkflowId& id, const NodeId& selected, const Target& target,
+    bool region_only = false)
 {
     const auto& solution = context.model.draft();
     const auto* flow = find_workflow(solution, id);
@@ -1017,7 +1078,13 @@ void open_binding(const InspectorContext& context, const WorkflowId& id, const N
     const auto binding_id = BindingTarget{target.id};
     const auto found = std::ranges::find(node->bindings, binding_id, &Binding::target);
     const auto* existing = found == node->bindings.end() ? nullptr : &*found;
-    const auto edited = edit_binding(context.owner, solution, *flow, selected, context.registry, target, existing);
+    const auto* tool = metadata(context.registry, *node);
+    const auto preview_image = context.preview_image;
+    const RoiEditContext roi{solution, context.registry, flow, node,
+        tool && tool->region_capabilities ? &*tool->region_capabilities : nullptr, target.semantics,
+        preview_image ? &*preview_image : nullptr};
+    const auto edited = region_only ? edit_region_binding(context.owner, roi, target, existing)
+        : edit_binding(context.owner, roi, target, existing);
     if (!edited || (!existing && !edited->binding)) { return; }
     if (existing && edited->binding) {
         const auto& next = *edited->binding;
@@ -1026,7 +1093,24 @@ void open_binding(const InspectorContext& context, const WorkflowId& id, const N
             return;
         }
     }
-    context.edit_node(id, selected, QStringLiteral("Change binding"), [&](Solution&, Workflow&, Node& draft) -> Check {
+    context.edit_node(id, selected, QStringLiteral("Change binding"), [&]([[maybe_unused]] Solution& candidate, Workflow&, Node& draft) -> Check {
+        if constexpr (std::is_same_v<Target, ParameterDescriptor>) {
+            if (tool && tool->region_capabilities && target.id.text() == "roi") {
+                const auto slot = std::ranges::find_if(tool->resources, [](const ResourceRequirement& requirement) {
+                    return requirement.kind == ResourceKind::Mask && requirement.slot.text() == "mask";
+                });
+                const auto* value = target.default_value ? &*target.default_value : nullptr;
+                if (edited->binding) {
+                    const auto& sources = edited->binding->sources;
+                    value = sources.size() == 1 ? std::get_if<ConfigValue>(&sources.front()) : nullptr;
+                }
+                if (value && slot != tool->resources.end()) {
+                    if (auto checked = bind_roi_mask(candidate, draft, *slot, *value); std::holds_alternative<Diagnostic>(checked)) {
+                        return checked;
+                    }
+                }
+            }
+        }
         const auto current = std::ranges::find(draft.bindings, binding_id, &Binding::target);
         if (current != draft.bindings.end()) {
             if (edited->binding) { *current = *edited->binding; }
@@ -1057,7 +1141,24 @@ void binding_row(QFormLayout& form, QWidget* owner, const InspectorContext& cont
     });
     edit->setProperty("bindingTarget", id_text(target.id));
     edit->setToolTip(QStringLiteral("%1 • %2\n%3").arg(name, type_text(target.type), summary));
-    if (output && output->workflow == flow.id) {
+    const bool constant_roi = target.binding.cardinality == BindingCardinality::SingleSource
+        && (target.type.kind() == TypeKind::Region2D
+            || (target.type.kind() == TypeKind::Optional && target.type.element_type()->kind() == TypeKind::Region2D))
+        && std::ranges::find(target.binding.allowed_sources, BindingSourceKind::Constant) != target.binding.allowed_sources.end()
+        && std::ranges::find(target.binding.allowed_conversions, ConversionKind::Exact) != target.binding.allowed_conversions.end()
+        && (binding == node.bindings.end() || (binding->sources.size() == 1
+            && std::holds_alternative<ConfigValue>(binding->sources.front())
+            && (binding->conversion == ConversionKind::Exact || binding->conversion == ConversionKind::WrapOptional)));
+    if (constant_roi) {
+        auto* row = new QHBoxLayout;
+        row->addWidget(edit, 1);
+        auto* region = action(owner, QStringLiteral("Edit ROI…"), "editRegion", [context, id = flow.id, node_id = node.id, target] {
+            open_binding(context, id, node_id, target, true);
+        });
+        region->setProperty("bindingTarget", id_text(target.id));
+        row->addWidget(region);
+        form.addRow(name, row);
+    } else if (output && output->workflow == flow.id) {
         auto* row = new QHBoxLayout;
         row->addWidget(edit, 1);
         auto* locate = action(owner, QStringLiteral("↗"), "locateBindingSource", [context, source = output->node] {
@@ -1073,15 +1174,6 @@ bool file_resource_kind(ResourceKind kind)
 {
     return kind == ResourceKind::Image || kind == ResourceKind::Mask || kind == ResourceKind::Template
         || kind == ResourceKind::Calibration || kind == ResourceKind::Binary;
-}
-
-void write_resource_binding(Node& node, const ResourceRequirement& slot, const std::optional<ResourceReference>& resource)
-{
-    const auto current = std::ranges::find(node.resources, slot.slot, &NodeResourceBinding::slot);
-    if (current != node.resources.end()) {
-        if (resource) { current->resource = *resource; }
-        else { node.resources.erase(current); }
-    } else if (resource) { node.resources.push_back({slot.slot, *resource}); }
 }
 
 void select_resource(const InspectorContext& context, const WorkflowId& id, const NodeId& selected,
@@ -1544,6 +1636,11 @@ EditorInspector::EditorInspector(ControlGraphModel& model, ControlScene& scene, 
     refresh();
 }
 
+void EditorInspector::set_preview_image(std::optional<ImageHandle> image)
+{
+    preview_image_ = std::move(image);
+}
+
 void EditorInspector::queue_refresh()
 {
     if (refresh_pending_) { return; }
@@ -1558,7 +1655,7 @@ void EditorInspector::refresh()
 {
     auto content = std::make_unique<QWidget>();
     auto* layout = new QVBoxLayout(content.get());
-    const InspectorContext context{model_, scene_, registry_, this};
+    const InspectorContext context{model_, scene_, registry_, this, preview_image_};
     const auto flow_id = model_.workflow_id();
     const auto* flow = flow_id ? find_workflow(model_.draft(), *flow_id) : nullptr;
     if (flow) {

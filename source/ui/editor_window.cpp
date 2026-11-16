@@ -2,6 +2,7 @@
 
 #include "control_scene.hpp"
 #include "editor_inspector.hpp"
+#include "image_panel.hpp"
 
 #include <QtNodes/GraphicsView>
 #include <QtNodes/internal/NodeGraphicsObject.hpp>
@@ -170,6 +171,13 @@ void EditorWindow::create_actions()
     for (auto* dock : findChildren<QDockWidget*>(QString(), Qt::FindDirectChildrenOnly)) {
         view.addAction(dock->toggleViewAction());
     }
+    view.addSeparator();
+    preview_image_ = action(view, QStringLiteral("Open Image…"), "openPreviewImage", [this] { choose_preview_image(); });
+    preview_resource_ = action(view, QStringLiteral("Open Image Resource…"), "openPreviewResource",
+        [this] { choose_preview_resource(); });
+    preview_roi_ = action(view, QStringLiteral("Preview Selected ROI"), "previewSelectedRoi",
+        [this] { preview_selected_roi(); });
+    view.addSeparator();
     remove_invalid_link_ = action(view, QStringLiteral("Remove Diagnosed Control Link"), "removeDiagnosedLink",
         [this] { remove_diagnosed_link(); });
 
@@ -217,6 +225,18 @@ void EditorWindow::create_docks()
     inspector_dock_->setObjectName(QStringLiteral("inspectorDock"));
     addDockWidget(Qt::RightDockWidgetArea, inspector_dock_);
 
+    images_dock_ = new QDockWidget(QStringLiteral("Images and ROI"), this);
+    images_dock_->setObjectName(QStringLiteral("imagesDock"));
+    images_ = new ImagePanel(images_dock_);
+    images_->setObjectName(QStringLiteral("imagePanel"));
+    images_dock_->setWidget(images_);
+    addDockWidget(Qt::BottomDockWidgetArea, images_dock_);
+    images_dock_->hide();
+    connect(images_, &ImagePanel::frame_changed, this, [this] {
+        if (inspector_) { inspector_->set_preview_image(images_->frame()); }
+        refresh_actions();
+    });
+
     diagnostics_dock_ = new QDockWidget(QStringLiteral("Diagnostics"), this);
     diagnostics_dock_->setObjectName(QStringLiteral("diagnosticsDock"));
     diagnostics_ = new QListWidget(diagnostics_dock_);
@@ -255,6 +275,7 @@ void EditorWindow::replace_canvas(Solution replacement, bool editable)
     setCentralWidget(view_);
     inspector_dock_->setWidget(inspector_);
     inspector_->setEnabled(editable);
+    images_->clear_frame();
     shown_workflow_.reset();
     shown_scope_.reset();
 
@@ -264,8 +285,14 @@ void EditorWindow::replace_canvas(Solution replacement, bool editable)
         const QPointer<ControlScene> active{scene_.get()};
         QTimer::singleShot(0, this, [active, node] { if (active) { active->open_group(node); } });
     });
-    connect(model_.get(), &QtNodes::AbstractGraphModel::modelReset, this, [this] { refresh_canvas(); });
-    connect(scene_.get(), &QGraphicsScene::selectionChanged, this, [this] { refresh_actions(); });
+    connect(model_.get(), &QtNodes::AbstractGraphModel::modelReset, this, [this] {
+        images_->clear_overlays();
+        refresh_canvas();
+    });
+    connect(scene_.get(), &QGraphicsScene::selectionChanged, this, [this] {
+        images_->clear_overlays();
+        refresh_actions();
+    });
     connect(&scene_->undoStack(), &QUndoStack::indexChanged, this, [this] { queue_diagnostics(); refresh_actions(); });
     connect(&scene_->undoStack(), &QUndoStack::cleanChanged, this, [this] { refresh_actions(); });
     issues_.clear();
@@ -312,7 +339,8 @@ void EditorWindow::refresh_actions()
     if (!scene_) { return; }
     const bool editable = !busy_ && writable();
     const bool active = model_->workflow_id().has_value();
-    const bool has_nodes = !scene_->selected_nodes().empty();
+    const auto selected = scene_->selected_nodes();
+    const bool has_nodes = !selected.empty();
     const auto& history = scene_->undoStack();
     const auto selection = diagnostics_->currentItem();
     const int issue = selection ? selection->data(Qt::UserRole).toInt() : -1;
@@ -326,6 +354,16 @@ void EditorWindow::refresh_actions()
     independent_copy_->setEnabled(editable);
     resource_copy_->setEnabled(editable && source_.has_value() && has_resource);
     resource_root_->setEnabled(!busy_);
+#ifdef VISIONPRO_WITH_OPENCV
+    preview_image_->setEnabled(!busy_);
+    preview_resource_->setEnabled(!busy_ && std::ranges::any_of(draft().resources,
+        [](const ResourceDefinition& resource) { return resource.kind == ResourceKind::Image; }));
+    preview_roi_->setEnabled(!busy_ && images_->frame().has_value() && selected.size() == 1);
+#else
+    preview_image_->setEnabled(false);
+    preview_resource_->setEnabled(false);
+    preview_roi_->setEnabled(false);
+#endif
     rename_->setEnabled(editable);
     new_workflow_->setEnabled(editable);
     remove_workflow_->setEnabled(editable && active);

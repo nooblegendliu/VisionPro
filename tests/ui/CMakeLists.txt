@@ -21,12 +21,30 @@ target_link_libraries(visionpro_inspector_tests PRIVATE
     visionpro_ui visionpro_simulation_tools visionpro_build_options Qt6::Test
 )
 add_test(NAME visionpro_inspector_tests COMMAND visionpro_inspector_tests -platform offscreen)
-set_tests_properties(visionpro_canvas_tests visionpro_editor_tests visionpro_inspector_tests PROPERTIES
+
+add_executable(visionpro_image_view_tests image_view_tests.cpp)
+set_target_properties(visionpro_image_view_tests PROPERTIES AUTOMOC ON)
+target_link_libraries(visionpro_image_view_tests PRIVATE visionpro_ui visionpro_build_options Qt6::Test)
+add_test(NAME visionpro_image_view_tests COMMAND visionpro_image_view_tests -platform offscreen)
+
+set(ui_tests visionpro_canvas_tests visionpro_editor_tests visionpro_inspector_tests visionpro_image_view_tests)
+if(VISIONPRO_WITH_OPENCV)
+    add_executable(visionpro_visual_tests visual_tests.cpp)
+    set_target_properties(visionpro_visual_tests PROPERTIES AUTOMOC ON)
+    target_compile_definitions(visionpro_visual_tests PRIVATE "VISIONPRO_S4_DIRECTORY=\"${PROJECT_SOURCE_DIR}/samples/s4\"")
+    target_link_libraries(visionpro_visual_tests PRIVATE
+        visionpro_ui visionpro_app_tools visionpro_visual_preview visionpro_build_options Qt6::Test
+    )
+    add_test(NAME visionpro_visual_tests COMMAND visionpro_visual_tests -platform offscreen)
+    list(APPEND ui_tests visionpro_visual_tests)
+endif()
+
+set_tests_properties(${ui_tests} PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::QOffscreenIntegrationPlugin>"
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
     TIMEOUT 60
 )
 if(VISIONPRO_WITH_OPENCV)
-    set_property(TEST visionpro_editor_tests APPEND PROPERTY ENVIRONMENT_MODIFICATION
+    set_property(TEST visionpro_editor_tests visionpro_visual_tests APPEND PROPERTY ENVIRONMENT_MODIFICATION
         "PATH=path_list_prepend:$<TARGET_FILE_DIR:opencv_core>")
 endif()

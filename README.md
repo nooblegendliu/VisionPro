@@ -19,6 +19,8 @@ S5.2 已接通同会话草稿发布。成功受理时更新活动快照，已有
 
 S5.3 已完成桌面方案与流程编辑。画布、属性检查器和作用域诊断共用草稿与撤销历史，支持保存、另存、独立复制及重载。[S5.3 验收记录](docs/development.md#97-s53-方案与流程编辑验收记录)
 
+S5.4 已完成 UInt8 灰度和 BGR 查看、像素检查及 ROI 编辑与预览。S4 固定样例验证了旋转、继承修正、排除后的成员掩膜，以及同轮 Blob 结果的包围框和质心叠加。[S5.4 验收记录](docs/development.md#98-s54-图像与-roi-验收记录)
+
 - 已建立初始目录、开发规则及基础设计文档。
 - 已确定 C++20、Qt、OpenCV、CMake 技术栈。
 - 已建立 `visionpro_core` 静态库，包含身份、配置/运行值、工具元数据、只读图像与裁剪、几何/ROI/掩膜、资源与状态定义及局部校验、结构化诊断和 CTest。
@@ -116,7 +118,7 @@ S3.9 在 Windows x64、MSVC 19.51、CMake/CTest 4.4.0 环境完成 Release 验�
 2. 核心模型与绑定验证。S2.1–S2.7 完成，Release 及全部 S2 必需子范围通过。
 3. 无 GUI 执行与配置往返验证。S3.1–S3.9 完成，26 项必验子范围全部通过。
 4. 无 GUI 视觉闭环。S4.1–S4.7 已完成，本轮 Release 回归 ON 97 项、OFF 81 项通过。见 [S4 验收范围](docs/s4-acceptance.md#release-回归范围)。
-5. 基础可视化界面。S5.1–S5.3 已完成画布接入、同会话发布及方案编辑。后续推进图像/ROI、运行调试及 GUI/CLI 一致性验收。
+5. 基础可视化界面。S5.1–S5.4 已完成画布接入、同会话发布、方案编辑和图像与 ROI。后续推进运行调试及 GUI/CLI 一致性验收。
 6. 完整循环、多流程并行、触发、共享服务及工业接入。
 
 各阶段范围与验收标准见 [requirements.md](docs/requirements.md)。
@@ -148,6 +150,8 @@ S3.9 在 Windows x64、MSVC 19.51、CMake/CTest 4.4.0 环境完成 Release 验�
 `visionpro_cli save` 提交方案的新修订。见 [命令行用法与闭环复现](docs/development.md#316-s39-构建与命令行验证)。
 
 使用 `VISIONPRO_WITH_GUI=ON` 构建 `visionpro_gui`。打开桌面程序后，可从 **File** 新建或打开方案，从 **Tools** 添加节点，选中节点后在 **Properties** 编辑参数、绑定和 Group 边界。[S5.3 构建与编辑复现](docs/development.md#326-s53-release-构建与测试)
+
+同时启用 OpenCV 后，可从 **View** 打开图像文件或方案图像资源，选择视觉节点后使用 **Preview Selected ROI**。在 **Properties → Edit ROI…** 修改区域配置。[S5.4 构建与样例复现](docs/development.md#327-s54-release-构建与测试)
 
 ## 文档导航
 

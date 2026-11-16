@@ -24,6 +24,7 @@ namespace visionpro::ui {
 class ControlGraphModel;
 class ControlScene;
 class EditorInspector;
+class ImagePanel;
 
 class EditorWindow final : public QMainWindow {
 public:
@@ -35,6 +36,9 @@ public:
     void open_document(const std::filesystem::path& directory);
     void save_document();
     void transfer_document(const std::filesystem::path& directory, infrastructure::SolutionTransfer operation);
+    void open_preview_image(const std::filesystem::path& file, core::CoordinateSystemId frame, bool grayscale);
+    void open_preview_resource(core::ResourceReference resource, core::CoordinateSystemId frame, bool grayscale);
+    void preview_selected_roi();
 
 protected:
     void closeEvent(QCloseEvent* event) override;
@@ -62,6 +66,9 @@ private:
     void accept_committed(CommittedDocument committed, bool replace, const Continuation& after);
     void choose_resource_copy();
     void choose_resource_root();
+    void choose_preview_image();
+    void choose_preview_resource();
+    void accept_preview_frame(const core::ImageHandle& frame);
     bool writable() const noexcept;
     template<class Task, class Apply>
     void start_file_task(const QString& status, Task task, Apply apply);
@@ -78,6 +85,7 @@ private:
     std::unique_ptr<ControlGraphModel> model_;
     std::unique_ptr<ControlScene> scene_;
     EditorInspector* inspector_{};
+    ImagePanel* images_{};
     QtNodes::GraphicsView* view_{};
     std::optional<core::WorkflowId> shown_workflow_;
     std::optional<core::NodeId> shown_scope_;
@@ -91,6 +99,7 @@ private:
     QListWidget* workflows_{};
     QListWidget* tools_{};
     QDockWidget* inspector_dock_{};
+    QDockWidget* images_dock_{};
     QDockWidget* diagnostics_dock_{};
     QListWidget* diagnostics_{};
     QLabel* scope_path_{};
@@ -108,6 +117,9 @@ private:
     QAction* independent_copy_{};
     QAction* resource_copy_{};
     QAction* resource_root_{};
+    QAction* preview_image_{};
+    QAction* preview_resource_{};
+    QAction* preview_roi_{};
     QAction* rename_{};
     QAction* new_workflow_{};
     QAction* remove_workflow_{};
