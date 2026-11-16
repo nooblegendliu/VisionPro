@@ -34,9 +34,10 @@ private:
 class FileResourceProvider final : public workflow::InvocationResourceProvider {
 public:
     // Lock fixed file contents and record per-resource dependency failures.
-    // The directory and supplied roots must be explicit absolute paths.
+    // Supplied directories must be absolute. An unsaved draft can resolve
+    // absolute and named-root resources without a solution directory.
     [[nodiscard]] static core::Result<std::shared_ptr<FileResourceProvider>> create(
-        const workflow::Solution& solution, const std::filesystem::path& solution_directory,
+        const workflow::Solution& solution, const std::optional<std::filesystem::path>& solution_directory,
         std::span<const NamedResourceRoot> roots = {});
     // Read one catalog file with the same path, revision and content checks as execution.
     [[nodiscard]] static core::Result<std::shared_ptr<const FileResourceLease>> read_resource(

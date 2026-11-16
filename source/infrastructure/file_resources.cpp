@@ -717,7 +717,7 @@ Result<std::shared_ptr<const FileResourceLease>> FileResourceProvider::read_reso
 }
 
 Result<std::shared_ptr<FileResourceProvider>> FileResourceProvider::create(const Solution& solution,
-    const fs::path& solution_directory, std::span<const NamedResourceRoot> roots)
+    const std::optional<fs::path>& solution_directory, std::span<const NamedResourceRoot> roots)
 {
     const auto fail = [&](Diagnostic diagnostic) -> Result<std::shared_ptr<FileResourceProvider>> {
         diagnostic.location.solution = solution.id;

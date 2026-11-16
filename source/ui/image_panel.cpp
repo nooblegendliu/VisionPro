@@ -61,7 +61,8 @@ Result<std::vector<BlobAnnotation>> read_blobs(const NodeResult& result)
 } // namespace
 
 ImagePanel::ImagePanel(QWidget* parent)
-    : QWidget(parent), view_(new ImageView(this)), image_info_(new QLabel(this)), pixel_info_(new QLabel(this))
+    : QWidget(parent), view_(new ImageView(this)), image_info_(new QLabel(this)), provenance_(new QLabel(this)),
+      pixel_info_(new QLabel(this))
 {
     auto* layout = new QVBoxLayout(this);
     auto* controls = new QHBoxLayout;
@@ -71,12 +72,16 @@ ImagePanel::ImagePanel(QWidget* parent)
     connect(fit, &QPushButton::clicked, view_, &ImageView::fit_image);
     image_info_->setObjectName(QStringLiteral("imageInfo"));
     image_info_->setWordWrap(true);
+    provenance_->setObjectName(QStringLiteral("imageProvenance"));
+    provenance_->setTextFormat(Qt::PlainText);
+    provenance_->setWordWrap(true);
     pixel_info_->setObjectName(QStringLiteral("imagePixel"));
     view_->setObjectName(QStringLiteral("imageView"));
     view_->setMinimumSize(260, 170);
     controls->addWidget(fit);
     controls->addWidget(image_info_, 1);
     layout->addLayout(controls);
+    layout->addWidget(provenance_);
     layout->addWidget(view_, 1);
     layout->addWidget(pixel_info_);
     connect(view_, &ImageView::pixel_changed, pixel_info_, &QLabel::setText);
@@ -90,6 +95,7 @@ Result<std::monostate> ImagePanel::set_frame(const ImageHandle& image)
     const auto frame = image.coordinate_frame().text();
     image_info_->setText(QStringLiteral("%1 × %2  ·  %3")
         .arg(image.width()).arg(image.height()).arg(QString::fromUtf8(frame.data(), static_cast<qsizetype>(frame.size()))));
+    set_provenance({});
     pixel_info_->clear();
     emit frame_changed();
     return std::monostate{};
@@ -112,6 +118,17 @@ Result<std::monostate> ImagePanel::present_result(const NodeResult& image_result
     const auto* image = output_value(image_result, image_output);
     const auto* frame = image ? image->as_image() : nullptr;
     if (!frame) { return issue(ErrorCode::InvalidValue, "The selected result has no image at this output."); }
+    return present_image(frame->image, roi_result, blob_result);
+}
+
+Result<std::monostate> ImagePanel::present_blob(const ImageHandle& input_image, const NodeResult& blob_result)
+{
+    return present_image(input_image, nullptr, &blob_result);
+}
+
+Result<std::monostate> ImagePanel::present_image(const ImageHandle& image, const NodeResult* roi_result,
+    const NodeResult* blob_result)
+{
     std::optional<RegionDefinition> region;
     std::optional<RasterMask> mask;
     if (roi_result) {
@@ -129,8 +146,14 @@ Result<std::monostate> ImagePanel::present_result(const NodeResult& image_result
         if (auto* failure = std::get_if<Diagnostic>(&annotations)) { return std::move(*failure); }
         blobs = std::get<std::vector<BlobAnnotation>>(std::move(annotations));
     }
-    if (auto shown = set_frame(frame->image); std::holds_alternative<Diagnostic>(shown)) { return shown; }
+    if (auto shown = set_frame(image); std::holds_alternative<Diagnostic>(shown)) { return shown; }
     return view_->set_overlays(region, mask, blobs);
+}
+
+void ImagePanel::set_provenance(const QString& text)
+{
+    provenance_->setText(text);
+    provenance_->setVisible(!text.isEmpty());
 }
 
 void ImagePanel::clear_overlays()
@@ -143,6 +166,7 @@ void ImagePanel::clear_frame()
     view_->clear_image();
     frame_.reset();
     image_info_->setText(QStringLiteral("Open an image from the View menu."));
+    set_provenance({});
     pixel_info_->clear();
     emit frame_changed();
 }

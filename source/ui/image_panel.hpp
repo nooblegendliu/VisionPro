@@ -23,6 +23,9 @@ public:
     [[nodiscard]] core::Result<std::monostate> present_result(const workflow::NodeResult& image_result,
         const core::OutputId& image_output, const workflow::NodeResult* roi_result,
         const workflow::NodeResult* blob_result);
+    [[nodiscard]] core::Result<std::monostate> present_blob(const core::ImageHandle& input_image,
+        const workflow::NodeResult& blob_result);
+    void set_provenance(const QString& text);
     void clear_overlays();
     void clear_frame();
 
@@ -30,8 +33,12 @@ signals:
     void frame_changed();
 
 private:
+    [[nodiscard]] core::Result<std::monostate> present_image(const core::ImageHandle& image,
+        const workflow::NodeResult* roi_result, const workflow::NodeResult* blob_result);
+
     ImageView* view_;
     QLabel* image_info_;
+    QLabel* provenance_;
     QLabel* pixel_info_;
     std::optional<core::ImageHandle> frame_;
 };

@@ -25,6 +25,8 @@ class ControlGraphModel;
 class ControlScene;
 class EditorInspector;
 class ImagePanel;
+class RunController;
+class RunPanel;
 
 class EditorWindow final : public QMainWindow {
 public:
@@ -51,6 +53,11 @@ private:
         const QKeySequence& shortcut = {});
     void create_actions();
     void create_docks();
+    void create_run_actions();
+    void create_run_dock();
+    void start_run(bool independent);
+    void show_selected_run_image();
+    void choose_run_limits();
     void replace_canvas(workflow::Solution draft, bool writable = true);
     void refresh_canvas();
     void refresh_actions();
@@ -95,11 +102,16 @@ private:
     std::vector<infrastructure::NamedResourceRoot> roots_;
     bool busy_{false};
     bool close_when_idle_{false};
+    bool close_confirmed_{false};
+    bool showing_run_image_{false};
 
     QListWidget* workflows_{};
     QListWidget* tools_{};
     QDockWidget* inspector_dock_{};
     QDockWidget* images_dock_{};
+    RunController* run_controller_{};
+    RunPanel* run_panel_{};
+    QDockWidget* run_dock_{};
     QDockWidget* diagnostics_dock_{};
     QListWidget* diagnostics_{};
     QLabel* scope_path_{};
@@ -108,6 +120,7 @@ private:
     std::size_t validation_revision_{0};
     std::size_t displayed_validation_revision_{0};
     std::vector<core::Diagnostic> issues_;
+    std::optional<core::Diagnostic> run_error_;
     std::vector<QString> file_notices_;
 
     QAction* new_{};
@@ -120,6 +133,10 @@ private:
     QAction* preview_image_{};
     QAction* preview_resource_{};
     QAction* preview_roi_{};
+    QAction* run_workflow_{};
+    QAction* debug_node_{};
+    QAction* cancel_run_{};
+    QAction* run_limits_{};
     QAction* rename_{};
     QAction* new_workflow_{};
     QAction* remove_workflow_{};

@@ -359,7 +359,7 @@ void EditorWindow::choose_resource_root()
     else { existing->directory = file_path(folder); }
     if (!directory_) {
         roots_ = std::move(mappings);
-        images_->clear_overlays();
+        if (!showing_run_image_) { images_->clear_overlays(); }
         show_status(QStringLiteral("Named root configured."));
         return;
     }
@@ -377,7 +377,7 @@ void EditorWindow::choose_resource_root()
         [this, mappings = std::move(mappings)](SolutionDocument source) {
             file_notices_ = file_issues(source);
             roots_ = std::move(mappings);
-            images_->clear_overlays();
+            if (!showing_run_image_) { images_->clear_overlays(); }
             source_ = std::move(source);
             pending_baseline_.reset();
             render_diagnostics();
@@ -456,6 +456,7 @@ void EditorWindow::accept_preview_frame(const ImageHandle& image)
         report_error(QString::fromStdString(failure->message));
         return;
     }
+    showing_run_image_ = false;
     images_dock_->show();
     images_dock_->raise();
     show_status(QStringLiteral("Image ready."));
@@ -472,7 +473,7 @@ void EditorWindow::preview_selected_roi()
     const auto* node = flow && selected.size() == 1 ? find_node(*flow, selected.front()) : nullptr;
     const auto* tool = node ? std::get_if<ToolConfiguration>(&node->configuration) : nullptr;
     const auto* descriptor = tool ? registry_.find_descriptor(tool->type) : nullptr;
-    images_->clear_overlays();
+    if (!showing_run_image_) { images_->clear_overlays(); }
     if (!descriptor || !descriptor->region_capabilities || descriptor->config_version != tool->config_version) {
         report_error(QStringLiteral("Select a vision tool with ROI settings."));
         return;
@@ -496,6 +497,8 @@ void EditorWindow::preview_selected_roi()
                 report_error(QString::fromStdString(failure->message));
                 return;
             }
+            showing_run_image_ = false;
+            images_->set_provenance(QStringLiteral("Draft ROI preview"));
             images_dock_->show();
             images_dock_->raise();
             auto summary = QStringLiteral("ROI contains %1 pixels.").arg(preview.member_count);

@@ -1,6 +1,7 @@
 #include "control_scene.hpp"
 #include "editor_window.hpp"
 #include "image_panel.hpp"
+#include "run_panel.hpp"
 #include "tool_catalog.hpp"
 #include "visual_preview.hpp"
 
@@ -13,14 +14,17 @@
 #include <QComboBox>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QDockWidget>
 #include <QGraphicsPathItem>
 #include <QGraphicsPixmapItem>
+#include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
 #include <QStatusBar>
 #include <QTemporaryDir>
 #include <QTest>
 #include <QTimer>
+#include <QTreeWidget>
 #include <QUndoStack>
 
 #include <algorithm>
@@ -49,8 +53,10 @@ template<class T> T key(std::string_view name) { return take(SchemaIdFactory::pa
 const fs::path fixture{VISIONPRO_S4_DIRECTORY};
 const auto workflow_id = id<WorkflowId>("000000000103");
 const auto reader_id = id<NodeId>("000000001301");
+const auto binary_source_id = id<NodeId>("000000001302");
 const auto threshold_id = id<NodeId>("000000001303");
 const auto blob_id = id<NodeId>("000000001304");
+const auto judge_id = id<NodeId>("000000001305");
 const auto frame_id = key<CoordinateSystemId>("s4.sample.rotated");
 const auto roi_id = key<ParameterId>("roi");
 const ResourceReference image_resource{id<ResourceId>("000000000202"), ResourceKind::Image, {}};
@@ -85,6 +91,19 @@ NodeResult run_result(const RunHandle& run, const RunProgress& progress, const N
     return take(run.lookup(*call->invocation)).value();
 }
 
+bool select_run_node(QTreeWidget& tree, const NodeId& node)
+{
+    const auto identity = QString::fromStdString(node.to_string());
+    for (int row = 0; row < tree.topLevelItemCount(); ++row) {
+        auto* item = tree.topLevelItem(row);
+        if (item->toolTip(0) == identity) {
+            tree.setCurrentItem(item);
+            return true;
+        }
+    }
+    return false;
+}
+
 template<class Edit> bool apply_roi_edit(QPushButton& button, const Edit& edit)
 {
     bool accepted = false;
@@ -112,6 +131,8 @@ private slots:
     void fixed_geometry_matches_s4_outputs();
     void mask_resources_and_boundary_policy();
     void window_previews_and_edits_symbolic_roi();
+    void window_displays_images_from_the_selected_run();
+    void window_displays_blob_from_one_time_debug_image();
 };
 
 void VisualTests::fixed_geometry_matches_s4_outputs()
@@ -288,6 +309,184 @@ void VisualTests::window_previews_and_edits_symbolic_roi()
     QVERIFY(region(window.draft(), blob_id) == before && scene->undoStack().isClean());
     scene->undoStack().redo();
     QCOMPARE(std::get<InheritedRegion>(region(window.draft(), blob_id).source).transform->matrix[2], 2.0);
+}
+
+void VisualTests::window_displays_images_from_the_selected_run()
+{
+    const auto registry = take(app::make_tool_registry());
+    const auto document = take(load_solution(fixture, registry));
+    EditorWindow window(document.solution(), registry);
+    window.show();
+    window.open_document(fixture);
+    QTRY_VERIFY(!window.file_busy());
+
+    auto* canvas = qobject_cast<QGraphicsView*>(window.centralWidget());
+    QVERIFY(canvas);
+    auto* scene = qobject_cast<ControlScene*>(canvas->scene());
+    QVERIFY(scene && scene->select_workflow(workflow_id));
+    auto* start = window.findChild<QAction*>(QStringLiteral("runWorkflow"));
+    auto* dock = window.findChild<QDockWidget*>(QStringLiteral("runDock"));
+    auto* run_panel = window.findChild<RunPanel*>();
+    auto* images = window.findChild<ImagePanel*>();
+    QVERIFY(start && start->isEnabled() && dock && run_panel && images);
+    auto* status = run_panel->findChild<QLabel*>(QStringLiteral("runStatus"));
+    auto* completion = run_panel->findChild<QLabel*>(QStringLiteral("runCompletion"));
+    auto* cleanup = run_panel->findChild<QLabel*>(QStringLiteral("runCleanup"));
+    auto* judgement = run_panel->findChild<QLabel*>(QStringLiteral("runJudgement"));
+    auto* nodes = run_panel->findChild<QTreeWidget*>(QStringLiteral("runNodes"));
+    auto* outputs = run_panel->findChild<QComboBox*>(QStringLiteral("runOutputs"));
+    auto* show_image = run_panel->findChild<QPushButton*>(QStringLiteral("showRunImage"));
+    auto* provenance = images->findChild<QLabel*>(QStringLiteral("imageProvenance"));
+    auto* view = images->findChild<ImageView*>();
+    QVERIFY(status && completion && cleanup && judgement && nodes && outputs && show_image && provenance && view);
+
+    start->trigger();
+    QTRY_COMPARE_WITH_TIMEOUT(cleanup->text(), QStringLiteral("Cleanup: Quiescent"), 10000);
+    QCOMPARE(status->text(), QStringLiteral("Status: Succeeded"));
+    QCOMPARE(completion->text(), QStringLiteral("Logical completion: Complete"));
+    QVERIFY(dock->isVisible());
+    const auto run = run_panel->selected_run();
+    QVERIFY(run && run->identity().workflow == workflow_id);
+    const auto progress = take(run->inspect());
+    const auto binary = key<OutputId>("binary");
+    const auto source = run_result(*run, progress, binary_source_id);
+    const auto* expected_image = std::get<DataValue>(source.output(binary)->content).as_image();
+    QVERIFY(expected_image);
+
+    QVERIFY(select_run_node(*nodes, blob_id));
+    const auto selected_blob = run_panel->selected_invocation();
+    QVERIFY(selected_blob && selected_blob->node == blob_id);
+    outputs->setCurrentIndex(outputs->findText(QStringLiteral("components")));
+    QVERIFY(show_image->isEnabled());
+    show_image->click();
+    QVERIFY(images->frame() && *images->frame() == expected_image->image && images->isVisible());
+    const auto* flow = find_workflow(run->request().snapshot().solution(), workflow_id);
+    const auto blob_name = QString::fromStdString(find_node(*flow, blob_id)->name);
+    QCOMPARE(provenance->text(), QStringLiteral("Run %1  ·  Snapshot %2  ·  %3")
+        .arg(run->identity().run.value()).arg(run->identity().snapshot.snapshot.value()).arg(blob_name));
+    const auto blob_items = view->scene()->items();
+    QCOMPARE(std::ranges::count_if(blob_items, [](const QGraphicsItem* item) {
+        const auto* path = dynamic_cast<const QGraphicsPathItem*>(item);
+        return path && !path->path().isEmpty();
+    }), 1);
+    QVERIFY(std::ranges::any_of(blob_items, [](const QGraphicsItem* item) {
+        const auto* path = dynamic_cast<const QGraphicsPathItem*>(item);
+        return path && path->path().boundingRect() == QRectF(3.5, 2.5, 3, 3);
+    }));
+    QCOMPARE(judgement->text(), QStringLiteral("Judgement: Not evaluated"));
+
+    QVERIFY(select_run_node(*nodes, threshold_id));
+    outputs->setCurrentIndex(outputs->findText(QStringLiteral("binary")));
+    QVERIFY(show_image->isEnabled());
+    show_image->click();
+    const auto threshold = run_result(*run, progress, threshold_id);
+    const auto* threshold_image = std::get<DataValue>(threshold.output(binary)->content).as_image();
+    QVERIFY(threshold_image && images->frame() && *images->frame() == threshold_image->image);
+    const auto threshold_items = view->scene()->items();
+    QVERIFY(std::ranges::any_of(threshold_items, [](const QGraphicsItem* item) {
+        const auto* path = dynamic_cast<const QGraphicsPathItem*>(item);
+        return path && !path->path().isEmpty();
+    }));
+    QVERIFY(std::ranges::any_of(threshold_items, [](const QGraphicsItem* item) {
+        const auto* mask = dynamic_cast<const QGraphicsPixmapItem*>(item);
+        if (!mask || !mask->pixmap().hasAlphaChannel()) { return false; }
+        const auto pixels = mask->pixmap().toImage();
+        return pixels.width() > 8 && pixels.height() > 8
+            && qAlpha(pixels.pixel(4, 4)) > 0 && qAlpha(pixels.pixel(8, 8)) == 0;
+    }));
+
+    QVERIFY(select_run_node(*nodes, judge_id));
+    QCOMPARE(status->text(), QStringLiteral("Status: Succeeded"));
+    QCOMPARE(judgement->text(), QStringLiteral("Judgement: OK"));
+    QVERIFY(!show_image->isEnabled());
+    QVERIFY(images->frame() && *images->frame() == threshold_image->image);
+    QVERIFY(scene->undoStack().isClean());
+}
+
+void VisualTests::window_displays_blob_from_one_time_debug_image()
+{
+    const auto registry = take(app::make_tool_registry());
+    const auto document = take(load_solution(fixture, registry));
+    EditorWindow window(document.solution(), registry);
+    window.show();
+    window.open_document(fixture);
+    QTRY_VERIFY(!window.file_busy());
+    auto* canvas = qobject_cast<QGraphicsView*>(window.centralWidget());
+    QVERIFY(canvas);
+    auto* scene = qobject_cast<ControlScene*>(canvas->scene());
+    QVERIFY(scene && scene->select_workflow(workflow_id));
+    QVERIFY(scene->edit_draft(QStringLiteral("Remove inherited ROI for isolated Blob debug"), [](Solution& draft) -> Result<std::monostate> {
+        auto workflow = std::ranges::find(draft.workflows, workflow_id, &Workflow::id);
+        auto blob = std::ranges::find(workflow->nodes, blob_id, &Node::id);
+        std::erase_if(blob->bindings, [](const Binding& item) { return item.target == BindingTarget{roi_id}; });
+        return std::monostate{};
+    }));
+    QVERIFY(scene->reveal_node(blob_id));
+    const int edit_index = scene->undoStack().index();
+
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const auto file = temporary.filePath(QStringLiteral("debug_binary.png"));
+    QImage pixels(9, 9, QImage::Format_Grayscale8);
+    pixels.fill(0);
+    pixels.scanLine(1)[1] = 255;
+    pixels.scanLine(1)[2] = 255;
+    pixels.scanLine(2)[1] = 255;
+    pixels.scanLine(2)[2] = 255;
+    QVERIFY(pixels.save(file));
+
+    auto* start = window.findChild<QAction*>(QStringLiteral("debugSelectedNode"));
+    auto* run_panel = window.findChild<RunPanel*>();
+    auto* images = window.findChild<ImagePanel*>();
+    QVERIFY(start && start->isEnabled() && run_panel && images);
+    auto* cleanup = run_panel->findChild<QLabel*>(QStringLiteral("runCleanup"));
+    auto* show_image = run_panel->findChild<QPushButton*>(QStringLiteral("showRunImage"));
+    QVERIFY(cleanup && show_image);
+    bool accepted = false;
+    QTimer dialog_action;
+    dialog_action.setSingleShot(true);
+    QObject::connect(&dialog_action, &QTimer::timeout, &window, [&] {
+        auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+        if (!dialog) { return; }
+        if (dialog->objectName() == QStringLiteral("runInputsDialog")) {
+            auto* path = dialog->findChild<QLineEdit*>(QStringLiteral("runInputFile.binary"));
+            auto* frame = dialog->findChild<QComboBox*>(QStringLiteral("runInputFrame.binary"));
+            auto* buttons = dialog->findChild<QDialogButtonBox*>(QStringLiteral("runInputButtons"));
+            const int frame_index = frame ? frame->findText(QString::fromStdString(std::string(frame_id.text()))) : -1;
+            if (path && buttons && frame_index >= 0) {
+                path->setText(file);
+                frame->setCurrentIndex(frame_index);
+                buttons->button(QDialogButtonBox::Ok)->click();
+                accepted = dialog->result() == QDialog::Accepted;
+            }
+        }
+        if (!accepted) { dialog->reject(); }
+    });
+    dialog_action.start(0);
+    start->trigger();
+    QVERIFY(accepted);
+    QTRY_COMPARE_WITH_TIMEOUT(cleanup->text(), QStringLiteral("Cleanup: Quiescent"), 10000);
+    const auto debug = run_panel->selected_run();
+    QVERIFY(debug && debug->request().debug_state() == DebugStatePolicy::Isolated);
+    const auto progress = take(debug->inspect());
+    QCOMPARE(progress.status, ExecutionStatus::Succeeded);
+    QVERIFY(progress.call_order == std::vector<NodeId>{blob_id});
+    const auto binary = key<InputId>("binary");
+    const auto* supplied = debug->request().input(binary);
+    QVERIFY(supplied && supplied->origin == InputOrigin::Provided && supplied->value.as_image());
+    const auto result = run_result(*debug, progress, blob_id);
+    const auto& area = std::get<DataValue>(result.output(key<OutputId>("total_area_pixels"))->content);
+    QCOMPARE(*area.as_int64(), 4);
+
+    QVERIFY(show_image->isEnabled());
+    show_image->click();
+    QVERIFY(images->frame() && *images->frame() == supplied->value.as_image()->image);
+    QCOMPARE(scene->undoStack().index(), edit_index);
+    const auto* blob = find_node(*find_workflow(window.draft(), workflow_id), blob_id);
+    const auto binding = std::ranges::find(blob->bindings, BindingTarget{binary}, &Binding::target);
+    QVERIFY(binding != blob->bindings.end());
+    const auto* upstream = std::get_if<OutputReference>(&binding->sources.front());
+    QVERIFY(upstream && upstream->node == binary_source_id);
 }
 
 } // namespace

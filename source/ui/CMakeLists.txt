@@ -1,11 +1,15 @@
 add_library(visionpro_ui STATIC
     control_graph_model.cpp control_graph_model.hpp
     control_scene.cpp control_scene.hpp
-    editor_window.cpp editor_window.hpp editor_documents.cpp
+    editor_window.cpp editor_window.hpp editor_documents.cpp editor_runs.cpp
     editor_inspector.cpp editor_inspector.hpp
     image_panel.cpp image_panel.hpp
     image_view.cpp image_view.hpp
     roi_editor.cpp roi_editor.hpp
+    run_controller.cpp run_controller.hpp
+    run_image.cpp run_image.hpp
+    run_inputs.cpp run_inputs.hpp
+    run_panel.cpp run_panel.hpp
 )
 set_target_properties(visionpro_ui PROPERTIES AUTOMOC ON)
 target_include_directories(visionpro_ui PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>")

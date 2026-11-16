@@ -3,6 +3,8 @@
 #include "control_scene.hpp"
 #include "editor_inspector.hpp"
 #include "image_panel.hpp"
+#include "run_controller.hpp"
+#include "run_panel.hpp"
 
 #include <QtNodes/GraphicsView>
 #include <QtNodes/internal/NodeGraphicsObject.hpp>
@@ -167,6 +169,7 @@ void EditorWindow::create_actions()
     }, QKeySequence::Delete);
     up_ = action(graph, QStringLiteral("Parent Group"), "parentGroup", [this] { scene_->parent_scope(); });
 
+    create_run_actions();
     auto& view = *menuBar()->addMenu(QStringLiteral("&View"));
     for (auto* dock : findChildren<QDockWidget*>(QString(), Qt::FindDirectChildrenOnly)) {
         view.addAction(dock->toggleViewAction());
@@ -192,6 +195,9 @@ void EditorWindow::create_actions()
     toolbar->addSeparator();
     toolbar->addAction(undo_);
     toolbar->addAction(redo_);
+    toolbar->addSeparator();
+    toolbar->addAction(run_workflow_);
+    toolbar->addAction(cancel_run_);
 }
 
 void EditorWindow::create_docks()
@@ -246,6 +252,7 @@ void EditorWindow::create_docks()
     diagnostics_dock_->hide();
     connect(diagnostics_, &QListWidget::itemDoubleClicked, this, [this](QListWidgetItem* item) { locate_diagnostic(item); });
     connect(diagnostics_, &QListWidget::currentItemChanged, this, [this] { if (scene_) { refresh_actions(); } });
+    create_run_dock();
 }
 
 void EditorWindow::replace_canvas(Solution replacement, bool editable)
@@ -275,7 +282,11 @@ void EditorWindow::replace_canvas(Solution replacement, bool editable)
     setCentralWidget(view_);
     inspector_dock_->setWidget(inspector_);
     inspector_->setEnabled(editable);
+    showing_run_image_ = false;
     images_->clear_frame();
+    run_error_.reset();
+    run_panel_->clear();
+    run_controller_->reset_document();
     shown_workflow_.reset();
     shown_scope_.reset();
 
@@ -286,11 +297,11 @@ void EditorWindow::replace_canvas(Solution replacement, bool editable)
         QTimer::singleShot(0, this, [active, node] { if (active) { active->open_group(node); } });
     });
     connect(model_.get(), &QtNodes::AbstractGraphModel::modelReset, this, [this] {
-        images_->clear_overlays();
+        if (!showing_run_image_) { images_->clear_overlays(); }
         refresh_canvas();
     });
     connect(scene_.get(), &QGraphicsScene::selectionChanged, this, [this] {
-        images_->clear_overlays();
+        if (!showing_run_image_) { images_->clear_overlays(); }
         refresh_actions();
     });
     connect(&scene_->undoStack(), &QUndoStack::indexChanged, this, [this] { queue_diagnostics(); refresh_actions(); });
@@ -337,7 +348,8 @@ void EditorWindow::frame_canvas()
 void EditorWindow::refresh_actions()
 {
     if (!scene_) { return; }
-    const bool editable = !busy_ && writable();
+    const bool available = !busy_ && !close_confirmed_;
+    const bool editable = available && writable();
     const bool active = model_->workflow_id().has_value();
     const auto selected = scene_->selected_nodes();
     const bool has_nodes = !selected.empty();
@@ -347,18 +359,22 @@ void EditorWindow::refresh_actions()
     const bool has_resource = std::ranges::any_of(draft().resources, [](const ResourceDefinition& resource) {
         return std::holds_alternative<ExternalFileResource>(resource.location);
     });
-    new_->setEnabled(!busy_);
-    open_->setEnabled(!busy_);
+    new_->setEnabled(available);
+    open_->setEnabled(available);
     save_->setEnabled(editable && (!directory_ || !history.isClean() || !source_));
     save_as_->setEnabled(editable);
     independent_copy_->setEnabled(editable);
     resource_copy_->setEnabled(editable && source_.has_value() && has_resource);
-    resource_root_->setEnabled(!busy_);
+    resource_root_->setEnabled(available);
+    run_workflow_->setEnabled(editable && active && run_controller_->can_start());
+    debug_node_->setEnabled(editable && active && selected.size() == 1 && run_controller_->can_start());
+    cancel_run_->setEnabled(!close_confirmed_ && run_controller_->can_cancel());
+    run_limits_->setEnabled(!close_confirmed_);
 #ifdef VISIONPRO_WITH_OPENCV
-    preview_image_->setEnabled(!busy_);
-    preview_resource_->setEnabled(!busy_ && std::ranges::any_of(draft().resources,
+    preview_image_->setEnabled(available);
+    preview_resource_->setEnabled(available && std::ranges::any_of(draft().resources,
         [](const ResourceDefinition& resource) { return resource.kind == ResourceKind::Image; }));
-    preview_roi_->setEnabled(!busy_ && images_->frame().has_value() && selected.size() == 1);
+    preview_roi_->setEnabled(available && images_->frame().has_value() && selected.size() == 1);
 #else
     preview_image_->setEnabled(false);
     preview_resource_->setEnabled(false);
@@ -423,30 +439,33 @@ bool EditorWindow::confirm_replacement(Continuation next)
 
 void EditorWindow::closeEvent(QCloseEvent* event)
 {
+    event->ignore();
     if (busy_) {
         close_when_idle_ = true;
         show_status(QStringLiteral("The document operation will finish before closing."));
-        event->ignore();
         return;
     }
-    if (scene_->undoStack().isClean()) {
-        event->accept();
-        return;
-    }
-    try {
-        if (confirm_replacement([this] {
-                // A save can finish after the current close event.
-                if (!scene_->undoStack().isClean()) { return; }
-                QTimer::singleShot(0, this, [this] { if (isVisible()) { close(); } });
-            })) {
-            event->accept();
-        } else {
-            event->ignore();
+    if (!close_confirmed_ && !scene_->undoStack().isClean()) {
+        try {
+            confirm_replacement([this] {
+                close_confirmed_ = true;
+                refresh_actions();
+                QTimer::singleShot(0, this, [this] { close(); });
+            });
+        } catch (...) {
+            report_error(QStringLiteral("Could not close the editor."));
         }
-    } catch (...) {
-        event->ignore();
-        report_error(QStringLiteral("Could not close the editor."));
+        return;
     }
+    close_confirmed_ = true;
+    if (run_controller_->has_session_work()) {
+        run_panel_->clear();
+        run_controller_->reset_document();
+        show_status(QStringLiteral("Waiting for run cleanup before closing…"));
+        refresh_actions();
+        return;
+    }
+    event->accept();
 }
 
 void EditorWindow::queue_diagnostics()
@@ -503,15 +522,25 @@ void EditorWindow::render_diagnostics()
         item->setData(Qt::UserRole, static_cast<int>(index));
         item->setToolTip(item->text());
     }
-    if (!file_notices_.empty() || !issues_.empty()) { diagnostics_dock_->show(); }
+    if (run_error_) {
+        const auto location = diagnostic_location(draft(), run_error_->location);
+        const auto message = QStringLiteral("Run: %1").arg(QString::fromStdString(run_error_->message));
+        auto* item = new QListWidgetItem(location.isEmpty() ? message : location + QStringLiteral("  —  ") + message, diagnostics_);
+        item->setData(Qt::UserRole, -1);
+        item->setData(Qt::UserRole + 1, true);
+        item->setToolTip(item->text());
+    }
+    if (!file_notices_.empty() || !issues_.empty() || run_error_) { diagnostics_dock_->show(); }
     refresh_actions();
 }
 
 void EditorWindow::locate_diagnostic(QListWidgetItem* item)
 {
     const int index = item->data(Qt::UserRole).toInt();
-    if (index < 0 || static_cast<std::size_t>(index) >= issues_.size()) { return; }
-    const auto location = issues_[static_cast<std::size_t>(index)].location;
+    const auto* diagnostic = item->data(Qt::UserRole + 1).toBool() && run_error_ ? &*run_error_
+        : (index >= 0 && static_cast<std::size_t>(index) < issues_.size() ? &issues_[static_cast<std::size_t>(index)] : nullptr);
+    if (!diagnostic) { return; }
+    const auto& location = diagnostic->location;
     if (location.workflow) { scene_->select_workflow(*location.workflow); }
     if (location.node && scene_->reveal_node(*location.node)) {
         if (const auto* graphic = scene_->nodeGraphicsObject(model_->canvas_id(*location.node))) { view_->centerOn(graphic); }
