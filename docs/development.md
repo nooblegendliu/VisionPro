@@ -32,6 +32,9 @@ S4.6 验证真实单链、五路汇合、ROI 继承与独立调用，补齐 CLI 
 S4.7 完成当前范围的整体验收，交付固定方案、输入清单和下一阶段运行入口。见 [S4 验收与交接](s4-acceptance.md)。
 当前 Release 命令与实测结果见 [§3.23](#323-s47-release-构建与回归) 和 [§8.27](#827-s47-整体验收与交接记录)。
 
+2026-11-16，S5.1 完成 Qt 6.11.1 Widgets 和 QtNodes 3.0.16 接入，已验证桌面启动、控制画布及独立无 GUI 构建。
+后续实施与验收安排见 [§9](#9-第五阶段实施与验收计划)。
+
 开发顺序以 [requirements.md](requirements.md) 为准：
 
 | 阶段 | 主要交付与验证方式 |
@@ -40,7 +43,7 @@ S4.7 完成当前范围的整体验收，交付固定方案、输入清单和下
 | 2. 核心模型与绑定验证 | S2.1–S2.7 完成；14 项必需子范围和 Release 验证通过，整体记录见 §8.10 |
 | 3. 无 GUI 执行与配置往返验证 | S3.1–S3.9 完成。Release 82/82 项通过，26 项 S3 必验范围全部通过 |
 | 4. 无 GUI 视觉闭环 | 使用少量真实 OpenCV 工具及固定图像验证结果 |
-| 5. 基础可视化界面 | 复用核心服务，验证界面方案与无 GUI 执行一致 |
+| 5. 基础可视化界面 | S5.1 接入与画布验证通过，后续复用核心服务并验证 GUI 与无 GUI 执行一致，见 §9 |
 | 6. 后续能力 | 完整循环、多流程并行、触发、共享服务、设备及扩展工具 |
 
 绑定校验与解析先于或伴随执行器实现。
@@ -84,7 +87,13 @@ UUID 使用 Windows SDK 的 `bcrypt` 库和系统 `BCryptGenRandom`，API 依据
 
 当前构建、测试和阶段验收统一使用 **Release**，MSVC 运行库使用 `/MD`，库、应用和测试保持一致。
 OpenCV 使用已有的 `4.14.0-pre` x64 Release 预编译包，来源、摘要和运行依赖见 [§8.21](#821-s41-实现与验证记录)。
-Qt 的具体版本和获取方式在界面接入前确定；流程编辑器选型在界面实现前完成。
+S5 使用 Qt **6.11.1 / MSVC 2022 x64**，验收的安装前缀为 `D:\Env\QT\6.11.1\msvc2022_64`。
+`VISIONPRO_WITH_GUI=ON` 时查找 Qt Widgets 和 Qt OpenGL，测试另需 Qt Test。用本机 `CMAKE_PREFIX_PATH` 或 `Qt6_DIR` 指定安装位置。
+CMake 使用 FetchContent 获取并静态构建 QtNodes **3.0.16**，归档固定到提交 `7c6341a66a8e46b8988140b9e60d892b6a3560b3`，
+SHA-256 为 `e57e7092d6b0d115568eb852dcdbf09f975677821c0822e8976f112d046fe61f`。
+离线配置可用 `VISIONPRO_QTNODES_ARCHIVE` 指向同一归档，CMake 在解包前核对摘要。上游示例、测试及文档目标关闭。[`QtNodes.cmake`](../cmake/QtNodes.cmake) [官方固定源码](https://github.com/paceholder/nodeeditor/tree/7c6341a66a8e46b8988140b9e60d892b6a3560b3)
+
+GUI 和 OpenCV 构建使用 Windows x64、Release `/MD`。默认关闭 GUI，关闭时跳过 Qt 查找和 QtNodes 获取。
 首个核心构建不以 GUI 或 OpenCV 为前提；图像模型需要时可按 architecture §3 受控使用 OpenCV，
 不将首批依赖选择扩展为核心永久禁止 OpenCV 的限制。
 
@@ -572,6 +581,41 @@ foreach ($binary in $binaries) {
 ```
 
 固定方案的运行、保存和重载命令见 [样例复现](s4-acceptance.md#样例复现)。
+
+### 3.24 S5.1 Release 构建测试与启动
+
+从仓库根目录运行。将 `$qtPrefix` 指向本机 Qt 6.11.1 的 x64 套件，沿用 [§3.17](#317-s41-release-构建与验证) 的 `OpenCV_DIR`。
+使用本地固定归档时，在 GUI 配置命令中追加 `-DVISIONPRO_QTNODES_ARCHIVE=<归档的绝对路径>`。
+
+```powershell
+$qtPrefix = 'D:/Env/QT/6.11.1/msvc2022_64'
+$guiBuild = 'out/build/s51-gui'
+$headlessBuild = 'out/build/s51-headless'
+
+cmake -S . -B $guiBuild -G "Visual Studio 18 2026" -A x64 -DCMAKE_CONFIGURATION_TYPES=Release -DBUILD_TESTING=ON -DVISIONPRO_WITH_GUI=ON -DVISIONPRO_WITH_OPENCV=ON "-DCMAKE_PREFIX_PATH=$qtPrefix" "-DOpenCV_DIR=$env:OpenCV_DIR"
+cmake --build $guiBuild --config Release --parallel 6
+ctest --test-dir $guiBuild -C Release --parallel 2 --output-on-failure --no-tests=error --output-log "$guiBuild/ctest.log"
+
+cmake -S . -B $headlessBuild -G "Visual Studio 18 2026" -A x64 -DCMAKE_CONFIGURATION_TYPES=Release -DBUILD_TESTING=ON -DVISIONPRO_WITH_GUI=OFF -DVISIONPRO_WITH_OPENCV=OFF
+cmake --build $headlessBuild --config Release --parallel 6
+ctest --test-dir $headlessBuild -C Release --parallel 2 --output-on-failure --no-tests=error --output-log "$headlessBuild/ctest.log"
+
+$installPrefix = Join-Path (Get-Location) 'out/install/s51-gui'
+cmake --install $guiBuild --config Release --prefix $installPrefix --component VisionProGui
+& (Join-Path $installPrefix 'bin/visionpro_gui.exe')
+```
+
+`VisionProGui` 组件部署 Qt DLL 和平台插件，使用系统安装的 Visual C++ 运行库。
+可从 `Route` 输出口拉线到同层节点的输入口，拖动节点调整布局，选中控制线后使用 `Remove Link` 删除。
+双击 `Review (Group)` 进入子层，点 `Parent Group` 返回，通过 `Undo` 和 `Redo` 验证两层共用编辑历史。
+
+单独复测 Qt Test 的 Windows 平台后端时，在本次 PowerShell 会话中添加 Qt 的运行库和平台插件路径。
+
+```powershell
+$env:Path = "$qtPrefix/bin;$env:Path"
+$env:QT_QPA_PLATFORM_PLUGIN_PATH = "$qtPrefix/plugins/platforms"
+& "$guiBuild/tests/ui/Release/visionpro_canvas_tests.exe" -platform windows
+```
 
 ## 4. 第一阶段验证
 
@@ -1081,7 +1125,7 @@ A05/A06/A07/A17/A18/A23分别以V04/V05/V14–V16补充真实数据集成；A21�
 ### 7.8 后续阶段验证边界
 
 第五阶段验证界面生成的方案能够由相同无 GUI 入口运行，
-两种入口使用相同配置与输入时得到一致检测结果。
+两种入口使用相同配置与输入时得到一致检测结果。已确定的 S5 交付与验证安排见 [§9](#9-第五阶段实施与验收计划)。
 
 执行器：
 第三阶段范围包含基本分支及汇合；增加完整循环、动态索引与并行时，
@@ -1924,3 +1968,82 @@ ON 的核心、流程、视觉工具与 CLI CTest **90/90** 项通过，OFF 的�
 ON 的 **97/97** 项和 OFF 的 **81/81** 项适用回归均通过。本轮两套矩阵各排除 7 项会实际核对摘要的既有用例，新增 6 项无摘要外部资源和 CLI 回归。
 固定方案的三条流程在修订 1 与保存后的修订 2 均成功运行，稳定输出、控制边和本轮来源关系一致。
 [构建命令与日志路径](#323-s47-release-构建与回归) [验收证据与交接](s4-acceptance.md)
+
+## 9. 第五阶段实施与验收计划
+
+2026-11-16 完成 **S5.1** 接入验收，S5.2–S5.6 按以下顺序实施。
+功能范围由 [requirements §7](requirements.md#7-第五阶段基础可视化界面) 定义，
+界面适配职责见 [architecture §4](architecture.md#4-配置模型与编辑器)，运行与持久化契约见 [data-model](data-model.md)。
+本节记录实施顺序和验证安排，不把已有 S3/S4 测试或本机依赖安装记录作为 S5 完成证据。
+
+### 9.1 已确定的实施基线
+
+- 使用 §2 的现有 Qt 与 Qt Widgets。主窗口组织工具箱/流程树、流程画布、参数与绑定、图像与结果面板。
+- 使用 QtNodes 通用图层适配 VisionPro 领域模型。主连线表达执行编排，输入/参数绑定与 Group 包含关系独立编辑；QtNodes 的数据传播机制不承担业务执行，其场景 JSON 不替代方案格式。
+- 给 WorkflowSession 增加同会话配置发布能力。编辑先进入草稿，点击运行时校验并发布快照；保存与运行独立，已受理运行保留原快照及对应资源提供方。新增接口签名尚未固定。
+- 节点、连线、绑定及布局使用统一编辑命令和撤销历史。Group 包含与基本公开边界可编辑，完整 Group 执行和复用继续归 S6。
+- 图像/ROI 交互覆盖现有 S4 能力。掩膜自由涂抹、更多 ROI 形状的高级交互后置。
+- 文件默认外部引用，复制资源到方案目录为显式操作。另存为保留稳定身份，独立复制方案生成新身份并重映射引用。完整托管导入及实际摘要校验不新增为 S5 交付范围，既有托管资源契约和能力保持不变。
+- 结果显示采用有界历史和合并刷新，初版沿用 16 轮历史、32 条观察通知，保留配置入口。通知溢出后重新查询，历史查看不被新结果自动覆盖。
+
+### 9.2 子阶段与完成条件
+
+S5.1 结果见 [§9.5](#95-s51-接入与验收记录)。其余子阶段按表中的完成条件验收。
+
+| 子阶段 | 交付 | 可观察完成条件 |
+|---|---|---|
+| S5.1 Qt 与 QtNodes 接入（已完成） | 现有 Qt 的 GUI 构建与启动、QtNodes 版本及依赖锁定、领域模型适配验证 | 多前驱汇合、多后继分叉、命名出口、统一撤销及 Group 层级切换可表达；记录适配问题并解决；无 GUI 构建仍可独立运行 |
+| S5.2 应用服务衔接 | WorkflowSession 同会话配置发布、对应资源提供方固定、方案切换与关闭协调 | 旧运行不受编辑影响，下一次启动使用新配置；改名/布局保留兼容状态；资源修改不串到旧运行；发布失败不静默执行旧稿 |
+| S5.3 方案与流程编辑 | 节点/流程、控制、绑定、基本 Group、复制粘贴、撤销重做、布局及文件操作 | 非相邻绑定和分支/汇合可操作；作用域错误可定位；新建、保存、另存、独立复制及重载保持约定的身份、引用和资源目标 |
+| S5.4 图像与 ROI | UInt8 灰度/BGR 查看、像素检查、Blob/ROI/掩膜叠加及首批 ROI 编辑 | 几何轮廓与有效像素对应，缩放/平移不改变业务坐标；旋转、继承、修正、排除与边界行为可对照固定夹具 |
+| S5.5 运行与调试 | 流程启动/取消、单节点一次性输入、隔离调试、历史与诊断 | 目标外节点不补跑，调试不污染活动状态；技术状态与 OK/NG 分开；逻辑终态与实际退出明确显示；慢显示和关闭面板不阻塞业务完成 |
+| S5.6 综合验收 | GUI/CLI 对照、交互生命周期回归、负载测量及证据交接 | 覆盖 §9.3 全部必验范围，记录 Qt/QtNodes 及工具版本、输入、结果和限制；必需项未通过时保持 S5 未完成 |
+
+耗时校验、资源准备、加载保存及关闭等待不得阻塞 GUI 线程；后台处理固定配置与结果，界面显示在 GUI 线程完成。
+
+### 9.3 验收基准与证据
+
+复用 [S4 固定方案与输入清单](s4-acceptance.md#固定方案与输入)，覆盖真实单链、五路汇合和旋转 ROI 继承。
+不仅加载展示现有样例，还要在 GUI 修改参数、绑定、ROI 和布局后保存，并由独立 CLI 进程重载运行。
+相同配置与输入应得到一致输出、业务判定、控制行为和本轮来源关系；各进程运行身份分别验证，不要求随机身份、时间戳或耗时相等。
+
+| 验证范围 | 必需证据 |
+|---|---|
+| A21：GUI/CLI 双入口 | 固定输入、版本、GUI 保存方案、CLI 输出及数值/来源对照；布局往返不改变执行语义 |
+| 编辑与持久化 | 增删、复制、撤销、非相邻绑定、Group 公开边界和作用域诊断；另存后路径仍指向约定资源，保存失败保留原方案；未知内容不被静默丢弃 |
+| 同会话发布与资源 | 运行中修改参数和资源，旧运行及后续节点仍使用原上下文，新运行使用新配置；发布失败、会话切换、关闭与状态兼容行为有可复现验证 |
+| 图像与 ROI | 显示颜色、步长、裁剪原点、坐标变换和所有权正确；轮廓及成员掩膜与实际像素处理一致 |
+| A27：观察与界面生命周期 | 慢显示、通道超容、历史淘汰、关闭/重绑面板及旧会话通知；业务完成独立推进，已销毁对象不被访问 |
+| A30：单节点调试 | 一次性输入只作用于本次目标，不改持久绑定、不补跑来源或触发后继；缺输入明确失败，隔离状态不污染活动运行 |
+
+初始测量基线为 **100 个节点、300 条控制线、1920×1080 图像**。它定义测量负载，不代表已测性能或支持上限。
+记录交互延迟、显示刷新、加载/保存耗时及历史图像持有的内存占用；刷新间隔和性能通过阈值在实现与实测后收敛，阶段验收前固定并记录。
+正确性测试、Qt 集成测试、人工交互与显示检查分别记录；编译或截图不能替代双入口和生命周期验证。
+
+S4 的无 SHA-256 验收范围及其七项排除保持原记录，见 [S4 Release 回归范围](s4-acceptance.md#release-回归范围)。
+S5 不据此宣称完整托管导入已验证；后续扩大到该交付时，须补齐资源版本、摘要、清理与故障恢复验收。
+
+### 9.4 剩余实施细节
+
+| 待落实项 | 落点 |
+|---|---|
+| 同会话发布、运行资源固定及管理协调的具体接口 | S5.2 按 data-model 契约实现，不预先把示意接口写成现有 API |
+| 主窗口具体布局、控件交互及显示样式 | S5.3–S5.5 随功能实现细化，保持业务配置与显示设置分离 |
+| 合并刷新间隔和性能通过阈值 | 以 §9.3 负载实测，S5.6 验收前收敛；没有测量结果前不承诺响应时间或吞吐率 |
+
+### 9.5 S5.1 接入与验收记录
+
+2026-11-16 使用 Visual Studio Professional 2026、MSBuild 18.7.8、MSVC 19.51.36248.0、Windows SDK 10.0.26100.0 和 CMake/CTest 4.4.0 完成 Windows x64 Release `/MD` 验证。[复现命令](#324-s51-release-构建测试与启动)
+
+| 范围 | 实测结果 |
+|---|---|
+| GUI 与 OpenCV 开启 | 全量构建通过，CTest **105/105** 通过，包含原有文件 SHA-256 用例 |
+| GUI 与 OpenCV 关闭 | 独立构建通过，CTest **88/88** 通过。`visionpro_cli --help` 返回 0，39 个 Release 应用和测试程序均无 Qt/OpenCV DLL 导入 |
+| 画布交互 | `visionpro_canvas_tests` 在 offscreen 和 Windows 后端均通过 4 个功能用例。覆盖从同一命名出口分叉、拖线到已有前驱的汇合入口、节点移动、Group 命名出口、嵌套层级和跨层撤销重做。核对控制线身份、布局恢复、绑定及包含关系 |
+| 依赖与启动 | 锁定归档构建成功，摘要不匹配的归档被拒绝。部署包在清除 Qt 查找路径后，使用 Windows 平台插件创建流程窗口，正常关闭并返回 0 |
+
+QtNodes 的默认几何计算通过 `NodeRole::Size` 回写尺寸，适配器将它保留在界面缓存。尺寸变化只影响图元绘制和端口命中。[QtNodes 几何实现](https://github.com/paceholder/nodeeditor/blob/7c6341a66a8e46b8988140b9e60d892b6a3560b3/src/DefaultHorizontalNodeGeometry.cpp)
+
+Qt 6 鼠标事件携带视口控件，QtNodes 3.0.16 默认连接图元的移动和释放处理把该控件转换为视图。适配场景接管连接图元的这两类事件，沿用 QtNodes 的临时连线图元，按落点提交带稳定 ID 的领域命令。[Qt 6.11.1 事件实现](https://github.com/qt/qtbase/blob/v6.11.1/src/widgets/graphicsview/qgraphicsview.cpp) [QtNodes 连接图元](https://github.com/paceholder/nodeeditor/blob/7c6341a66a8e46b8988140b9e60d892b6a3560b3/src/ConnectionGraphicsObject.cpp)
+
+两套构建日志分别位于 `out/build/s51-gui` 和 `out/build/s51-headless` 的 `build.log` 与 `ctest.log`。Windows 画布测试明细和部署启动记录位于 GUI 构建目录的 `canvas-tests-windows.txt` 与 `launch.log`。

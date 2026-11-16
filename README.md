@@ -13,6 +13,8 @@ VisionPro 是一个采用 C++20、Qt、OpenCV 和 CMake 的桌面视觉算法软
 
 S1 文档审查、S2 核心模型与绑定及 S3 无 GUI 执行与配置往返均已通过验收。S4 按本轮无 SHA-256 校验的范围完成验收和交接。固定方案覆盖真实视觉单链、五路汇合和旋转 ROI 继承。[S4 验收与样例复现](docs/s4-acceptance.md)
 
+2026-11-16，S5.1 已完成。桌面入口使用 Qt 6.11.1 Widgets 和 QtNodes 3.0.16，内置流程示例可验证控制线分叉、汇合、命名出口、Group 导航和统一撤销重做。[S5.1 验收记录](docs/development.md#95-s51-接入与验收记录)
+
 - 已建立初始目录、开发规则及基础设计文档。
 - 已确定 C++20、Qt、OpenCV、CMake 技术栈。
 - 已建立 `visionpro_core` 静态库，包含身份、配置/运行值、工具元数据、只读图像与裁剪、几何/ROI/掩膜、资源与状态定义及局部校验、结构化诊断和 CTest。
@@ -90,11 +92,11 @@ GUI 和无 GUI 入口共用运行请求及结果接口，第三方 SDK 的名称
 | 项目 | 选择 | 状态 |
 |---|---|---|
 | 语言标准 | C++20 | 已确定 |
-| GUI 框架 | Qt | 已确定 |
+| GUI 框架 | Qt 6.11.1 / MSVC 2022 x64 | S5.1 Release 构建与部署启动通过 |
 | 算法依赖 | OpenCV | 已确定 |
 | 构建工具 | CMake | 已确定 |
-| 桌面界面 | Qt Widgets | 建议方案 |
-| 流程编辑器 | 尚未选型 | 待确定 |
+| 桌面界面 | Qt Widgets | 已接通 `visionpro_gui` |
+| 流程编辑器 | QtNodes 3.0.16 通用图层 | 已锁定源包，S5.1 画布交互通过 |
 
 核心流程模型、运行调度和方案契约由 VisionPro 独立定义。
 逻辑上划分应用层、核心层与能力层，具体模块映射见 [architecture.md](docs/architecture.md)。
@@ -110,7 +112,7 @@ S3.9 在 Windows x64、MSVC 19.51、CMake/CTest 4.4.0 环境完成 Release 验�
 2. 核心模型与绑定验证。S2.1–S2.7 完成，Release 及全部 S2 必需子范围通过。
 3. 无 GUI 执行与配置往返验证。S3.1–S3.9 完成，26 项必验子范围全部通过。
 4. 无 GUI 视觉闭环。S4.1–S4.7 已完成，本轮 Release 回归 ON 97 项、OFF 81 项通过。见 [S4 验收范围](docs/s4-acceptance.md#release-回归范围)。
-5. 基础可视化界面。
+5. 基础可视化界面。S5.1 已完成，S5.2–S5.6 将接通同会话快照发布、方案编辑、图像/ROI、运行调试及 GUI/CLI 一致性验收。
 6. 完整循环、多流程并行、触发、共享服务及工业接入。
 
 各阶段范围与验收标准见 [requirements.md](docs/requirements.md)。
@@ -141,6 +143,8 @@ S3.9 在 Windows x64、MSVC 19.51、CMake/CTest 4.4.0 环境完成 Release 验�
 `visionpro_cli run` 接受 `solution.json`、流程 UUID 与本次输入，实际退出后输出 JSON 追溯摘要。
 `visionpro_cli save` 提交方案的新修订。见 [命令行用法与闭环复现](docs/development.md#316-s39-构建与命令行验证)。
 
+使用 `VISIONPRO_WITH_GUI=ON` 构建 `visionpro_gui`。部署后启动桌面程序，拖动输出口可新建控制线，双击 Group 可进入子层。[S5.1 构建、测试与启动](docs/development.md#324-s51-release-构建测试与启动)
+
 ## 文档导航
 
 - [开发规则](AGENTS.md)
@@ -153,4 +157,5 @@ S3.9 在 Windows x64、MSVC 19.51、CMake/CTest 4.4.0 环境完成 Release 验�
 - [S3 整体验收矩阵](docs/s3-acceptance.md#场景证据)
 - [S4 实施顺序与验收标准](docs/development.md#7-第四阶段实施与验收计划)
 - [S4 验收矩阵与固定样例](docs/s4-acceptance.md)
+- [S5 实施顺序、验收与剩余实施细节](docs/development.md#9-第五阶段实施与验收计划)
 - [开发与验证](docs/development.md)
