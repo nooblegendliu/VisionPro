@@ -1,4 +1,6 @@
+#include "control_scene.hpp"
 #include "editor_window.hpp"
+#include "image_panel.hpp"
 #include "run_controller.hpp"
 #include "run_panel.hpp"
 
@@ -6,11 +8,18 @@
 #include <visionpro/core/schema_id_factory.hpp>
 
 #include <QAction>
+#include <QCryptographicHash>
 #include <QDockWidget>
+#include <QFile>
+#include <QGraphicsView>
 #include <QLabel>
+#include <QPointer>
+#include <QPushButton>
 #include <QTemporaryDir>
+#include <QTreeWidget>
 #include <QtTest>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -145,11 +154,38 @@ private:
     std::shared_ptr<Driver> driver_;
 };
 
+ToolTypeId image_tool_type() { return key<ToolTypeId>("test.ui.resource_image"); }
+CoordinateSystemId frame() { return key<CoordinateSystemId>("test.ui.resource_frame"); }
+
+class ResourceImageTool final : public ToolInstance {
+public:
+    explicit ResourceImageTool(const ToolExecutionConfiguration& configuration) : ToolInstance(configuration) {}
+
+private:
+    Result<InvocationStart> begin(std::shared_ptr<const InvocationContext> context, InvocationCompletion) override
+    {
+        const auto& call = context->data();
+        const auto lease = std::dynamic_pointer_cast<const FileResourceLease>(call.resources.front().lease);
+        if (!lease || lease->bytes().size() != 1) {
+            return Diagnostic{ErrorCode::InvalidResource, Severity::Error, {}, "Expected one fixture byte."};
+        }
+        const auto setting = static_cast<std::byte>(*call.parameters.front().value.as_int64());
+        const auto byte = lease->bytes().front();
+        const std::array pixels{setting, byte, byte, setting};
+        const auto image = take(ImageHandle::copy({2, 2, 2, {PixelDepth::UInt8, ChannelOrder::Mono}}, pixels, frame()));
+        return InvocationStart{ToolCompletion{call.identity, ToolCompletionStatus::Succeeded, ToolJudgement::OK,
+            {{key<OutputId>("image"), take(DataValue::image({image, {}, {}}))}}, {}}};
+    }
+};
+
 class Factory final : public ToolInstanceFactory {
 public:
     explicit Factory(std::shared_ptr<Driver> driver) : driver_(std::move(driver)) {}
     Result<std::shared_ptr<ToolInstance>> create(const ToolExecutionConfiguration& configuration) override
     {
+        if (configuration.data().tool.id == image_tool_type()) {
+            return std::shared_ptr<ToolInstance>{std::make_shared<ResourceImageTool>(configuration)};
+        }
         return std::shared_ptr<ToolInstance>{std::make_shared<ControlledTool>(configuration, driver_)};
     }
 
@@ -165,8 +201,16 @@ ToolRegistry registry_for(const std::shared_ptr<Driver>& driver)
         {}, {}, {{key<OutputId>("measurement"), "Measurement", DataType::integer()}}};
     tool.execution.mode = ToolExecutionMode::Asynchronous;
     tool.execution.cancellation = ToolCancellation::Cooperative;
+    ParameterDescriptor setting{key<ParameterId>("setting"), "Setting", DataType::integer()};
+    setting.constraints.integer_range = IntegerRange{0, 255};
+    ToolDescriptor image{image_tool_type(), "Resource image", 1, {key<SchemaId>("test.ui.resource_image.schema"), 1},
+        {setting}, {}, {{key<OutputId>("image"), "Image", DataType::image(), {MeasurementUnit::Pixel, frame()}}}};
+    image.resources = {{key<SchemaId>("payload"), ResourceKind::Binary}};
+    image.image_formats = {{PixelDepth::UInt8, ChannelOrder::Mono}};
+    const auto factory = std::make_shared<Factory>(driver);
     return take(ToolRegistry::create(std::array{
-        ToolRegistration{tool, {tool.schema.id, 1, 1, {}}, std::make_shared<Factory>(driver)}
+        ToolRegistration{tool, {tool.schema.id, 1, 1, {}}, factory},
+        ToolRegistration{image, {image.schema.id, 1, 1, {}}, factory}
     }));
 }
 
@@ -177,6 +221,19 @@ Solution solution_for(char suffix)
         {{node, "Controlled node", ToolConfiguration{tool_type(), 1}}}, {}, {}, {node}};
     return {uuid<SolutionId>(suffix), suffix == '1' ? "First solution" : "Replacement solution",
         solution_format_version, 1, {std::move(flow)}};
+}
+
+ExternalFileResource locked_resource(std::string name, char payload, std::uint64_t revision)
+{
+    const auto digest = QCryptographicHash::hash(QByteArray(1, payload), QCryptographicHash::Sha256);
+    return {{PathBase::SolutionDirectory, std::move(name), {}}, ResourceReadPolicy::SnapshotLocked,
+        digest.toHex().toStdString(), revision};
+}
+
+bool write_byte(const QString& path, char value)
+{
+    QFile file(path);
+    return file.open(QIODevice::WriteOnly) && file.write(QByteArray(1, value)) == 1;
 }
 
 template<class Widget>
@@ -197,6 +254,8 @@ class RunLifecycleTests final : public QObject {
 private slots:
     void cancel_with_slow_panel_and_resume_after_hiding();
     void replace_and_close_with_pending_physical_exit();
+    void edits_preserve_running_capture_and_displayed_image();
+    void late_completion_after_window_destruction();
 };
 
 void RunLifecycleTests::cancel_with_slow_panel_and_resume_after_hiding()
@@ -319,6 +378,141 @@ void RunLifecycleTests::replace_and_close_with_pending_physical_exit()
     QTRY_VERIFY(!window.isVisible() && !controller.has_session_work());
     QVERIFY(take(second.inspect()).quiescent);
     QCOMPARE(driver->cancellations.load(), 0U);
+}
+
+void RunLifecycleTests::edits_preserve_running_capture_and_displayed_image()
+{
+    QTemporaryDir scratch;
+    QVERIFY(scratch.isValid());
+    const auto first_path = scratch.filePath(QStringLiteral("first.bin"));
+    QVERIFY(write_byte(first_path, 17));
+    QVERIFY(write_byte(scratch.filePath(QStringLiteral("second.bin")), 31));
+
+    auto solution = solution_for('1');
+    const auto gate = uuid<NodeId>('1');
+    const auto successor = uuid<NodeId>('2');
+    const auto resource = uuid<ResourceId>('1');
+    const auto setting = key<ParameterId>("setting");
+    auto& flow = solution.workflows.front();
+    flow.nodes.push_back({successor, "Resource-backed image", ToolConfiguration{image_tool_type(), 1},
+        {{setting, {ConfigValue::integer(7)}}}, {{key<SchemaId>("payload"), {resource, ResourceKind::Binary, 1}}}});
+    flow.control_links.push_back({uuid<ControlLinkId>('1'), gate, {}, successor});
+    solution.resources = {{resource, "Snapshot-locked byte", ResourceKind::Binary, locked_resource("first.bin", 17, 1)}};
+    solution.coordinates = {{frame(), CoordinateKind::Image, MeasurementUnit::Pixel,
+        {0, 0}, {1, 0}, {0, -1}, Handedness::LeftHanded}};
+    const fs::path directory(scratch.path().toStdWString());
+    take(write_new_solution(directory, solution));
+
+    auto driver = std::make_shared<Driver>();
+    EditorWindow window(solution_for('2'), registry_for(driver));
+    const DrainOnExit drain{*driver};
+    auto& controller = control<RunController>(window, "runController");
+    auto& panel = control<RunPanel>(window, "runPanel");
+    auto& dock = control<QDockWidget>(window, "runDock");
+    auto& start = control<QAction>(window, "runWorkflow");
+    auto& nodes = control<QTreeWidget>(window, "runNodes");
+    auto& open_image = control<QPushButton>(window, "showRunImage");
+    auto& images = control<ImagePanel>(window, "imagePanel");
+    auto& provenance = control<QLabel>(window, "imageProvenance");
+    controller.set_limits(1, controller.observation_capacity());
+    window.show();
+    window.open_document(directory);
+    QTRY_VERIFY(!window.file_busy() && window.draft().id == solution.id && start.isEnabled());
+
+    start.trigger();
+    QTRY_VERIFY(controller.runs().size() == 1 && driver->call(0));
+    const auto first = controller.runs().front().identity();
+    auto* canvas = qobject_cast<QGraphicsView*>(window.centralWidget());
+    QVERIFY(canvas);
+    auto* scene = qobject_cast<ControlScene*>(canvas->scene());
+    QVERIFY(scene);
+    QVERIFY(scene->edit_draft(QStringLiteral("Change setting and resource during run"), [](Solution& draft) -> Result<std::monostate> {
+        draft.resources.front().location = locked_resource("second.bin", 31, 2);
+        auto& edited = draft.workflows.front().nodes.back();
+        edited.resources.front().resource.revision = 2;
+        edited.bindings.front().sources.front() = ConfigValue::integer(11);
+        return std::monostate{};
+    }));
+    QVERIFY(write_byte(first_path, 99));
+    QVERIFY(!start.isEnabled());
+    {
+        const auto run = controller.runs().front();
+        const auto call = *driver->call(0);
+        take(call.completion.complete(succeeded(call)));
+        take(call.completion.mark_exited());
+        const auto finished = await(run, RunWaitTarget::Quiescence);
+        QVERIFY(finished.outcome == RunWaitOutcome::Satisfied);
+        QCOMPARE(finished.progress.status, ExecutionStatus::Succeeded);
+        const auto trace = std::ranges::find(finished.progress.nodes, successor, &RunNodeProgress::node);
+        QVERIFY(trace != finished.progress.nodes.end() && trace->resources.size() == 1);
+        QVERIFY(trace->resources.front().reference.revision == 1);
+    }
+    QTRY_VERIFY(start.isEnabled() && nodes.topLevelItemCount() == 2);
+    nodes.setCurrentItem(nodes.topLevelItem(1));
+    QVERIFY(panel.selected_invocation() && panel.selected_invocation()->node == successor);
+    QVERIFY(open_image.isEnabled());
+    open_image.click();
+    const std::array first_pixels{std::byte{7}, std::byte{17}, std::byte{17}, std::byte{7}};
+    QVERIFY(images.frame() && std::ranges::equal(images.frame()->copy_pixels(), first_pixels));
+    const auto first_label = provenance.text();
+    QVERIFY(!first_label.isEmpty());
+
+    start.trigger();
+    QTRY_VERIFY(controller.runs().size() == 2 && driver->call(1));
+    const auto second = controller.runs().back();
+    QVERIFY(second.identity().snapshot.session == first.snapshot.session);
+    QVERIFY(second.identity().snapshot.snapshot > first.snapshot.snapshot);
+    QVERIFY(dock.close() && dock.isHidden());
+    const auto call = *driver->call(1);
+    take(call.completion.complete(succeeded(call)));
+    take(call.completion.mark_exited());
+    const auto finished = await(second, RunWaitTarget::Quiescence);
+    QVERIFY(finished.outcome == RunWaitOutcome::Satisfied);
+    QCOMPARE(finished.progress.status, ExecutionStatus::Succeeded);
+    const auto trace = std::ranges::find(finished.progress.nodes, successor, &RunNodeProgress::node);
+    QVERIFY(trace != finished.progress.nodes.end() && trace->resources.size() == 1);
+    QVERIFY(trace->resources.front().reference.revision == 2);
+    QTRY_VERIFY(start.isEnabled() && controller.runs().size() == 1);
+    QVERIFY(controller.runs().front().identity() == second.identity());
+
+    dock.show();
+    QTRY_VERIFY(panel.selected_run() && panel.selected_run()->identity() == second.identity());
+    QVERIFY(images.frame() && std::ranges::equal(images.frame()->copy_pixels(), first_pixels));
+    QCOMPARE(provenance.text(), first_label);
+    auto& view = control<ImageView>(window, "imageView");
+    const auto pixel = view.pixel_at(view.mapFromScene(QPointF{1, 0}));
+    QVERIFY(pixel && pixel->samples[0] == 17);
+
+    nodes.setCurrentItem(nodes.topLevelItem(1));
+    QVERIFY(open_image.isEnabled());
+    open_image.click();
+    const std::array second_pixels{std::byte{11}, std::byte{31}, std::byte{31}, std::byte{11}};
+    QVERIFY(images.frame() && std::ranges::equal(images.frame()->copy_pixels(), second_pixels));
+    QVERIFY(provenance.text() != first_label);
+}
+
+void RunLifecycleTests::late_completion_after_window_destruction()
+{
+    auto driver = std::make_shared<Driver>();
+    auto window = std::make_unique<EditorWindow>(solution_for('1'), registry_for(driver));
+    const DrainOnExit drain{*driver};
+    auto& controller = control<RunController>(*window, "runController");
+    const QPointer<RunPanel> panel(&control<RunPanel>(*window, "runPanel"));
+    window->show();
+    control<QAction>(*window, "runWorkflow").trigger();
+    QTRY_VERIFY(controller.runs().size() == 1 && driver->call(0));
+    const auto run = controller.runs().front();
+    const auto call = *driver->call(0);
+    window.reset();
+    QVERIFY(panel.isNull());
+    take(call.completion.complete(succeeded(call)));
+    take(call.completion.mark_exited());
+    const auto finished = await(run, RunWaitTarget::Quiescence);
+    QVERIFY(finished.outcome == RunWaitOutcome::Satisfied && finished.progress.quiescent);
+    QCOMPARE(finished.progress.status, ExecutionStatus::Succeeded);
+    const auto retained = take(run.lookup(call.identity.invocation));
+    QVERIFY(retained && retained->data().status == ExecutionStatus::Succeeded);
+    QCoreApplication::processEvents();
 }
 
 } // namespace

@@ -51,7 +51,29 @@ if(VISIONPRO_WITH_OPENCV)
         visionpro_ui visionpro_app_tools visionpro_visual_preview visionpro_build_options Qt6::Test
     )
     add_test(NAME visionpro_visual_tests COMMAND visionpro_visual_tests -platform offscreen)
-    list(APPEND ui_tests visionpro_visual_tests)
+
+    add_executable(visionpro_acceptance_parity_tests
+        acceptance_parity_tests.cpp "${PROJECT_SOURCE_DIR}/source/app/run_summary.cpp")
+    set_target_properties(visionpro_acceptance_parity_tests PROPERTIES AUTOMOC ON)
+    target_include_directories(visionpro_acceptance_parity_tests PRIVATE "${PROJECT_SOURCE_DIR}/source/app")
+    target_include_directories(visionpro_acceptance_parity_tests SYSTEM PRIVATE
+        "${PROJECT_SOURCE_DIR}/third_party/nlohmann_json/include")
+    target_compile_definitions(visionpro_acceptance_parity_tests PRIVATE
+        "VISIONPRO_S4_DIRECTORY=\"${PROJECT_SOURCE_DIR}/samples/s4\""
+        "VISIONPRO_TEST_CLI=\"$<TARGET_FILE:visionpro_cli>\"")
+    target_link_libraries(visionpro_acceptance_parity_tests PRIVATE
+        visionpro_ui visionpro_app_tools visionpro_infrastructure visionpro_build_options Qt6::Test)
+    add_dependencies(visionpro_acceptance_parity_tests visionpro_cli)
+    add_test(NAME visionpro_acceptance_parity_tests COMMAND visionpro_acceptance_parity_tests -platform offscreen
+        -o acceptance-parity.log,txt)
+    list(APPEND ui_tests visionpro_visual_tests visionpro_acceptance_parity_tests)
+
+    if(WIN32)
+        add_executable(visionpro_acceptance_load acceptance_load.cpp)
+        target_compile_definitions(visionpro_acceptance_load PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+        target_link_libraries(visionpro_acceptance_load PRIVATE
+            visionpro_ui visionpro_app_tools visionpro_infrastructure visionpro_build_options Qt6::Test psapi)
+    endif()
 endif()
 
 set_tests_properties(${ui_tests} PROPERTIES
@@ -61,6 +83,7 @@ set_tests_properties(${ui_tests} PROPERTIES
 )
 if(VISIONPRO_WITH_OPENCV)
     set_property(TEST visionpro_editor_tests visionpro_editor_run_tests visionpro_run_lifecycle_tests visionpro_visual_tests
+        visionpro_acceptance_parity_tests
         APPEND PROPERTY ENVIRONMENT_MODIFICATION
         "PATH=path_list_prepend:$<TARGET_FILE_DIR:opencv_core>")
 endif()

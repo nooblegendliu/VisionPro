@@ -36,8 +36,8 @@ S4.7 完成当前范围的整体验收，交付固定方案、输入清单和下
 S5.2 接通同会话草稿发布与资源隔离，已验证切换和关闭协调。
 S5.3 完成桌面草稿编辑、作用域定位和方案文件往返，已验证独立 CLI 可运行编辑器保存的方案。
 S5.4 完成 UInt8 灰度和 BGR 查看、ROI 编辑及有效成员预览，已用 S4 固定样例验证同轮结果叠加。
-S5.5 完成桌面运行、取消、单节点隔离调试、结果历史和 Blob 查看。S5.6 进行整体验收。
-后续实施与验收安排见 [§9](#9-第五阶段实施与验收计划)。
+S5.5 完成桌面运行、取消、单节点隔离调试、结果历史和 Blob 查看。
+S5.6 通过 GUI/CLI 对照、交互生命周期回归和负载验收。[S5 验收与交接](s5-acceptance.md)
 
 开发顺序以 [requirements.md](requirements.md) 为准：
 
@@ -47,7 +47,7 @@ S5.5 完成桌面运行、取消、单节点隔离调试、结果历史和 Blob 
 | 2. 核心模型与绑定验证 | S2.1–S2.7 完成；14 项必需子范围和 Release 验证通过，整体记录见 §8.10 |
 | 3. 无 GUI 执行与配置往返验证 | S3.1–S3.9 完成。Release 82/82 项通过，26 项 S3 必验范围全部通过 |
 | 4. 无 GUI 视觉闭环 | 使用少量真实 OpenCV 工具及固定图像验证结果 |
-| 5. 基础可视化界面 | S5.1–S5.5 已验收。整体验收见 §9 |
+| 5. 基础可视化界面 | S5.1–S5.6 已验收。整体验收见 §9.10 |
 | 6. 后续能力 | 完整循环、多流程并行、触发、共享服务、设备及扩展工具 |
 
 绑定校验与解析先于或伴随执行器实现。
@@ -733,6 +733,39 @@ cmake --install $guiBuild --config Release --prefix $installPrefix --component V
 在画布上选中普通工具节点后，通过 **Run → Debug Selected Node…** 提供本次输入。桌面输入表单支持 Bool、Int64、Float64、String 和 OpenCV 构建中的 UInt8 文件图像。仍需满足选中工具的参数、资源和输入约束。
 **Run → History and Notifications…** 可配置历史轮数及观察容量。在历史下拉框中选择具体运行会固定该轮，选择 **Latest run** 恢复随最新轮更新。
 定向复测使用 `-R '^visionpro_(editor_run|run_lifecycle|visual)_tests$'`。
+
+### 3.29 S5.6 Release 构建与验收
+
+按 [§3.28](#328-s55-release-构建与测试) 的两套 Ninja Release 命令配置和构建，将 `$guiBuild`、`$headlessBuild` 和 `$installPrefix` 分别设为 `out/build/s56-gui`、`out/build/s56-headless` 和 `out/install/s56-gui`。
+GUI 配置同时启用 OpenCV。独立 CLI 配置关闭 GUI 和 OpenCV。两套均启用 `BUILD_TESTING` 并运行全量 CTest。
+
+从仓库根目录复测对照、生命周期和图像用例。CTest 使用 offscreen 平台。Windows 平台复测用以下命令生成独立日志。
+
+```powershell
+$guiBuild = (Resolve-Path -LiteralPath 'out/build/s56-gui').Path
+ctest --test-dir $guiBuild -C Release --output-on-failure -R '^visionpro_(acceptance_parity|run_lifecycle|visual)_tests$'
+if ($LASTEXITCODE -ne 0) { throw 'Desktop regression failed.' }
+
+$openCvBin = (Resolve-Path -LiteralPath (Join-Path $env:OpenCV_DIR '../bin')).Path
+$savedPath = $env:Path
+$savedPlatformPath = $env:QT_QPA_PLATFORM_PLUGIN_PATH
+$env:Path = "$qtPrefix/bin;$openCvBin;$env:Path"
+$env:QT_QPA_PLATFORM_PLUGIN_PATH = "$qtPrefix/plugins/platforms"
+try {
+    foreach ($suite in 'acceptance_parity', 'run_lifecycle', 'visual') {
+        $exe = Join-Path $guiBuild "tests/ui/visionpro_${suite}_tests.exe"
+        $log = Join-Path $guiBuild "native-$suite.txt"
+        $test = Start-Process -FilePath $exe -ArgumentList '-platform', 'windows', '-o', "`"$log,txt`"" -Wait -PassThru
+        if ($test.ExitCode -ne 0) { throw "Native Qt test failed ($suite). See $log" }
+    }
+} finally {
+    $env:Path = $savedPath
+    $env:QT_QPA_PLATFORM_PLUGIN_PATH = $savedPlatformPath
+}
+```
+
+双入口用例会创建临时方案，调用独立 CLI 并在进程退出后读取完整报告。CTest 的 Qt 日志在 `tests/ui/acceptance-parity.log`。
+完整构建和回归结束后单独运行负载测量。[负载命令与门限](s5-acceptance.md#负载测量)
 
 ## 4. 第一阶段验证
 
@@ -2088,10 +2121,10 @@ ON 的 **97/97** 项和 OFF 的 **81/81** 项适用回归均通过。本轮两�
 
 ## 9. 第五阶段实施与验收计划
 
-2026-11-16 完成 **S5.1–S5.5** 验收，剩余 S5.6 综合验收。
+2026-11-16 完成 **S5.1–S5.6** 及第五阶段整体验收。
 功能范围由 [requirements §7](requirements.md#7-第五阶段基础可视化界面) 定义，
 界面适配职责见 [architecture §4](architecture.md#4-配置模型与编辑器)，运行与持久化契约见 [data-model](data-model.md)。
-本节记录实施顺序和验证安排，不把已有 S3/S4 测试或本机依赖安装记录作为 S5 完成证据。
+本节记录实施顺序、验收基准和各阶段结果。综合验收使用 S4 固定输入和 S5 桌面入口，证据见 [§9.10](#910-s56-综合验收与交接)。
 
 ### 9.1 已确定的实施基线
 
@@ -2105,7 +2138,7 @@ ON 的 **97/97** 项和 OFF 的 **81/81** 项适用回归均通过。本轮两�
 
 ### 9.2 子阶段与完成条件
 
-已完成项目见 [S5.1](#95-s51-接入与验收记录)、[S5.2](#96-s52-应用服务验收记录)、[S5.3](#97-s53-方案与流程编辑验收记录)、[S5.4](#98-s54-图像与-roi-验收记录) 和 [S5.5](#99-s55-运行与调试验收记录) 的验收记录。
+验收记录见 [S5.1](#95-s51-接入与验收记录)、[S5.2](#96-s52-应用服务验收记录)、[S5.3](#97-s53-方案与流程编辑验收记录)、[S5.4](#98-s54-图像与-roi-验收记录)、[S5.5](#99-s55-运行与调试验收记录) 和 [S5.6](#910-s56-综合验收与交接)。
 
 | 子阶段 | 交付 | 可观察完成条件 |
 |---|---|---|
@@ -2114,7 +2147,7 @@ ON 的 **97/97** 项和 OFF 的 **81/81** 项适用回归均通过。本轮两�
 | S5.3 方案与流程编辑（已完成） | 节点/流程、控制、绑定、基本 Group、复制粘贴、撤销重做、布局及文件操作 | 非相邻绑定和分支/汇合可操作；作用域错误可定位；新建、保存、另存、独立复制及重载保持约定的身份、引用和资源目标 |
 | S5.4 图像与 ROI（已完成） | UInt8 灰度/BGR 查看、像素检查、Blob/ROI/掩膜叠加及首批 ROI 编辑 | 几何轮廓与有效像素对应，缩放/平移保持业务坐标。旋转、继承、修正、排除与边界行为可对照固定夹具 |
 | S5.5 运行与调试（已完成） | 流程启动与取消、单节点隔离调试、一次性输入、历史与来源、桌面 Blob 叠加 | 单节点仅调用目标并保持会话状态。技术状态、判定、逻辑终态和实际退出分别可查。慢显示与关闭面板期间仍能完成业务运行 |
-| S5.6 综合验收 | GUI/CLI 对照、交互生命周期回归、负载测量及证据交接 | 覆盖 §9.3 全部必验范围，记录 Qt/QtNodes 及工具版本、输入、结果和限制；必需项未通过时保持 S5 未完成 |
+| S5.6 综合验收（已完成） | GUI/CLI 对照、交互生命周期回归、负载测量及证据交接 | 覆盖 §9.3 全部必验范围，记录 Qt/QtNodes 及工具版本、输入、结果和限制；必需项未通过时保持 S5 未完成 |
 
 耗时校验、资源准备、加载保存及关闭等待不得阻塞 GUI 线程；后台处理固定配置与结果，界面显示在 GUI 线程完成。
 
@@ -2133,18 +2166,16 @@ ON 的 **97/97** 项和 OFF 的 **81/81** 项适用回归均通过。本轮两�
 | A27：观察与界面生命周期 | 慢显示、通道超容、历史淘汰、关闭/重绑面板及旧会话通知；业务完成独立推进，已销毁对象不被访问 |
 | A30：单节点调试 | 一次性输入只作用于本次目标，不改持久绑定、不补跑来源或触发后继；缺输入明确失败，隔离状态不污染活动运行 |
 
-初始测量基线为 **100 个节点、300 条控制线、1920×1080 图像**。它定义测量负载，不代表已测性能或支持上限。
-记录交互延迟、显示刷新、加载/保存耗时及历史图像持有的内存占用；刷新间隔和性能通过阈值在实现与实测后收敛，阶段验收前固定并记录。
+初始测量基线为 **100 个节点、300 条控制线、1920×1080 图像**。测量记录画布操作、显示刷新、加载/保存、执行至界面可再次运行，以及历史图像的内存占用。
+合并刷新间隔和验收门限见 [§9.4](#94-合并刷新与性能门限)。
 正确性测试、Qt 集成测试、人工交互与显示检查分别记录；编译或截图不能替代双入口和生命周期验证。
 
 S4 的无 SHA-256 验收范围及其七项排除保持原记录，见 [S4 Release 回归范围](s4-acceptance.md#release-回归范围)。
 S5 不据此宣称完整托管导入已验证；后续扩大到该交付时，须补齐资源版本、摘要、清理与故障恢复验收。
 
-### 9.4 剩余实施细节
+### 9.4 合并刷新与性能门限
 
-| 待落实项 | 落点 |
-|---|---|
-| 合并刷新间隔和性能通过阈值 | 以 §9.3 负载实测，S5.6 验收前收敛；没有测量结果前不承诺响应时间或吞吐率 |
+运行面板按 **50 ms** 间隔合并刷新，观察队列超容时根据运行身份重新查询。S5.6 负载门限在试测后固定，以单独启动的 Release 进程执行验收。[负载实测、门限和复现](s5-acceptance.md#负载测量)
 
 ### 9.5 S5.1 接入与验收记录
 
@@ -2192,7 +2223,7 @@ S5.2 验收使用应用服务和文件方案入口发起运行。桌面接入见
 | Windows 部署 | 使用部署目录内的 Qt 和 OpenCV DLL 创建桌面编辑器窗口，正常关闭并返回 0 |
 
 剪贴板在当前编辑器的原流程及 Group 层内使用。普通保存保留编辑历史，另存和独立复制打开目标文档并开始新的历史。
-ROI 专用编辑见 §9.8，完整 GUI/CLI 结果对照由 S5.6 验收。
+ROI 专用编辑见 §9.8，GUI/CLI 结果对照见 §9.10。
 构建与回归日志见 `out/build/s53-gui` 和 `out/build/s53-headless` 的 `build.log`、`ctest.log`，部署启动见 GUI 构建目录的 `launch.log`。
 
 ### 9.8 S5.4 图像与 ROI 验收记录
@@ -2207,7 +2238,7 @@ ROI 专用编辑见 §9.8，完整 GUI/CLI 结果对照由 S5.6 验收。
 | Release 回归 | GUI 与 OpenCV 配置 **113/113** 项 CTest 通过。无 GUI 和无 OpenCV 配置 **92/92** 项通过，CLI 可启动，DLL 导入检查无 Qt 或 OpenCV |
 | Windows 部署 | `VisionProGui` 安装组件使用部署目录内的 Qt 和 OpenCV DLL 创建原生窗口，正常退出并返回 0 |
 
-草稿预览使用当前图像和可静态解析的同作用域阈值继承链。运行态结果和历史的桌面查看见 §9.9。S5.6 负责完整的 GUI/CLI 结果对照。
+草稿预览使用当前图像和可静态解析的同作用域阈值继承链。运行态结果和历史的桌面查看见 §9.9。
 构建和测试日志见 `out/build/s54-ninja` 与 `out/build/s54-headless` 的 `build.log`、`ctest.log`。部署启动见 GUI 构建目录的 `launch.log`。
 
 ### 9.9 S5.5 运行与调试验收记录
@@ -2223,4 +2254,9 @@ ROI 专用编辑见 §9.8，完整 GUI/CLI 结果对照由 S5.6 验收。
 | Release 回归和部署 | GUI 与 OpenCV 配置 **115/115** 项 CTest 通过，无 GUI 和无 OpenCV 配置 **92/92** 项通过。CLI 启动及 DLL 导入检查通过。部署包使用其 Qt 和 OpenCV DLL 创建原生窗口，正常退出并返回 0。 |
 
 构建和回归日志见 `out/build/s55-gui` 与 `out/build/s55-headless` 的 `build.log`、`ctest.log`。部署启动见 GUI 构建目录的 `launch.log`。
-S5.6 负责 GUI/CLI 对照、负载测量及 S5 整体交接。
+
+### 9.10 S5.6 综合验收与交接
+
+2026-11-16 完成 Windows x64 Release 回归。GUI 和 OpenCV 开启 **116/116** 项 CTest 通过，独立无 GUI 和无 OpenCV 构建 **92/92** 项通过。Windows 原生 Qt 平台复测通过双入口对照、生命周期和图像用例，部署窗口成功创建并正常关闭。[复现命令](#329-s56-release-构建与验收)
+
+三条 S4 固定流程各完成原始、语义修改、仅布局修改并重载的对照，共 **9 对**。新增回归验证运行中编辑与历史图像所有权，以及窗口销毁后迟到的完成和实际退出。负载在默认保留 16 轮、观察容量 32 的配置下通过验收门限。[验收矩阵、数值与交接](s5-acceptance.md)
