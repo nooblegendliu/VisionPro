@@ -10,6 +10,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <semaphore>
 #include <stdexcept>
 
 namespace {
@@ -86,13 +87,37 @@ std::string utf8(const fs::path& path)
 
 constexpr std::string_view digest = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
 
+class ProbeGate {
+public:
+    void pause_first()
+    {
+        if (paused_.test_and_set()) { return; }
+        entered_.release();
+        if (!resumed_.try_acquire_for(10s)) { throw std::runtime_error("The test did not release the probe."); }
+    }
+
+    [[nodiscard]] bool await() { return entered_.try_acquire_for(5s); }
+    void release() { resumed_.release(); }
+
+private:
+    std::atomic_flag paused_{};
+    std::binary_semaphore entered_{0};
+    std::binary_semaphore resumed_{0};
+};
+
+struct ReleaseProbe {
+    ProbeGate& gate;
+    ~ReleaseProbe() { gate.release(); }
+};
+
 class ByteTool final : public ToolInstance {
 public:
-    ByteTool(const ToolExecutionConfiguration& configuration, bool use_file)
-        : ToolInstance(configuration), use_file_(use_file) {}
+    ByteTool(const ToolExecutionConfiguration& configuration, bool use_file, std::shared_ptr<ProbeGate> gate)
+        : ToolInstance(configuration), use_file_(use_file), gate_(std::move(gate)) {}
 protected:
     Result<InvocationStart> begin(std::shared_ptr<const InvocationContext> context, InvocationCompletion) override
     {
+        if (gate_) { gate_->pause_first(); }
         std::int64_t byte = 0;
         if (use_file_) {
             const auto& resources = context->data().resources;
@@ -108,29 +133,33 @@ protected:
     }
 private:
     bool use_file_;
+    std::shared_ptr<ProbeGate> gate_;
 };
 
 class ByteFactory final : public ToolInstanceFactory {
 public:
-    ByteFactory(std::shared_ptr<std::atomic<int>> calls, bool use_file) : calls_(std::move(calls)), use_file_(use_file) {}
+    ByteFactory(std::shared_ptr<std::atomic<int>> calls, bool use_file, std::shared_ptr<ProbeGate> gate)
+        : calls_(std::move(calls)), use_file_(use_file), gate_(std::move(gate)) {}
     Result<std::shared_ptr<ToolInstance>> create(const ToolExecutionConfiguration& configuration) override
     {
         ++*calls_;
-        return std::shared_ptr<ToolInstance>{std::make_shared<ByteTool>(configuration, use_file_)};
+        return std::shared_ptr<ToolInstance>{std::make_shared<ByteTool>(configuration, use_file_, gate_)};
     }
 private:
     std::shared_ptr<std::atomic<int>> calls_;
     bool use_file_;
+    std::shared_ptr<ProbeGate> gate_;
 };
 
-ToolRegistry catalog(const std::shared_ptr<std::atomic<int>>& calls)
+ToolRegistry catalog(const std::shared_ptr<std::atomic<int>>& calls, const std::shared_ptr<ProbeGate>& probe)
 {
     const auto registration = [&](std::string_view name, bool use_file) {
         const auto schema = key<SchemaId>(name);
         ToolDescriptor descriptor{key<ToolTypeId>(name), std::string(name), 1, {schema, 1, {}}, {}, {},
             {{key<OutputId>("byte"), "Byte", DataType::integer()}}, {}};
         if (use_file) { descriptor.resources.push_back({key<SchemaId>("payload"), ResourceKind::Binary}); }
-        return ToolRegistration{std::move(descriptor), {schema, 1, 1, {}}, std::make_shared<ByteFactory>(calls, use_file)};
+        return ToolRegistration{std::move(descriptor), {schema, 1, 1, {}},
+            std::make_shared<ByteFactory>(calls, use_file, use_file ? nullptr : probe)};
     };
     const auto definitions = std::array{registration("s37.probe", false), registration("s37.read", true)};
     return take(ToolRegistry::create(definitions));
@@ -156,9 +185,9 @@ struct Fixture {
     const fs::path external = root / u8"外部.bin";
     const std::array<NamedResourceRoot, 1> roots{NamedResourceRoot{key<SchemaId>("fixture.root"), root}};
     const std::shared_ptr<std::atomic<int>> calls = std::make_shared<std::atomic<int>>(0);
-    const ToolRegistry registry = catalog(calls);
+    const ToolRegistry registry;
 
-    Fixture()
+    explicit Fixture(const std::shared_ptr<ProbeGate>& probe = {}) : registry(catalog(calls, probe))
     {
         write(managed, "abc");
         write(external, "abc");
@@ -191,16 +220,26 @@ struct Fixture {
     }
 };
 
+RunArguments arguments(char workflow)
+{
+    return {WorkflowTarget{id<WorkflowId>(workflow)}, {}, {TriggerKind::Manual, key<SchemaId>("s37.test")}};
+}
+
 RunRequest request(const ConfigSnapshot& snapshot, char workflow)
 {
-    return take(RunRequest::create(snapshot, WorkflowTarget{id<WorkflowId>(workflow)}, {},
-        {TriggerKind::Manual, key<SchemaId>("s37.test")}));
+    const auto run = arguments(workflow);
+    return take(RunRequest::create(snapshot, run.target, run.inputs, run.trigger));
+}
+
+RunHandle accepted(RunSubmission submission)
+{
+    if (const auto* failure = std::get_if<RunRejected>(&submission)) { throw std::runtime_error(failure->diagnostic.message); }
+    return std::get<RunHandle>(std::move(submission));
 }
 
 void output_is(RunSubmission submission, std::int64_t byte)
 {
-    if (const auto* failure = std::get_if<RunRejected>(&submission)) { throw std::runtime_error(failure->diagnostic.message); }
-    const auto run = std::get<RunHandle>(std::move(submission));
+    const auto run = accepted(std::move(submission));
     const auto done = take(run.wait(RunWaitTarget::Quiescence, std::chrono::steady_clock::now() + 5s));
     check(done.outcome == RunWaitOutcome::Satisfied && done.progress.status == ExecutionStatus::Succeeded
         && done.progress.nodes.size() == 2 && done.progress.nodes.back().invocation.has_value(),
@@ -294,6 +333,70 @@ void external_execution()
     output_is(session->submit(request(active, '2')), 'n');
 }
 
+void publication()
+{
+    const auto gate = std::make_shared<ProbeGate>();
+    Fixture fixture(gate);
+    auto model = fixture.model(ResourceFixtures::ExternalFiles);
+    // Both selected workflows use the same resource ID from their own captures.
+    model.workflows[0].nodes.back().resources.front().resource.id = id<ResourceId>('2');
+    take(write_new_solution(fixture.package, model));
+    const auto manifest = fixture.package / solution_manifest_name;
+    const auto original = read(manifest);
+    const auto source = take(load_solution(fixture.package, fixture.registry, fixture.roots));
+    auto session = take(WorkflowSession::create(fixture.registry));
+    const auto base = take(activate_solution(*session, source));
+
+    auto draft = source.solution();
+    draft.name = "Edited file-backed draft";
+    auto& named = std::get<ExternalFileResource>(draft.resources[1].location);
+    named.path.path = "edited.bin";
+    const auto edited_file = fixture.root / named.path.path;
+    write(edited_file, "initial new content");
+    const auto run = arguments('2');
+
+    const auto old = accepted(session->submit(request(base, '1')));
+    const auto current = [&] {
+        const ReleaseProbe release{*gate};
+        check(gate->await(), "The previous run waits before its file-reading successor.");
+        fs::remove(fixture.dynamic);
+        const auto admitted = accepted(publish_solution_run(*session, base, source, draft, run));
+        const auto active = session->inspect().active;
+        check(active && active->same_capture(admitted.request().snapshot())
+            && active->solution().name == draft.name && active->solution().revision == source.solution().revision,
+            "Admission publishes the exact unsaved capture.");
+        check(old.request().snapshot().same_capture(base) && admitted.identity().snapshot.session == base.identity().session
+            && admitted.identity().snapshot.snapshot > base.identity().snapshot,
+            "Publication keeps the session and the in-flight capture.");
+        write(fixture.external, "old path read at invocation");
+        write(edited_file, "new path read at invocation");
+        return admitted;
+    }();
+
+    output_is(old, 'o');
+    output_is(current, 'n');
+    check(read(manifest) == original, "Publishing the draft leaves the manifest bytes intact.");
+
+    const auto& active = current.request().snapshot();
+    const int before = *fixture.calls;
+    check(std::holds_alternative<RunRejected>(publish_solution_run(*session, base, source, draft, run)),
+        "Preparation for a stale base cannot publish again.");
+    auto missing = draft;
+    std::get<ExternalFileResource>(missing.resources[1].location).path.path = "missing.bin";
+    const auto refused = publish_solution_run(*session, active, source, missing, run);
+    rejected_run(refused, ErrorCode::ResourceNotFound, "A missing file in the chosen workflow prevents admission.");
+    check(std::get<RunRejected>(refused).diagnostic.location.resource == id<ResourceId>('2'),
+        "Resource preflight reports the chosen resource rather than the missing file outside that scope.");
+    auto unrelated = draft;
+    unrelated.id = id<SolutionId>('2');
+    rejected_run(publish_solution_run(*session, active, source, unrelated, run), ErrorCode::ResultIdentityMismatch,
+        "A source document may provide paths only for its own solution.");
+    check(*fixture.calls == before && session->inspect().active.value().same_capture(active),
+        "Refused drafts start no tools and preserve the previously published capture.");
+    output_is(session->submit(request(active, '2')), 'n');
+    check(read(manifest) == original, "Failed drafts and resubmission preserve the on-disk revision.");
+}
+
 void diagnostics(ResourceFixtures files)
 {
     Fixture fixture;
@@ -348,6 +451,8 @@ void diagnostics(ResourceFixtures files)
     rejected(open_solution_execution(read_only, fixture.registry), ErrorCode::UnsupportedSolutionContent,
         "Unknown semantics cannot be executed from a partial model.");
     rejected(activate_solution(*session, read_only), ErrorCode::UnsupportedSolutionContent, "Unknown semantics cannot replace the active session.");
+    rejected_run(publish_solution_run(*session, active, read_only, read_only.solution(), arguments('1')),
+        ErrorCode::UnsupportedSolutionContent, "Unknown semantics cannot be published from a partial model.");
     check(!fs::exists(other / solution_manifest_name) && read(candidate) == unknown
         && session->inspect().active->same_capture(active), "Both the original file and active session are preserved.");
 
@@ -372,7 +477,8 @@ int main(int argc, char** argv)
         else if (test == "diagnostics") { diagnostics(ResourceFixtures::ProtectedFiles); }
         else if (test == "external-execution") { external_execution(); }
         else if (test == "external-diagnostics") { diagnostics(ResourceFixtures::ExternalFiles); }
-        else { throw std::runtime_error("Expected execution, diagnostics, external-execution or external-diagnostics."); }
+        else if (test == "publication") { publication(); }
+        else { throw std::runtime_error("Expected execution, diagnostics, external-execution, external-diagnostics or publication."); }
         std::cout << test << ": " << checks << " checks passed\n";
         return 0;
     } catch (const std::exception& failure) {

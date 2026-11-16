@@ -1,7 +1,7 @@
 #include "canvas_example.hpp"
 #include "control_scene.hpp"
 
-#include <simulation.hpp>
+#include <tool_catalog.hpp>
 
 #include <QtNodes/GraphicsView>
 #include <QAction>
@@ -23,7 +23,7 @@ using namespace visionpro;
 
 int show_canvas(QApplication& application)
 {
-    auto registered = core::ToolRegistry::create(tools::simulation_registrations());
+    auto registered = app::make_tool_registry();
     if (const auto* failure = std::get_if<core::Diagnostic>(&registered)) {
         throw std::runtime_error(failure->message);
     }

@@ -1,8 +1,5 @@
 #include "run_summary.hpp"
-#include "simulation.hpp"
-#ifdef VISIONPRO_WITH_OPENCV
-#include "vision/vision_tools.hpp"
-#endif
+#include "tool_catalog.hpp"
 
 #include <visionpro/core/id_factory.hpp>
 #include <visionpro/core/schema_id_factory.hpp>
@@ -207,17 +204,6 @@ int run(const Arguments& args, const SolutionDocument& document, const ToolRegis
     if (wait.progress.status == ExecutionStatus::Succeeded) { return 0; }
     std::cerr << json{{"stage", "execute"}, {"diagnostics", diagnostics_json(wait.progress.diagnostics)}}.dump(2) << '\n';
     return 1;
-}
-
-Result<ToolRegistry> make_tool_registry()
-{
-    auto registrations = tools::simulation_registrations();
-#ifdef VISIONPRO_WITH_OPENCV
-    for (auto& registration : tools::vision::registrations()) {
-        registrations.push_back(std::move(registration));
-    }
-#endif
-    return ToolRegistry::create(registrations);
 }
 
 int execute(std::span<wchar_t*> args)

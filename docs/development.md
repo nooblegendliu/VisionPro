@@ -33,6 +33,7 @@ S4.7 完成当前范围的整体验收，交付固定方案、输入清单和下
 当前 Release 命令与实测结果见 [§3.23](#323-s47-release-构建与回归) 和 [§8.27](#827-s47-整体验收与交接记录)。
 
 2026-11-16，S5.1 完成 Qt 6.11.1 Widgets 和 QtNodes 3.0.16 接入，已验证桌面启动、控制画布及独立无 GUI 构建。
+S5.2 接通同会话草稿发布与资源隔离，已验证切换和关闭协调。
 后续实施与验收安排见 [§9](#9-第五阶段实施与验收计划)。
 
 开发顺序以 [requirements.md](requirements.md) 为准：
@@ -43,7 +44,7 @@ S4.7 完成当前范围的整体验收，交付固定方案、输入清单和下
 | 2. 核心模型与绑定验证 | S2.1–S2.7 完成；14 项必需子范围和 Release 验证通过，整体记录见 §8.10 |
 | 3. 无 GUI 执行与配置往返验证 | S3.1–S3.9 完成。Release 82/82 项通过，26 项 S3 必验范围全部通过 |
 | 4. 无 GUI 视觉闭环 | 使用少量真实 OpenCV 工具及固定图像验证结果 |
-| 5. 基础可视化界面 | S5.1 接入与画布验证通过，后续复用核心服务并验证 GUI 与无 GUI 执行一致，见 §9 |
+| 5. 基础可视化界面 | S5.1 画布接入、S5.2 同会话发布与资源隔离已验收，后续见 §9 |
 | 6. 后续能力 | 完整循环、多流程并行、触发、共享服务、设备及扩展工具 |
 
 绑定校验与解析先于或伴随执行器实现。
@@ -616,6 +617,30 @@ $env:Path = "$qtPrefix/bin;$env:Path"
 $env:QT_QPA_PLATFORM_PLUGIN_PATH = "$qtPrefix/plugins/platforms"
 & "$guiBuild/tests/ui/Release/visionpro_canvas_tests.exe" -platform windows
 ```
+
+### 3.25 S5.2 Release 构建与测试
+
+沿用 [§3.24](#324-s51-release-构建测试与启动) 的 `$qtPrefix` 和 `$env:OpenCV_DIR`，从仓库根目录构建两套独立的 Release 配置。
+若使用本地锁定归档，在 GUI 配置命令中追加 `-DVISIONPRO_QTNODES_ARCHIVE=<归档的绝对路径>`。
+
+```powershell
+$guiBuild = 'out/build/s52-gui'
+$headlessBuild = 'out/build/s52-headless'
+
+cmake -S . -B $guiBuild -G "Visual Studio 18 2026" -A x64 -DCMAKE_CONFIGURATION_TYPES=Release -DBUILD_TESTING=ON -DVISIONPRO_WITH_GUI=ON -DVISIONPRO_WITH_OPENCV=ON "-DCMAKE_PREFIX_PATH=$qtPrefix" "-DOpenCV_DIR=$env:OpenCV_DIR"
+cmake --build $guiBuild --config Release --parallel 4
+ctest --test-dir $guiBuild -C Release --parallel 2 --output-on-failure --no-tests=error --output-log "$guiBuild/ctest.log"
+
+cmake -S . -B $headlessBuild -G "Visual Studio 18 2026" -A x64 -DCMAKE_CONFIGURATION_TYPES=Release -DBUILD_TESTING=ON -DVISIONPRO_WITH_GUI=OFF -DVISIONPRO_WITH_OPENCV=OFF
+cmake --build $headlessBuild --config Release --parallel 4
+ctest --test-dir $headlessBuild -C Release --parallel 2 --output-on-failure --no-tests=error --output-log "$headlessBuild/ctest.log"
+
+$installPrefix = Join-Path (Get-Location) 'out/install/s52-gui'
+cmake --install $guiBuild --config Release --prefix $installPrefix --component VisionProGui
+& (Join-Path $installPrefix 'bin/visionpro_gui.exe')
+```
+
+从 S5.2 起，启用 OpenCV 的桌面包同时部署 OpenCV DLL。定向复测可给任一构建目录的 CTest 增加 `-R '^(workflow\.(session_lifecycle|session_publication|state_session_publication)|infrastructure\.file_draft_publication)$'`。
 
 ## 4. 第一阶段验证
 
@@ -1971,7 +1996,7 @@ ON 的 **97/97** 项和 OFF 的 **81/81** 项适用回归均通过。本轮两�
 
 ## 9. 第五阶段实施与验收计划
 
-2026-11-16 完成 **S5.1** 接入验收，S5.2–S5.6 按以下顺序实施。
+2026-11-16 完成 **S5.1–S5.2** 验收，S5.3–S5.6 按以下顺序实施。
 功能范围由 [requirements §7](requirements.md#7-第五阶段基础可视化界面) 定义，
 界面适配职责见 [architecture §4](architecture.md#4-配置模型与编辑器)，运行与持久化契约见 [data-model](data-model.md)。
 本节记录实施顺序和验证安排，不把已有 S3/S4 测试或本机依赖安装记录作为 S5 完成证据。
@@ -1980,7 +2005,7 @@ ON 的 **97/97** 项和 OFF 的 **81/81** 项适用回归均通过。本轮两�
 
 - 使用 §2 的现有 Qt 与 Qt Widgets。主窗口组织工具箱/流程树、流程画布、参数与绑定、图像与结果面板。
 - 使用 QtNodes 通用图层适配 VisionPro 领域模型。主连线表达执行编排，输入/参数绑定与 Group 包含关系独立编辑；QtNodes 的数据传播机制不承担业务执行，其场景 JSON 不替代方案格式。
-- 给 WorkflowSession 增加同会话配置发布能力。编辑先进入草稿，点击运行时校验并发布快照；保存与运行独立，已受理运行保留原快照及对应资源提供方。新增接口签名尚未固定。
+- 同会话运行使用 `WorkflowSession::publish_and_submit`，文件草稿使用 `publish_solution_run`。编辑先进入草稿，受理时更新活动快照，保存由独立操作完成。已受理运行保留本轮快照与资源提供方。
 - 节点、连线、绑定及布局使用统一编辑命令和撤销历史。Group 包含与基本公开边界可编辑，完整 Group 执行和复用继续归 S6。
 - 图像/ROI 交互覆盖现有 S4 能力。掩膜自由涂抹、更多 ROI 形状的高级交互后置。
 - 文件默认外部引用，复制资源到方案目录为显式操作。另存为保留稳定身份，独立复制方案生成新身份并重映射引用。完整托管导入及实际摘要校验不新增为 S5 交付范围，既有托管资源契约和能力保持不变。
@@ -1988,12 +2013,12 @@ ON 的 **97/97** 项和 OFF 的 **81/81** 项适用回归均通过。本轮两�
 
 ### 9.2 子阶段与完成条件
 
-S5.1 结果见 [§9.5](#95-s51-接入与验收记录)。其余子阶段按表中的完成条件验收。
+已完成项目见 [S5.1 验收](#95-s51-接入与验收记录) 和 [S5.2 验收](#96-s52-应用服务验收记录)。其余子阶段按表中的完成条件验收。
 
 | 子阶段 | 交付 | 可观察完成条件 |
 |---|---|---|
 | S5.1 Qt 与 QtNodes 接入（已完成） | 现有 Qt 的 GUI 构建与启动、QtNodes 版本及依赖锁定、领域模型适配验证 | 多前驱汇合、多后继分叉、命名出口、统一撤销及 Group 层级切换可表达；记录适配问题并解决；无 GUI 构建仍可独立运行 |
-| S5.2 应用服务衔接 | WorkflowSession 同会话配置发布、对应资源提供方固定、方案切换与关闭协调 | 旧运行不受编辑影响，下一次启动使用新配置；改名/布局保留兼容状态；资源修改不串到旧运行；发布失败不静默执行旧稿 |
+| S5.2 应用服务衔接（已完成） | WorkflowSession 同会话配置发布、对应资源提供方固定、方案切换与关闭协调 | 旧运行不受编辑影响，下一次启动使用新配置；改名/布局保留兼容状态；资源修改不串到旧运行；发布失败不静默执行旧稿 |
 | S5.3 方案与流程编辑 | 节点/流程、控制、绑定、基本 Group、复制粘贴、撤销重做、布局及文件操作 | 非相邻绑定和分支/汇合可操作；作用域错误可定位；新建、保存、另存、独立复制及重载保持约定的身份、引用和资源目标 |
 | S5.4 图像与 ROI | UInt8 灰度/BGR 查看、像素检查、Blob/ROI/掩膜叠加及首批 ROI 编辑 | 几何轮廓与有效像素对应，缩放/平移不改变业务坐标；旋转、继承、修正、排除与边界行为可对照固定夹具 |
 | S5.5 运行与调试 | 流程启动/取消、单节点一次性输入、隔离调试、历史与诊断 | 目标外节点不补跑，调试不污染活动状态；技术状态与 OK/NG 分开；逻辑终态与实际退出明确显示；慢显示和关闭面板不阻塞业务完成 |
@@ -2027,7 +2052,6 @@ S5 不据此宣称完整托管导入已验证；后续扩大到该交付时，�
 
 | 待落实项 | 落点 |
 |---|---|
-| 同会话发布、运行资源固定及管理协调的具体接口 | S5.2 按 data-model 契约实现，不预先把示意接口写成现有 API |
 | 主窗口具体布局、控件交互及显示样式 | S5.3–S5.5 随功能实现细化，保持业务配置与显示设置分离 |
 | 合并刷新间隔和性能通过阈值 | 以 §9.3 负载实测，S5.6 验收前收敛；没有测量结果前不承诺响应时间或吞吐率 |
 
@@ -2047,3 +2071,18 @@ QtNodes 的默认几何计算通过 `NodeRole::Size` 回写尺寸，适配器将
 Qt 6 鼠标事件携带视口控件，QtNodes 3.0.16 默认连接图元的移动和释放处理把该控件转换为视图。适配场景接管连接图元的这两类事件，沿用 QtNodes 的临时连线图元，按落点提交带稳定 ID 的领域命令。[Qt 6.11.1 事件实现](https://github.com/qt/qtbase/blob/v6.11.1/src/widgets/graphicsview/qgraphicsview.cpp) [QtNodes 连接图元](https://github.com/paceholder/nodeeditor/blob/7c6341a66a8e46b8988140b9e60d892b6a3560b3/src/ConnectionGraphicsObject.cpp)
 
 两套构建日志分别位于 `out/build/s51-gui` 和 `out/build/s51-headless` 的 `build.log` 与 `ctest.log`。Windows 画布测试明细和部署启动记录位于 GUI 构建目录的 `canvas-tests-windows.txt` 与 `launch.log`。
+
+### 9.6 S5.2 应用服务验收记录
+
+2026-11-16 使用与 S5.1 相同的 Windows x64 Release `/MD` 工具链完成构建与全量 CTest。[复现命令](#325-s52-release-构建与测试)
+
+| 验证范围 | 实测结果 |
+|---|---|
+| 同会话发布、切换与关闭 | `workflow.session_publication` 验证旧运行物理退出前保留提供方，旧后继使用原绑定和资源。新运行和后续提交采用已发布配置。忙、校验失败、预检失败及过期提交保留活动配置。`workflow.session_lifecycle` 验证切换和关闭排空，以及同方案重新激活后拒绝旧捕获 |
+| 工具状态 | `workflow.state_session_publication` 验证改名和布局调整保留累计状态，不兼容绑定创建新代次 |
+| 文件草稿 | `infrastructure.file_draft_publication` 使用同一资源 ID 的两条文件路径，验证旧、新后继在实际调用时分别读取各自路径。未选范围缺文件时所选目标仍可运行，选中资源缺失返回诊断并保留清单与活动快照 |
+| Release 回归 | GUI 与 OpenCV 开启 **108/108** 通过，关闭两者的独立构建 **91/91** 通过。无 GUI CLI 的帮助命令正常退出，二进制未导入 Qt 或 OpenCV DLL |
+| Windows 部署启动 | `VisionProGui` 安装随包的 Qt 和 OpenCV DLL。在清除开发套件查找路径后，程序创建流程画布窗口并正常退出 |
+
+GUI 运行控件由 S5.5 接入。本轮验收使用应用服务和文件方案入口发起运行。
+构建、回归和启动日志分别见 `out/build/s52-gui` 与 `out/build/s52-headless` 的 `build.log`、`ctest.log` 和 `launch.log`。

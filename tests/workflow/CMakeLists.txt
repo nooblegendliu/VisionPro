@@ -105,7 +105,9 @@ target_link_libraries(visionpro_workflow_state_tests PRIVATE visionpro_workflow 
 add_test(NAME workflow.state_lifetimes COMMAND visionpro_workflow_state_tests lifetimes)
 add_test(NAME workflow.debug_state_isolation COMMAND visionpro_workflow_state_tests debug)
 add_test(NAME workflow.state_acceptance COMMAND visionpro_workflow_state_tests acceptance)
-set_tests_properties(workflow.state_lifetimes workflow.debug_state_isolation workflow.state_acceptance PROPERTIES TIMEOUT 30)
+add_test(NAME workflow.state_session_publication COMMAND visionpro_workflow_state_tests publication)
+set_tests_properties(workflow.state_lifetimes workflow.debug_state_isolation workflow.state_acceptance
+    workflow.state_session_publication PROPERTIES TIMEOUT 30)
 
 add_executable(visionpro_workflow_independent_tests workflow_independent_tests.cpp)
 target_link_libraries(visionpro_workflow_independent_tests PRIVATE visionpro_workflow visionpro_build_options)
@@ -124,9 +126,10 @@ add_test(NAME workflow.run_observations COMMAND visionpro_workflow_observation_t
 add_executable(visionpro_workflow_session_tests workflow_session_tests.cpp)
 target_link_libraries(visionpro_workflow_session_tests PRIVATE visionpro_workflow visionpro_build_options Threads::Threads)
 add_test(NAME workflow.session_lifecycle COMMAND visionpro_workflow_session_tests)
+add_test(NAME workflow.session_publication COMMAND visionpro_workflow_session_tests publication)
 
 set_tests_properties(workflow.result_retention workflow.external_result_delivery
-    workflow.run_observations workflow.session_lifecycle PROPERTIES TIMEOUT 30)
+    workflow.run_observations workflow.session_lifecycle workflow.session_publication PROPERTIES TIMEOUT 30)
 
 if(VISIONPRO_WITH_OPENCV)
     add_executable(visionpro_vision_integration_tests vision_integration_tests.cpp)

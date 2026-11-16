@@ -177,6 +177,27 @@ core::Result<LoadedSolutionExecution> open_solution_execution(const SolutionDocu
     return LoadedSolutionExecution{std::get<ConfigSnapshot>(std::move(snapshot)), std::move(engine)};
 }
 
+workflow::RunSubmission publish_solution_run(WorkflowSession& session, const ConfigSnapshot& base,
+    const SolutionDocument& source, const Solution& draft, const RunArguments& run)
+{
+    try {
+        if (!source.can_save()) { return RunRejected{unknown_content(source)}; }
+        if (draft.id != source.solution().id || base.solution().id != source.solution().id) {
+            return RunRejected{error(ErrorCode::ResultIdentityMismatch,
+                "The draft, active capture and source document must belong to the same solution.", draft.id)};
+        }
+        if (draft.format_version != solution_format_version) {
+            return RunRejected{error(ErrorCode::UnsupportedSolutionFormat,
+                "The draft's solution format version is unsupported.", draft.id)};
+        }
+        auto prepared = FileResourceProvider::create(draft, source.directory(), source.resource_roots());
+        if (auto* failure = std::get_if<Diagnostic>(&prepared)) { return RunRejected{std::move(*failure)}; }
+        return session.publish_and_submit(base, draft, run, std::get<std::shared_ptr<FileResourceProvider>>(std::move(prepared)));
+    } catch (...) {
+        return RunRejected{error(ErrorCode::ExecutionBoundaryFailure, "Could not publish the file-backed draft run.", draft.id)};
+    }
+}
+
 core::Result<workflow::ConfigSnapshot> activate_solution(WorkflowSession& session, const SolutionDocument& document)
 {
     if (!document.can_save()) { return unknown_content(document); }

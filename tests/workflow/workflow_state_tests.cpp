@@ -2,6 +2,7 @@
 #include <visionpro/core/runtime_id_factory.hpp>
 #include <visionpro/core/schema_id_factory.hpp>
 #include <visionpro/workflow/workflow_engine.hpp>
+#include <visionpro/workflow/workflow_session.hpp>
 
 #include <algorithm>
 #include <array>
@@ -279,6 +280,12 @@ Solution counters(const ToolDescriptor& tool, std::vector<Node> nodes)
     return {uuid<SolutionId>(), "State service", 1, 1, {std::move(flow)}};
 }
 
+ToolRegistry counter_registry(const ToolDescriptor& descriptor, const std::shared_ptr<Driver>& driver)
+{
+    return take(ToolRegistry::create(std::array{ToolRegistration{descriptor,
+        {descriptor.schema.id, 1, 1, {}}, std::make_shared<CounterFactory>(driver)}}));
+}
+
 struct Fixture {
     std::shared_ptr<Driver> driver{std::make_shared<Driver>()};
     const ToolDescriptor descriptor;
@@ -290,8 +297,7 @@ struct Fixture {
         StateMutationTiming mutation = StateMutationTiming::OnResultAccepted,
         StateCompatibilityPolicy compatibility = StateCompatibilityPolicy::PreserveCompatible)
         : descriptor(counter_descriptor(mode, mutation, compatibility)),
-          registry(take(ToolRegistry::create(std::array{ToolRegistration{descriptor,
-              {descriptor.schema.id, 1, 1, {}}, std::make_shared<CounterFactory>(driver)}}))),
+          registry(counter_registry(descriptor, driver)),
           engine(take(WorkflowEngine::create(registry))) {}
 
     ~Fixture() { driver->drain(); }
@@ -442,6 +448,49 @@ void generation_on_configuration_edit()
     ++solution.revision;
     check(run(fixture.capture(solution), 1, 18) != generation, "Changing the binding starts a new strict generation.");
     check_counts(fixture, node.id, 4, 2);
+}
+
+void session_publication_preserves_compatible_state()
+{
+    const auto driver = std::make_shared<Driver>();
+    const auto descriptor = counter_descriptor(ToolExecutionMode::Synchronous, StateMutationTiming::OnResultAccepted,
+        StateCompatibilityPolicy::AlwaysNewGeneration);
+    const auto node = counter_node(descriptor, '2', 17, "session");
+    auto draft = counters(descriptor, {node});
+    auto& flow = draft.workflows.front();
+    const auto session = take(WorkflowSession::create(counter_registry(descriptor, driver)));
+    const auto base = take(session->activate(draft));
+    RunArguments args{WorkflowTarget{flow.id}, {{key<InputId>("delta"), DataValue::integer(3)}},
+        {TriggerKind::Manual, key<SchemaId>("s35.test")}};
+    const auto original = take(RunRequest::create(base, args.target, args.inputs, args.trigger));
+    const auto first = accepted(session->submit(original));
+    expect_total(first, wait_for(first), node.id, 20);
+    const auto original_state = driver->counts(node.id).latest->state;
+
+    flow.nodes.front().name = "Renamed counter";
+    draft.layouts = {{flow.id, {{node.id, 12, 18}}}};
+    args.inputs.front().value = DataValue::integer(4);
+    const auto second = accepted(session->publish_and_submit(base, draft, args, {}));
+    expect_total(second, wait_for(second), node.id, 24);
+    const auto second_counts = driver->counts(node.id);
+    check(second_counts.latest->state == original_state && second_counts.initialized == 1,
+        "Renaming and positioning preserve the accumulated state after publication.");
+    const auto& renamed = second.request().snapshot();
+    check(renamed.identity().session == base.identity().session && renamed.identity().snapshot > base.identity().snapshot
+        && renamed.solution().revision == base.solution().revision
+        && renamed.solution().workflows.front().nodes.front().name == "Renamed counter"
+        && renamed.solution().layouts.front().nodes.front().x == 12
+        && first.request().snapshot().solution().workflows.front().nodes.front().name == node.name,
+        "The new run sees the unsaved edit while the original run's configuration is detached.");
+
+    flow.nodes.front().bindings.back().sources = {ConfigValue::integer(8)};
+    const auto third = accepted(session->publish_and_submit(renamed, draft, args, {}));
+    expect_total(third, wait_for(third), node.id, 25);
+    const auto third_counts = driver->counts(node.id);
+    check(third_counts.latest->state.domain == original_state.domain
+        && third_counts.latest->state.generation != original_state.generation && third_counts.initialized == 2,
+        "An incompatible binding creates a new generation in the same session-state domain.");
+    expect_total(first, take(first.inspect()), node.id, 20);
 }
 
 void debug_isolation()
@@ -605,6 +654,7 @@ int main(int argc, char** argv)
         if (test == "lifetimes") { lifetimes(); generation_on_configuration_edit(); }
         else if (test == "debug") { debug_isolation(); }
         else if (test == "acceptance") { state_acceptance(); immediate_mutation(); }
+        else if (test == "publication") { session_publication_preserves_compatible_state(); }
         else { throw std::runtime_error("Unknown state-service test case."); }
         std::cout << test << ": " << checks << " checks passed\n";
         return 0;

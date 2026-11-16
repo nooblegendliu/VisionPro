@@ -8,6 +8,7 @@ add_test(NAME infrastructure.file_resource_execution COMMAND visionpro_solution_
 add_test(NAME infrastructure.solution_diagnostic_loading COMMAND visionpro_solution_file_tests diagnostics)
 add_test(NAME infrastructure.external_file_resource_execution COMMAND visionpro_solution_file_tests external-execution)
 add_test(NAME infrastructure.external_solution_diagnostic_loading COMMAND visionpro_solution_file_tests external-diagnostics)
+add_test(NAME infrastructure.file_draft_publication COMMAND visionpro_solution_file_tests publication)
 
 add_executable(visionpro_solution_save_tests solution_save_tests.cpp)
 target_compile_definitions(visionpro_solution_save_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
@@ -22,4 +23,5 @@ set_tests_properties(infrastructure.solution_roundtrip infrastructure.file_resou
     infrastructure.solution_diagnostic_loading infrastructure.solution_save_failures
     infrastructure.solution_save_conflict infrastructure.solution_save_cleanup
     infrastructure.external_file_resource_execution infrastructure.external_solution_diagnostic_loading
+    infrastructure.file_draft_publication
     infrastructure.external_solution_save_failures infrastructure.external_solution_save_conflict PROPERTIES TIMEOUT 30)

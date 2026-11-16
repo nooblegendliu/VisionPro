@@ -5,6 +5,8 @@
 #include <visionpro/workflow/run_observation.hpp>
 
 #include <cstddef>
+#include <memory>
+#include <variant>
 
 namespace visionpro::workflow {
 
@@ -39,6 +41,16 @@ public:
     // accepted calls through physical exit, and releases session-owned state.
     [[nodiscard]] core::Result<std::monostate> close();
 private:
+    friend class WorkflowSession;
+    struct PreparedSubmission;
+    using Preparation = std::variant<std::shared_ptr<PreparedSubmission>, RunRejected, RunBusy>;
+    // Preparation runs with an explicit provider (which can be null) and
+    // reserves no slot. Admission consumes one preparation after rechecking
+    // the slot, without calling back into the provider.
+    [[nodiscard]] Preparation prepare(const RunRequest& request,
+        std::shared_ptr<InvocationResourceProvider> provider);
+    [[nodiscard]] RunSubmission admit(std::shared_ptr<PreparedSubmission> prepared);
+
     struct Impl;
     explicit WorkflowEngine(std::unique_ptr<Impl> impl);
     std::unique_ptr<Impl> impl_;

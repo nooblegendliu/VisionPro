@@ -522,9 +522,12 @@ struct ActiveCall {
 };
 
 struct Work {
-    Work(ExecutionPlan configured, std::shared_ptr<EngineRun> backend)
-        : plan(std::move(configured)), run(std::move(backend)), issued(run->nodes().size()) {}
+    Work(ExecutionPlan configured, std::shared_ptr<EngineRun> backend,
+        std::shared_ptr<InvocationResourceProvider> provider)
+        : resources(std::move(provider)), plan(std::move(configured)), run(std::move(backend)),
+          issued(run->nodes().size()) {}
 
+    const std::shared_ptr<InvocationResourceProvider> resources;
     ExecutionPlan plan;
     std::shared_ptr<EngineRun> run;
     IdSequence<InvocationId> calls;
@@ -602,7 +605,7 @@ Result<InvocationOperation> launch_call(ActiveCall& call, std::shared_ptr<ToolIn
     return InvocationOperation::start(std::move(instance), invocation.context);
 }
 
-void start_node(Work& work, std::size_t index, InvocationResourceProvider* resources, detail::NodeStateService& states)
+void start_node(Work& work, std::size_t index, detail::NodeStateService& states)
 {
     auto& run = *work.run;
     const auto& request = work.plan.request();
@@ -620,6 +623,7 @@ void start_node(Work& work, std::size_t index, InvocationResourceProvider* resou
     }
     const auto context = run.context_for(index, {run.identity().run, node, root, *issued});
     const auto& tool = *work.plan.tool(node);
+    auto* resources = work.resources.get();
     auto prepared = resources ? tool.prepare(context, attempt, run.results_for_binding(), *resources)
                               : tool.prepare(context, attempt, run.results_for_binding());
     auto trace = trace_bindings(prepared);
@@ -671,12 +675,12 @@ void start_node(Work& work, std::size_t index, InvocationResourceProvider* resou
     }
 }
 
-WorkStep execute_step(Work& work, InvocationResourceProvider* resources, detail::NodeStateService& states)
+WorkStep execute_step(Work& work, detail::NodeStateService& states)
 {
     auto& run = *work.run;
     run.begin_step();
     settle_notified(work);
-    if (const auto ready = run.take_ready()) { start_node(work, *ready, resources, states); }
+    if (const auto ready = run.take_ready()) { start_node(work, *ready, states); }
     if (run.has_ready() || (run.stopping() && std::ranges::any_of(work.active_calls,
         [](const auto& entry) { return entry.second.decision == CallDecision::Waiting; }))) {
         return WorkStep::Ready;
@@ -687,10 +691,23 @@ WorkStep execute_step(Work& work, InvocationResourceProvider* resources, detail:
 }
 } // namespace
 
+struct WorkflowEngine::PreparedSubmission {
+    PreparedSubmission(const ExecutionPlan& configured, WorkflowId target,
+        std::shared_ptr<InvocationResourceProvider> provider)
+        : plan(configured), workflow(target), resources(std::move(provider)), schedule(plan) {}
+
+    const ExecutionPlan plan;
+    const WorkflowId workflow;
+    const std::shared_ptr<InvocationResourceProvider> resources;
+    detail::ControlSchedule schedule;
+    bool consumed{false}; // Protected by the originating engine's scheduler mutex.
+};
+
 struct WorkflowEngine::Impl {
     Impl(SolutionSessionId id, const ToolRegistry& tools, std::shared_ptr<InvocationResourceProvider> provider,
         WorkflowEngineOptions options)
-        : session(id), registry(tools), resources(std::move(provider)), capabilities(profile(resources.get())),
+        : session(id), registry(tools), default_resources(std::move(provider)),
+          default_capabilities(profile(default_resources.get())),
           history(options.completed_run_limit),
           worker([this] { work_loop(); }) {}
 
@@ -713,44 +730,71 @@ struct WorkflowEngine::Impl {
         return std::monostate{};
     }
 
-    RunSubmission submit(const RunRequest& request, WorkflowId workflow)
+    Preparation prepare(const RunRequest& request,
+        std::optional<std::shared_ptr<InvocationResourceProvider>> supplied = std::nullopt)
     {
-        std::shared_ptr<InvocationResourceProvider> provider;
-        {
-            const std::lock_guard lock(events->mutex);
-            if (auto refusal = check_slot(request, workflow)) { return std::move(*refusal); }
-            provider = resources;
-        }
-        auto planned = ExecutionPlan::create(request, registry, capabilities);
-        if (auto* failure = std::get_if<Diagnostic>(&planned)) { return RunRejected{std::move(*failure)}; }
-        auto plan = std::get<ExecutionPlan>(std::move(planned));
-        if (provider) {
-            auto checked = provider->preflight(plan);
-            if (auto* failure = std::get_if<Diagnostic>(&checked)) { return RunRejected{std::move(*failure)}; }
-        }
-        detail::ControlSchedule schedule(plan);
-
-        const std::lock_guard lock(events->mutex);
-        // Planning does not reserve a slot. Another submit may have won it.
-        if (auto refusal = check_slot(request, workflow)) { return std::move(*refusal); }
-        const auto next = last_admitted ? RuntimeIdFactory::next(*last_admitted)
-                                        : RuntimeIdFactory::from_value<WorkflowRunId>(1);
-        if (const auto* failure = std::get_if<Diagnostic>(&next)) { return RunRejected{*failure}; }
-        auto run = std::make_shared<EngineRun>(plan.request(), std::get<WorkflowRunId>(next), std::move(schedule), events, observers);
-        auto handle = RunHandle::from_accepted(run);
-        if (auto* failure = std::get_if<Diagnostic>(&handle)) { return RunRejected{std::move(*failure)}; }
-
-        auto work = std::make_unique<Work>(std::move(plan), run);
-        const auto slot = active.emplace(workflow, run).first;
         try {
-            admitted.push_back(std::move(work));
+            if (request.snapshot().identity().session != session) {
+                return RunRejected{error(ErrorCode::ResultIdentityMismatch, "The request snapshot belongs to another session.", request)};
+            }
+            const auto workflow = std::visit([](const auto& target) { return target.workflow; }, request.target());
+            std::shared_ptr<InvocationResourceProvider> provider;
+            {
+                const std::lock_guard lock(events->mutex);
+                if (auto refusal = check_slot<Preparation>(request, workflow)) { return std::move(*refusal); }
+                provider = supplied ? std::move(*supplied) : default_resources;
+            }
+            const auto capabilities = supplied ? profile(provider.get()) : default_capabilities;
+            auto planned = ExecutionPlan::create(request, registry, capabilities);
+            if (auto* failure = std::get_if<Diagnostic>(&planned)) { return RunRejected{std::move(*failure)}; }
+            const auto& plan = std::get<ExecutionPlan>(planned);
+            if (provider) {
+                auto checked = provider->preflight(plan);
+                if (auto* failure = std::get_if<Diagnostic>(&checked)) { return RunRejected{std::move(*failure)}; }
+            }
+            return std::make_shared<PreparedSubmission>(plan, workflow, std::move(provider));
         } catch (...) {
-            active.erase(slot);
-            throw;
+            return RunRejected{error(ErrorCode::ExecutionBoundaryFailure, "Workflow preparation raised an unexpected exception.", request)};
         }
-        last_admitted = run->identity().run;
-        events->changed.notify_one();
-        return std::get<RunHandle>(std::move(handle));
+    }
+
+    RunSubmission admit(PreparedSubmission& prepared)
+    {
+        const auto& request = prepared.plan.request();
+        const auto workflow = prepared.workflow;
+        try {
+            if (request.snapshot().identity().session != session) {
+                return RunRejected{error(ErrorCode::ResultIdentityMismatch, "The prepared run belongs to another session.", request)};
+            }
+            const std::lock_guard lock(events->mutex);
+            if (std::exchange(prepared.consumed, true)) {
+                return RunRejected{error(ErrorCode::InvalidRunRequest, "The prepared run has already been consumed.", request)};
+            }
+            // Planning does not reserve a slot. Another submit may have won it.
+            if (auto refusal = check_slot<RunSubmission>(request, workflow)) { return std::move(*refusal); }
+            const auto next = last_admitted ? RuntimeIdFactory::next(*last_admitted)
+                                            : RuntimeIdFactory::from_value<WorkflowRunId>(1);
+            if (const auto* failure = std::get_if<Diagnostic>(&next)) { return RunRejected{*failure}; }
+            auto run = std::make_shared<EngineRun>(request, std::get<WorkflowRunId>(next),
+                std::move(prepared.schedule), events, observers);
+            auto handle = RunHandle::from_accepted(run);
+            if (auto* failure = std::get_if<Diagnostic>(&handle)) { return RunRejected{std::move(*failure)}; }
+            auto accepted = std::get<RunHandle>(std::move(handle));
+
+            auto work = std::make_unique<Work>(prepared.plan, run, prepared.resources);
+            const auto slot = active.emplace(workflow, run).first;
+            try {
+                admitted.push_back(std::move(work));
+            } catch (...) {
+                active.erase(slot);
+                throw;
+            }
+            last_admitted = run->identity().run;
+            events->changed.notify_one();
+            return accepted;
+        } catch (...) {
+            return RunRejected{error(ErrorCode::ExecutionBoundaryFailure, "Workflow admission raised an unexpected exception.", request)};
+        }
     }
 
     Result<std::monostate> reset_node_state(const NodeTarget& target)
@@ -814,7 +858,8 @@ private:
         return supported;
     }
 
-    std::optional<RunSubmission> check_slot(const RunRequest& request, WorkflowId workflow) const
+    template<class Outcome>
+    std::optional<Outcome> check_slot(const RunRequest& request, WorkflowId workflow) const
     {
         if (stopping) {
             return RunRejected{error(ErrorCode::InvalidRunRequest, "The workflow engine is draining accepted work.", request)};
@@ -867,7 +912,7 @@ private:
             const auto entry = *ready;
             auto& work = **entry;
             auto next = WorkStep::Finished;
-            try { next = execute_step(work, resources.get(), states); }
+            try { next = execute_step(work, states); }
             catch (...) {
                 work.run->unexpected_failure();
                 if (!work.active_calls.empty()) {
@@ -884,18 +929,18 @@ private:
             else if (next == WorkStep::Ready) { work.run->wakeup()->request(); }
         }
         states.clear();
+        std::shared_ptr<InvocationResourceProvider> released;
         std::vector<std::shared_ptr<EngineRun>> retained;
         {
             const std::lock_guard lock(events->mutex);
             retained.swap(history);
+            released.swap(default_resources);
         }
-        retained.clear();
-        resources.reset();
     }
 
     inline static thread_local const Impl* worker_engine{nullptr};
-    std::shared_ptr<InvocationResourceProvider> resources;
-    const ExecutionCapabilities capabilities;
+    std::shared_ptr<InvocationResourceProvider> default_resources;
+    const ExecutionCapabilities default_capabilities;
     const std::shared_ptr<SchedulerEvents> events{std::make_shared<SchedulerEvents>()};
     const std::shared_ptr<detail::ObservationHub> observers{std::make_shared<detail::ObservationHub>()};
     bool stopping{false};
@@ -929,14 +974,26 @@ core::SolutionSessionId WorkflowEngine::session() const noexcept { return impl_-
 
 RunSubmission WorkflowEngine::submit(const RunRequest& request)
 {
-    try {
-        if (request.snapshot().identity().session != session()) {
-            return RunRejected{error(ErrorCode::ResultIdentityMismatch, "The request snapshot belongs to another session.", request)};
-        }
-        return impl_->submit(request, std::visit([](const auto& target) { return target.workflow; }, request.target()));
-    } catch (...) {
-        return RunRejected{error(ErrorCode::ExecutionBoundaryFailure, "Workflow submission raised an unexpected exception.", request)};
+    auto preparation = impl_->prepare(request);
+    if (auto* prepared = std::get_if<std::shared_ptr<PreparedSubmission>>(&preparation)) {
+        return admit(std::move(*prepared));
     }
+    if (auto* failure = std::get_if<RunRejected>(&preparation)) { return std::move(*failure); }
+    return std::get<RunBusy>(preparation);
+}
+
+WorkflowEngine::Preparation WorkflowEngine::prepare(const RunRequest& request,
+    std::shared_ptr<InvocationResourceProvider> provider)
+{
+    return impl_->prepare(request, std::move(provider));
+}
+
+RunSubmission WorkflowEngine::admit(std::shared_ptr<PreparedSubmission> prepared)
+{
+    if (!prepared) {
+        return RunRejected{Diagnostic{ErrorCode::InvalidRunRequest, Severity::Error, {}, "The prepared run is missing."}};
+    }
+    return impl_->admit(*prepared);
 }
 
 core::Result<std::monostate> WorkflowEngine::reset_node_state(const NodeTarget& target)

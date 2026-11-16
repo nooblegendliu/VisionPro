@@ -13,10 +13,14 @@ qt_add_executable(visionpro_gui WIN32
     main.cpp
     canvas_example.cpp canvas_example.hpp
 )
-target_link_libraries(visionpro_gui PRIVATE visionpro_ui visionpro_simulation_tools visionpro_build_options)
+target_link_libraries(visionpro_gui PRIVATE visionpro_ui visionpro_app_tools visionpro_build_options)
 
 include(GNUInstallDirs)
 install(TARGETS visionpro_gui RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}" COMPONENT VisionProGui)
+if(VISIONPRO_WITH_OPENCV)
+    install(IMPORTED_RUNTIME_ARTIFACTS opencv_core opencv_imgproc opencv_imgcodecs
+        RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}" COMPONENT VisionProGui)
+endif()
 qt_generate_deploy_app_script(
     TARGET visionpro_gui
     OUTPUT_SCRIPT visionpro_gui_deploy_script

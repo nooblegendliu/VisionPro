@@ -5,7 +5,7 @@
 namespace visionpro::workflow {
 
 enum class WorkflowSessionStatus { Empty, Active, Switching, Closing, Closed };
-enum class SessionOperationKind { Activate, Close };
+enum class SessionOperationKind { Activate, Close, Publish };
 struct SessionOperationId {
     std::uint64_t value;
     auto operator<=>(const SessionOperationId&) const = default;
@@ -18,6 +18,15 @@ struct WorkflowSessionProgress {
     WorkflowSessionStatus status{WorkflowSessionStatus::Empty};
     std::optional<ConfigSnapshot> active{};
     std::optional<SessionOperation> operation{};
+};
+
+struct RunArguments {
+    RunTarget target;
+    std::vector<RunInput> inputs;
+    RunTrigger trigger;
+    std::optional<core::CorrelationId> correlation{};
+    std::optional<DebugStatePolicy> debug_state{};
+    std::vector<core::GlobalVariableEntry> globals{};
 };
 
 // Owns one active in-memory solution. Configuration and management operations
@@ -37,6 +46,11 @@ public:
     // uses the session's default provider.
     [[nodiscard]] core::Result<ConfigSnapshot> activate(const Solution& candidate,
         std::shared_ptr<InvocationResourceProvider> provider);
+    // Prepare a run from the draft against the exact active base capture.
+    // Only admission publishes the new snapshot and its provider. A null
+    // provider means the draft has no resource provider for this publication.
+    [[nodiscard]] RunSubmission publish_and_submit(const ConfigSnapshot& base, const Solution& draft,
+        const RunArguments& run, std::shared_ptr<InvocationResourceProvider> provider);
     [[nodiscard]] WorkflowSessionProgress inspect() const;
     [[nodiscard]] RunSubmission submit(const RunRequest& request) override;
     [[nodiscard]] core::Result<RunObservation> observe(std::size_t capacity = 32);

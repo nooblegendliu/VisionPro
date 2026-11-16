@@ -91,6 +91,12 @@ struct SolutionSaveResult {
 [[nodiscard]] core::Result<LoadedSolutionExecution> open_solution_execution(const SolutionDocument& document,
     const core::ToolRegistry& registry, workflow::WorkflowEngineOptions options = {});
 
+// Prepares file resources for the draft using the source document's directory
+// and named roots. The selected run and its capture are published together.
+[[nodiscard]] workflow::RunSubmission publish_solution_run(workflow::WorkflowSession& session,
+    const workflow::ConfigSnapshot& base, const SolutionDocument& source, const workflow::Solution& draft,
+    const workflow::RunArguments& run);
+
 // Activation requires a complete candidate and follows the session's strict
 // validation and drain protocol. Loading failure never changes the session.
 [[nodiscard]] core::Result<workflow::ConfigSnapshot> activate_solution(workflow::WorkflowSession& session,

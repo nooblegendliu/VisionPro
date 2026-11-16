@@ -5,6 +5,7 @@
 #include <limits>
 #include <mutex>
 #include <set>
+#include <utility>
 
 namespace visionpro::workflow {
 namespace {
@@ -58,9 +59,10 @@ struct WorkflowSession::Impl {
         const FinishOperation finish{*this};
         auto validated = validate_candidate(candidate, registry);
         if (auto* failure = std::get_if<Diagnostic>(&validated)) { return std::move(*failure); }
-        auto created = WorkflowEngine::create(registry, provider ? std::move(provider) : resources, options);
+        if (!provider) { provider = resources; }
+        auto created = WorkflowEngine::create(registry, {}, options);
         if (auto* failure = std::get_if<Diagnostic>(&created)) { return std::move(*failure); }
-        auto replacement = std::get<std::unique_ptr<WorkflowEngine>>(std::move(created));
+        std::shared_ptr<WorkflowEngine> replacement = std::get<std::unique_ptr<WorkflowEngine>>(std::move(created));
         const auto version = std::get<ConfigSnapshotId>(RuntimeIdFactory::from_value<ConfigSnapshotId>(1));
         auto captured = ConfigSnapshot::capture(candidate, registry.descriptors(), {replacement->session(), version});
         if (auto* failure = std::get_if<Diagnostic>(&captured)) { return std::move(*failure); }
@@ -72,13 +74,69 @@ struct WorkflowSession::Impl {
         }
         auto drained = drain_engine();
         if (auto* failure = std::get_if<Diagnostic>(&drained)) { return std::move(*failure); }
+        std::shared_ptr<WorkflowEngine> retired;
+        std::shared_ptr<InvocationResourceProvider> previous;
         {
             const std::lock_guard lock(mutex);
-            engine = std::move(replacement);
+            retired = std::exchange(engine, std::move(replacement));
+            previous = std::exchange(active_provider, std::move(provider));
+            last_snapshot = version;
             progress.active = snapshot;
             progress.status = WorkflowSessionStatus::Active;
         }
         return snapshot;
+    }
+
+    RunSubmission publish_and_submit(const ConfigSnapshot& base, const Solution& draft, const RunArguments& arguments,
+        std::shared_ptr<InvocationResourceProvider> provider)
+    {
+        const auto workflow = std::visit([](const auto& target) { return target.workflow; }, arguments.target);
+        auto reserved = begin_publication(base, draft.id, workflow);
+        if (auto* failure = std::get_if<Diagnostic>(&reserved)) { return RunRejected{std::move(*failure)}; }
+        const FinishOperation finish{*this};
+
+        auto captured = ConfigSnapshot::capture(draft, registry.descriptors(), std::get<SnapshotIdentity>(reserved));
+        if (auto* failure = std::get_if<Diagnostic>(&captured)) { return RunRejected{std::move(*failure)}; }
+        const auto& snapshot = std::get<ConfigSnapshot>(captured);
+        auto request = RunRequest::create(snapshot, arguments.target, arguments.inputs, arguments.trigger,
+            arguments.correlation, arguments.debug_state, arguments.globals);
+        if (auto* failure = std::get_if<Diagnostic>(&request)) { return RunRejected{std::move(*failure)}; }
+
+        // The management reservation protects the engine while validation and
+        // provider preflight run without the session lock.
+        auto prepared = engine->prepare(std::get<RunRequest>(request), provider);
+        if (auto* failure = std::get_if<RunRejected>(&prepared)) { return std::move(*failure); }
+        if (const auto* busy = std::get_if<RunBusy>(&prepared)) { return *busy; }
+
+        std::shared_ptr<InvocationResourceProvider> previous;
+        const std::lock_guard lock(mutex);
+        auto submitted = engine->admit(std::get<0>(prepared));
+        if (std::holds_alternative<RunHandle>(submitted)) {
+            previous = std::exchange(active_provider, std::move(provider));
+            progress.active = snapshot;
+        }
+        return submitted;
+    }
+
+    RunSubmission submit(const RunRequest& request, WorkflowId workflow)
+    {
+        std::shared_ptr<WorkflowEngine> selected;
+        std::shared_ptr<InvocationResourceProvider> provider;
+        {
+            const std::lock_guard lock(mutex);
+            if (auto refusal = check_capture(request.snapshot(), workflow)) { return std::move(*refusal); }
+            selected = engine;
+            provider = active_provider;
+        }
+        auto prepared = selected->prepare(request, std::move(provider));
+        if (auto* failure = std::get_if<RunRejected>(&prepared)) { return std::move(*failure); }
+        if (const auto* busy = std::get_if<RunBusy>(&prepared)) { return *busy; }
+
+        const std::lock_guard lock(mutex);
+        // Preparation can overlap an intervening publication, replacement or
+        // close. Recheck the capture before the prepared work enters a slot.
+        if (auto refusal = check_capture(request.snapshot(), workflow)) { return std::move(*refusal); }
+        return selected->admit(std::get<0>(prepared));
     }
 
     Result<std::monostate> close()
@@ -93,9 +151,14 @@ struct WorkflowSession::Impl {
         const FinishOperation finish{*this};
         auto drained = drain_engine();
         if (auto* failure = std::get_if<Diagnostic>(&drained)) { return std::move(*failure); }
-        resources.reset();
+        std::shared_ptr<WorkflowEngine> retired;
+        std::shared_ptr<InvocationResourceProvider> previous;
+        std::shared_ptr<InvocationResourceProvider> default_provider;
         {
             const std::lock_guard lock(mutex);
+            retired = std::move(engine);
+            previous = std::move(active_provider);
+            default_provider = std::move(resources);
             progress.active.reset();
             progress.status = WorkflowSessionStatus::Closed;
         }
@@ -107,7 +170,8 @@ struct WorkflowSession::Impl {
     const WorkflowEngineOptions options;
     mutable std::mutex mutex;
     WorkflowSessionProgress progress;
-    std::unique_ptr<WorkflowEngine> engine;
+    std::shared_ptr<InvocationResourceProvider> active_provider;
+    std::shared_ptr<WorkflowEngine> engine;
 
 private:
     struct FinishOperation {
@@ -136,23 +200,51 @@ private:
         return std::monostate{};
     }
 
+    Result<SnapshotIdentity> begin_publication(const ConfigSnapshot& base, SolutionId solution, WorkflowId workflow)
+    {
+        const std::lock_guard lock(mutex);
+        if (progress.status != WorkflowSessionStatus::Active) {
+            return error(ErrorCode::InvalidState, "Publishing requires an active workflow session.", solution, workflow);
+        }
+        if (!base.same_capture(*progress.active) || solution != base.solution().id) {
+            return error(ErrorCode::ResultIdentityMismatch, "The draft does not match the active solution and base capture.",
+                solution, workflow);
+        }
+        auto next = RuntimeIdFactory::next(*last_snapshot);
+        if (auto* failure = std::get_if<Diagnostic>(&next)) { return std::move(*failure); }
+        auto begun = begin_operation(SessionOperationKind::Publish);
+        if (auto* failure = std::get_if<Diagnostic>(&begun)) { return std::move(*failure); }
+        // Preflight can see the candidate's identity even when admission fails.
+        last_snapshot = std::get<ConfigSnapshotId>(next);
+        return SnapshotIdentity{base.identity().session, *last_snapshot};
+    }
+
+    std::optional<RunRejected> check_capture(const ConfigSnapshot& snapshot, WorkflowId workflow) const
+    {
+        const auto solution = snapshot.solution().id;
+        if (progress.status != WorkflowSessionStatus::Active) {
+            return RunRejected{error(ErrorCode::InvalidRunRequest, "Run submission requires an active workflow session.", solution, workflow)};
+        }
+        if (!snapshot.same_capture(*progress.active)) {
+            return RunRejected{error(ErrorCode::ResultIdentityMismatch, "Run request does not belong to the active configuration capture.", solution, workflow)};
+        }
+        return std::nullopt;
+    }
+
     Result<std::monostate> drain_engine()
     {
         // Only the reserved management operation can change the engine while
         // the session is Switching or Closing. Waiting never holds this lock.
-        if (engine) {
-            auto closed = engine->close();
-            if (auto* failure = std::get_if<Diagnostic>(&closed)) { return std::move(*failure); }
-            engine.reset();
-        }
+        if (engine) { return engine->close(); }
         return std::monostate{};
     }
 
     std::uint64_t last_operation{0};
+    std::optional<ConfigSnapshotId> last_snapshot;
 };
 
 WorkflowSession::WorkflowSession(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
-WorkflowSession::~WorkflowSession() = default;
+WorkflowSession::~WorkflowSession() { static_cast<void>(close()); }
 
 core::Result<std::unique_ptr<WorkflowSession>> WorkflowSession::create(const ToolRegistry& registry,
     std::shared_ptr<InvocationResourceProvider> resources, WorkflowEngineOptions options)
@@ -176,6 +268,16 @@ core::Result<ConfigSnapshot> WorkflowSession::activate(const Solution& candidate
     catch (...) { return error(ErrorCode::ExecutionBoundaryFailure, "Could not prepare or activate the solution candidate.", candidate.id); }
 }
 
+RunSubmission WorkflowSession::publish_and_submit(const ConfigSnapshot& base, const Solution& draft,
+    const RunArguments& run, std::shared_ptr<InvocationResourceProvider> provider)
+{
+    try { return impl_->publish_and_submit(base, draft, run, std::move(provider)); }
+    catch (...) {
+        const auto workflow = std::visit([](const auto& target) { return target.workflow; }, run.target);
+        return RunRejected{error(ErrorCode::ExecutionBoundaryFailure, "Could not publish the draft for execution.", draft.id, workflow)};
+    }
+}
+
 WorkflowSessionProgress WorkflowSession::inspect() const
 {
     const std::lock_guard lock(impl_->mutex);
@@ -185,18 +287,9 @@ WorkflowSessionProgress WorkflowSession::inspect() const
 RunSubmission WorkflowSession::submit(const RunRequest& request)
 {
     const auto workflow = std::visit([](const auto& target) { return target.workflow; }, request.target());
-    const auto solution = request.snapshot().solution().id;
-    try {
-        const std::lock_guard lock(impl_->mutex);
-        if (impl_->progress.status != WorkflowSessionStatus::Active) {
-            return RunRejected{error(ErrorCode::InvalidRunRequest, "Run submission requires an active workflow session.", solution, workflow)};
-        }
-        if (!request.snapshot().same_capture(*impl_->progress.active)) {
-            return RunRejected{error(ErrorCode::ResultIdentityMismatch, "Run request does not belong to the active configuration capture.", solution, workflow)};
-        }
-        return impl_->engine->submit(request);
-    } catch (...) {
-        return RunRejected{error(ErrorCode::ExecutionBoundaryFailure, "Session run submission failed.", solution, workflow)};
+    try { return impl_->submit(request, workflow); }
+    catch (...) {
+        return RunRejected{error(ErrorCode::ExecutionBoundaryFailure, "Session run submission failed.", request.snapshot().solution().id, workflow)};
     }
 }
 
