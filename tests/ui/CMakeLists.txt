@@ -60,13 +60,20 @@ if(VISIONPRO_WITH_OPENCV)
         "${PROJECT_SOURCE_DIR}/third_party/nlohmann_json/include")
     target_compile_definitions(visionpro_acceptance_parity_tests PRIVATE
         "VISIONPRO_S4_DIRECTORY=\"${PROJECT_SOURCE_DIR}/samples/s4\""
+        "VISIONPRO_S61_DIRECTORY=\"${PROJECT_SOURCE_DIR}/samples/s6-loop\""
+        "VISIONPRO_S62_DIRECTORY=\"${PROJECT_SOURCE_DIR}/samples/s6-group\""
         "VISIONPRO_TEST_CLI=\"$<TARGET_FILE:visionpro_cli>\"")
     target_link_libraries(visionpro_acceptance_parity_tests PRIVATE
         visionpro_ui visionpro_app_tools visionpro_infrastructure visionpro_build_options Qt6::Test)
     add_dependencies(visionpro_acceptance_parity_tests visionpro_cli)
     add_test(NAME visionpro_acceptance_parity_tests COMMAND visionpro_acceptance_parity_tests -platform offscreen
-        -o acceptance-parity.log,txt)
-    list(APPEND ui_tests visionpro_visual_tests visionpro_acceptance_parity_tests)
+        compares_saved_s4_workflows -o acceptance-parity.log,txt)
+    add_test(NAME visionpro_loop_parity_tests COMMAND visionpro_acceptance_parity_tests -platform offscreen
+        compares_saved_blob_loop)
+    add_test(NAME visionpro_group_parity_tests COMMAND visionpro_acceptance_parity_tests -platform offscreen
+        imports_and_runs_blob_groups -o group-parity.log,txt)
+    list(APPEND ui_tests visionpro_visual_tests visionpro_acceptance_parity_tests visionpro_loop_parity_tests
+        visionpro_group_parity_tests)
 
     if(WIN32)
         add_executable(visionpro_acceptance_load acceptance_load.cpp)
@@ -83,7 +90,7 @@ set_tests_properties(${ui_tests} PROPERTIES
 )
 if(VISIONPRO_WITH_OPENCV)
     set_property(TEST visionpro_editor_tests visionpro_editor_run_tests visionpro_run_lifecycle_tests visionpro_visual_tests
-        visionpro_acceptance_parity_tests
+        visionpro_acceptance_parity_tests visionpro_loop_parity_tests visionpro_group_parity_tests
         APPEND PROPERTY ENVIRONMENT_MODIFICATION
         "PATH=path_list_prepend:$<TARGET_FILE_DIR:opencv_core>")
 endif()

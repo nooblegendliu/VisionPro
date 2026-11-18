@@ -6,6 +6,7 @@ namespace visionpro::tools::vision {
 
 [[nodiscard]] std::span<const core::ToolDescriptor> tool_descriptors();
 [[nodiscard]] std::vector<core::ToolRegistration> registrations();
+[[nodiscard]] core::DataType blob_component_type();
 
 // Workflow validation checks that the frame is declared by the solution.
 [[nodiscard]] core::Result<std::monostate> validate_file_frame_origin(const core::Point2D& origin);

@@ -1,3 +1,4 @@
+#include "windows_path.hpp"
 #include <visionpro/infrastructure/file_resources.hpp>
 #include <visionpro/workflow/execution_plan.hpp>
 
@@ -39,8 +40,8 @@ Result<ResourcePaths> resource_paths(const std::optional<fs::path>& directory, s
             return error(ErrorCode::InvalidPath, "Solution directory must be an explicit absolute path.");
         }
         std::error_code io;
-        paths.directory = require_existing_directory ? fs::canonical(*directory, io) : fs::weakly_canonical(*directory, io);
-        if (io || (require_existing_directory && (!fs::is_directory(paths.directory, io) || io))) {
+        paths.directory = windows_display_path(require_existing_directory ? fs::canonical(windows_access_path(*directory), io) : fs::weakly_canonical(windows_access_path(*directory), io));
+        if (io || (require_existing_directory && (!fs::is_directory(windows_access_path(paths.directory), io) || io))) {
             return error(ErrorCode::InvalidPath, "Solution directory must name an existing directory.");
         }
     }
@@ -88,7 +89,7 @@ Result<fs::path> existing_path(const ResourcePath& declaration, const ResourcePa
     const auto located = absolute_path(declaration, paths, managed);
     if (const auto* invalid = std::get_if<Diagnostic>(&located)) { return *invalid; }
     std::error_code io;
-    auto canonical = fs::canonical(std::get<fs::path>(located), io);
+    auto canonical = windows_display_path(fs::canonical(windows_access_path(std::get<fs::path>(located)), io));
     if (io == std::errc::no_such_file_or_directory || io == std::errc::not_a_directory) {
         return error(ErrorCode::ResourceNotFound, "Resource path is missing: " + declaration.path);
     }
@@ -97,7 +98,7 @@ Result<fs::path> existing_path(const ResourcePath& declaration, const ResourcePa
         canonical.begin(), canonical.end()).first != paths.directory.end()) {
         return error(ErrorCode::InvalidPath, "Managed resource resolves outside the solution directory: " + declaration.path);
     }
-    const auto status = fs::status(canonical, io);
+    const auto status = fs::status(windows_access_path(canonical), io);
     if (io || (directory ? !fs::is_directory(status) : !fs::is_regular_file(status))) {
         return error(ErrorCode::InvalidResource, (directory ? "Resource requires a directory: " : "Resource requires a regular file: ")
             + declaration.path);
@@ -225,7 +226,7 @@ std::variant<std::vector<std::byte>, FileReadFailure> read_bytes(HANDLE handle, 
 Result<std::shared_ptr<const std::vector<std::byte>>> read_file_contents(
     const fs::path& path, std::string_view label, std::optional<std::string_view> digest, DWORD sharing)
 {
-    NativeFile handle(CreateFileW(path.c_str(), GENERIC_READ, sharing,
+    NativeFile handle(CreateFileW(detail::windows_access_path(path).c_str(), GENERIC_READ, sharing,
         nullptr, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, nullptr));
     if (!handle.valid()) {
         const auto code = GetLastError();
@@ -288,7 +289,7 @@ Result<std::vector<fs::path>> detail::sequence_files(const fs::path& directory, 
     struct Search {
         HANDLE handle;
         ~Search() { if (handle != INVALID_HANDLE_VALUE) { FindClose(handle); } }
-    } search{FindFirstFileW(search_path.c_str(), &entry)};
+    } search{FindFirstFileW(detail::windows_access_path(search_path).c_str(), &entry)};
     const auto search_error = [&](DWORD code) {
         return file_error(ErrorCode::InvalidPath, "Could not check selected sequence files", pattern, code);
     };
@@ -404,7 +405,7 @@ Result<CleanupOutcome> remove_verified_version(const ManagedResource& managed, c
     }
     for (const auto& name : relative) {
         component /= name;
-        const auto attributes = GetFileAttributesW(component.c_str());
+        const auto attributes = GetFileAttributesW(detail::windows_access_path(component).c_str());
         if (attributes == INVALID_FILE_ATTRIBUTES) {
             return cleanup_io("Could not inspect old managed file", managed.path.path, GetLastError());
         }
@@ -414,7 +415,7 @@ Result<CleanupOutcome> remove_verified_version(const ManagedResource& managed, c
     }
     // A single handle verifies content and disposes of the verified file.
     // Existing invocation pins prevent this handle from obtaining DELETE access.
-    NativeFile file(CreateFileW(declared.c_str(), GENERIC_READ | DELETE, FILE_SHARE_READ,
+    NativeFile file(CreateFileW(detail::windows_access_path(declared).c_str(), GENERIC_READ | DELETE, FILE_SHARE_READ,
         nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_SEQUENTIAL_SCAN, nullptr));
     if (!file.valid()) {
         return cleanup_io("Could not open old managed file for cleanup", managed.path.path, GetLastError());
@@ -572,7 +573,9 @@ template<class Inspect> Check inspect_source(const BindingSource& source, const 
     if (const auto* value = std::get_if<ConfigValue>(&source)) { return inspect_value(*value, inspect); }
     const DataValue* fixed = nullptr;
     if (const auto* input = std::get_if<ScopedInputReference>(&source)) {
-        if (const auto* value = request.input(input->input)) { fixed = selected_value(value->value, input->selector); }
+        if (!input->group) {
+            if (const auto* value = request.input(input->input)) { fixed = selected_value(value->value, input->selector); }
+        }
     } else if (const auto* global = std::get_if<GlobalReference>(&source)) {
         const auto globals = request.globals();
         const auto entry = std::ranges::find(globals, global->variable, &GlobalVariableEntry::variable);
@@ -583,23 +586,36 @@ template<class Inspect> Check inspect_source(const BindingSource& source, const 
     return fixed ? inspect_value(*fixed, inspect) : Check{std::monostate{}};
 }
 
+bool scope_enabled(const Workflow& flow, std::optional<NodeId> group)
+{
+    while (group) {
+        if (!find_node(flow, *group)->enabled) { return false; }
+        const auto parent = std::ranges::find(flow.containment, *group, &Containment::child);
+        group = parent == flow.containment.end() ? std::nullopt : std::optional{parent->parent};
+    }
+    return true;
+}
+
 void set_target(DiagnosticLocation& location, const BindingTarget& target)
 {
     if (const auto* input = std::get_if<InputId>(&target)) { location.input = *input; }
     else { location.parameter = std::get<ParameterId>(target); }
 }
 
-template<class Inspect> Check inspect_node(const Node& node, const ToolExecutionConfiguration& prepared,
+template<class Inspect> Check inspect_node(const Node& node, const PreparedTool* prepared, WorkflowId workflow,
     const RunRequest& request, const Inspect& inspect)
 {
-    const auto& config = prepared.data();
-    const bool independent = std::holds_alternative<NodeTarget>(request.target());
+    const auto* tool = prepared ? &prepared->configuration().data().tool : nullptr;
+    const auto* target = std::get_if<NodeTarget>(&request.target());
+    const bool independent = target && target->node == node.id;
     DiagnosticLocation node_location;
-    node_location.workflow = config.workflow;
+    node_location.workflow = workflow;
     node_location.node = node.id;
-    node_location.tool = config.tool.id;
-    for (const auto& slot : config.resources) {
-        if (auto checked = inspect(slot.resource, node_location); std::holds_alternative<Diagnostic>(checked)) { return checked; }
+    if (tool) { node_location.tool = tool->id; }
+    if (prepared) {
+        for (const auto& slot : prepared->configuration().data().resources) {
+            if (auto checked = inspect(slot.resource, node_location); std::holds_alternative<Diagnostic>(checked)) { return checked; }
+        }
     }
     for (const auto& binding : node.bindings) {
         if (independent && std::holds_alternative<InputId>(binding.target)) { continue; }
@@ -630,14 +646,16 @@ template<class Inspect> Check inspect_node(const Node& node, const ToolExecution
                 std::holds_alternative<Diagnostic>(checked)) { return checked; }
         }
     } else {
-        for (const auto& input : config.tool.inputs) {
+        const auto& inputs = tool ? tool->inputs : std::get<GroupConfiguration>(node.configuration).interface.inputs;
+        for (const auto& input : inputs) {
             if (auto checked = check_default(input); std::holds_alternative<Diagnostic>(checked)) { return checked; }
         }
     }
-    for (const auto& parameter : config.tool.parameters) {
+    if (!prepared) { return std::monostate{}; }
+    for (const auto& parameter : tool->parameters) {
         if (auto checked = check_default(parameter); std::holds_alternative<Diagnostic>(checked)) { return checked; }
     }
-    const auto& state = prepared.effective_state();
+    const auto& state = prepared->configuration().effective_state();
     return state ? inspect_value(state->initial_value, [&](const auto& ref) { return inspect(ref, node_location); })
         : Check{std::monostate{}};
 }
@@ -652,7 +670,7 @@ struct FileResourceProvider::Storage {
 
 struct FileResourceLease::FilePin {
     explicit FilePin(const fs::path& path)
-        : handle(CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+        : handle(CreateFileW(detail::windows_access_path(path).c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
             nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr))
     {}
     NativeFile handle;
@@ -796,10 +814,11 @@ Check FileResourceProvider::preflight(const ExecutionPlan& plan) const
         };
         for (const auto& scope : plan.dependencies().scopes) {
             const auto& flow = *find_workflow(solution, scope.workflow);
+            if (!scope_enabled(flow, scope.group)) { continue; }
             for (const auto& id : scope.reachable) {
                 const auto& node = *find_node(flow, id);
                 if (!node.enabled) { continue; }
-                if (auto checked = inspect_node(node, plan.tool(id)->configuration(), request, inspect);
+                if (auto checked = inspect_node(node, plan.tool(id), flow.id, request, inspect);
                     std::holds_alternative<Diagnostic>(checked)) { return checked; }
             }
         }

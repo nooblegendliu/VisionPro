@@ -16,12 +16,14 @@
 #include <QGraphicsView>
 #include <QLabel>
 #include <QLineEdit>
+#include <QPlainTextEdit>
 #include <QPushButton>
 #include <QSpinBox>
 #include <QStatusBar>
 #include <QTemporaryDir>
 #include <QTest>
 #include <QTimer>
+#include <QTreeWidget>
 #include <QUndoStack>
 
 #include <algorithm>
@@ -141,7 +143,114 @@ class EditorRunTests final : public QObject {
 private slots:
     void publishes_draft_and_isolates_debug();
     void runs_unsaved_absolute_resources();
+    void selects_each_iteration_of_the_same_node();
+    void runs_and_debugs_selected_group_with_public_inputs();
 };
+
+void EditorRunTests::runs_and_debugs_selected_group_with_public_inputs()
+{
+    const auto group_id = id<NodeId>('3');
+    const auto child = id<NodeId>('1');
+    const auto outside = id<NodeId>('2');
+    const auto input = key<InputId>("delta");
+    const auto output = key<OutputId>("total");
+    const auto done = key<ControlOutputId>("done");
+    auto draft = counter_fixture();
+    auto& flow = draft.workflows.front();
+    flow.nodes.front().bindings = {{input, {ScopedInputReference{flow.id, group_id, input, {}}}}};
+    auto public_input = flow.interface.inputs.front();
+    GroupConfiguration group{{key<SchemaId>("test.editor.group"), 1, {public_input},
+        {{output, "Total", DataType::integer()}}, {{done, "Done"}}}, {child}, {{output, {flow.id, child, output, {}}}},
+        {{done, child, {}}}};
+    flow.nodes.push_back({group_id, "Measurement", std::move(group)});
+    flow.containment = {{group_id, child}};
+    flow.entries = {group_id};
+    flow.control_links = {{id<ControlLinkId>(), group_id, done, outside}};
+    EditorWindow window(std::move(draft), counter_registry());
+    window.show();
+    QVERIFY(scene(window).reveal_node(group_id));
+    auto& run = action(window, "runSelectedGroup");
+    auto& debug = action(window, "debugSelectedNode");
+    QVERIFY(run.isEnabled() && debug.isEnabled());
+    auto& controller = *window.findChild<RunController*>();
+    auto& panel = *window.findChild<RunPanel*>();
+    auto& tree = *panel.findChild<QTreeWidget*>(QStringLiteral("runNodes"));
+    auto& details = *panel.findChild<QPlainTextEdit*>(QStringLiteral("runDetails"));
+    int calls = 0;
+    for (auto* action : {&run, &debug, &run}) {
+        QVERIFY(submit_dialog(*action, [](QDialog& dialog, QPushButton&) {
+            auto* mode = dialog.findChild<QComboBox*>(QStringLiteral("runInputMode.delta"));
+            auto* value = dialog.findChild<QLineEdit*>(QStringLiteral("runInputValue.delta"));
+            if (!mode || !value) { return false; }
+            mode->setCurrentIndex(1);
+            value->setText(QStringLiteral("3"));
+            return true;
+        }));
+        ++calls;
+        QTRY_VERIFY(controller.runs().size() == static_cast<std::size_t>(calls) && controller.can_start());
+        const auto& handle = controller.runs().back();
+        const auto progress = take(handle.inspect());
+        QVERIFY2(progress.status == ExecutionStatus::Succeeded, progress.diagnostics.empty() ? "" : progress.diagnostics.front().message.c_str());
+        QCOMPARE(progress.groups.size(), 1u);
+        QCOMPARE(progress.nodes.size(), 2u);
+        const auto record = take(handle.lookup(progress.groups.front().group)).value();
+        QVERIFY(record.data().selected_control_outputs == std::vector{done});
+        QCOMPARE(*std::get<DataValue>(record.output(output)->content).as_int64(), calls == 3 ? 6 : 3);
+        QVERIFY(handle.request().debug_state() == (action == &run ? DebugStatePolicy::Active : DebugStatePolicy::Isolated));
+        QTRY_COMPARE(tree.topLevelItemCount(), 2);
+        tree.setCurrentItem(tree.topLevelItem(1));
+        QVERIFY(tree.currentItem()->text(2).contains(QStringLiteral("Measurement")));
+        QVERIFY(panel.selected_invocation()->node == child && details.toPlainText().contains(QStringLiteral("Group call")));
+        tree.setCurrentItem(tree.topLevelItem(0));
+        QVERIFY(details.toPlainText().contains(QStringLiteral("Selected control outlets: done")));
+    }
+}
+
+void EditorRunTests::selects_each_iteration_of_the_same_node()
+{
+    const auto flow_id = id<WorkflowId>();
+    Workflow flow{flow_id, "Loop workflow", {key<SchemaId>("test.editor.loop"), 1}};
+    Solution draft{id<SolutionId>(), "Loop draft", infrastructure::solution_format_version, 1, {std::move(flow)}};
+    EditorWindow window(std::move(draft), take(app::make_tool_registry()));
+    window.show();
+    QVERIFY(submit_dialog(action(window, "addLoop"), [](QDialog&, QPushButton&) { return true; }));
+    auto& canvas = scene(window);
+    const auto loop = canvas.selected_nodes().at(0);
+    const auto& model = static_cast<const ControlGraphModel&>(canvas.graphModel());
+    QVERIFY(canvas.open_group(model.canvas_id(loop)));
+    QVERIFY(canvas.add_tool(key<ToolTypeId>("visionpro.sim.add"), {}));
+    const auto child = canvas.selected_nodes().at(0);
+    QVERIFY(canvas.edit_draft(QStringLiteral("Set loop bounds and inputs"), [&](Solution& solution) -> Result<std::monostate> {
+        auto& nodes = solution.workflows.front().nodes;
+        auto& bindings = nodes.front().bindings;
+        auto end = std::ranges::find(bindings, BindingTarget{key<InputId>("end")}, &Binding::target);
+        end->sources = {ConfigValue::integer(2)};
+        nodes.back().bindings = {{key<InputId>("left"), {ScopedInputReference{flow_id, loop, key<InputId>("index"), {}}}},
+            {key<InputId>("right"), {ConfigValue::integer(10)}}};
+        return std::monostate{};
+    }));
+    action(window, "runWorkflow").trigger();
+    auto& controller = *window.findChild<RunController*>();
+    QTRY_VERIFY(controller.runs().size() == 1 && controller.can_start());
+    const auto progress = take(controller.runs().front().inspect());
+    QVERIFY2(progress.status == ExecutionStatus::Succeeded, progress.diagnostics.empty() ? "" : progress.diagnostics.front().message.c_str());
+    QCOMPARE(progress.iterations.size(), 2u);
+    auto& panel = *window.findChild<RunPanel*>();
+    auto& tree = *panel.findChild<QTreeWidget*>(QStringLiteral("runNodes"));
+    auto& details = *panel.findChild<QPlainTextEdit*>(QStringLiteral("runDetails"));
+    QTRY_COMPARE(tree.topLevelItemCount(), 3);
+    tree.setCurrentItem(tree.topLevelItem(0));
+    QVERIFY(!panel.selected_iteration_index());
+    for (int i = 0; i < 2; ++i) {
+        auto* row = tree.topLevelItem(i + 1);
+        QVERIFY(row->text(2).startsWith(QString::number(i) + QStringLiteral(" · Scope ")));
+        tree.setCurrentItem(row);
+        const auto selected = panel.selected_invocation();
+        QVERIFY(selected && selected->node == child && selected->scope == progress.iterations[i].scope);
+        QVERIFY(panel.selected_iteration_index() == i);
+        QVERIFY(details.toPlainText().contains(QStringLiteral("value = %1").arg(10 + i)));
+    }
+}
 
 void EditorRunTests::publishes_draft_and_isolates_debug()
 {

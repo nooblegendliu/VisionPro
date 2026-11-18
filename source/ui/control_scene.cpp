@@ -87,6 +87,9 @@ void delete_subgraph(Solution& draft, Workflow& flow, const std::set<core::NodeI
     std::erase_if(flow.control_exports, obsolete_control);
     for (auto& node : flow.nodes) {
         if (auto* group = std::get_if<GroupConfiguration>(&node.configuration)) {
+            if (group->loop && group->loop->break_source && removed.contains(*group->loop->break_source)) {
+                group->loop->break_source.reset();
+            }
             std::erase_if(group->entries, obsolete_entry);
             std::erase_if(group->outputs, obsolete_output);
             std::erase_if(group->control_exports, obsolete_control);
@@ -219,17 +222,31 @@ bool ControlScene::add_tool(core::ToolTypeId type, QPointF position)
     return changed;
 }
 
-bool ControlScene::add_group(std::string name, QPointF position)
+bool ControlScene::add_group(std::string name, QPointF position, GroupKind kind)
 {
     std::optional<core::NodeId> added;
-    const bool changed = edit_draft(tr("Add Group"), [&](workflow::Solution& draft) -> EditResult {
+    const bool changed = edit_draft(kind == GroupKind::Loop ? tr("Add Loop") : tr("Add Group"), [&](workflow::Solution& draft) -> EditResult {
         auto generated = core::IdFactory::generate<core::NodeId>();
         if (auto* failure = std::get_if<core::Diagnostic>(&generated)) { return std::move(*failure); }
         added = std::get<core::NodeId>(generated);
         auto schema = core::SchemaIdFactory::parse<core::SchemaId>("visionpro.group." + added->to_string());
         if (auto* failure = std::get_if<core::Diagnostic>(&schema)) { return std::move(*failure); }
-        const workflow::GroupConfiguration group{{std::get<core::SchemaId>(schema), 1, {}, {}, {}}, {}, {}, {}};
-        return append_node(draft, model_, {*added, std::move(name), group, {}, {}}, position);
+        workflow::GroupConfiguration group{{std::get<core::SchemaId>(schema), 1, {}, {}, {}}, {}, {}, {}};
+        std::vector<workflow::Binding> bindings;
+        if (kind == GroupKind::Loop) {
+            group.loop.emplace();
+            const core::BindingPolicy policy{{core::BindingSourceKind::Constant, core::BindingSourceKind::PublicInput,
+                core::BindingSourceKind::RunOutput, core::BindingSourceKind::GlobalRead}};
+            for (const auto* key : {"start", "end"}) {
+                const auto id = std::get<core::InputId>(core::SchemaIdFactory::parse<core::InputId>(key));
+                group.interface.inputs.push_back({id, key, core::DataType::integer(), true, {}, {}, policy, {}});
+                bindings.push_back({id, {core::ConfigValue::integer(0)}});
+            }
+            const auto index = std::get<core::InputId>(core::SchemaIdFactory::parse<core::InputId>("index"));
+            group.interface.inputs.push_back({index, "Iteration index", core::DataType::integer(), false,
+                core::ConfigValue::integer(0), {}, {}, {}});
+        }
+        return append_node(draft, model_, {*added, std::move(name), std::move(group), std::move(bindings), {}}, position);
     });
     if (changed) { reveal_node(*added); }
     return changed;

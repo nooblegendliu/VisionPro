@@ -28,15 +28,36 @@ struct RunNodeProgress {
     std::optional<NodeSkipReason> skip_reason{};
     std::vector<RunBindingTrace> bindings{};
     std::vector<RunResourceTrace> resources{}; // References from leases acquired for the call.
+    std::optional<core::ExecutionScopeId> scope{};
 };
 
 enum class ControlLinkStatus { Pending, Arrived, Closed };
 enum class ControlCloseReason { NotSelected, Disabled, Failed, Cancelled, TimedOut };
-// Runtime state of one control link in the run's root scope.
+// Each body call tracks the state of its own control links.
 struct RunControlLinkProgress {
     core::ControlLinkId link;
     ControlLinkStatus status{ControlLinkStatus::Pending};
     std::optional<ControlCloseReason> close_reason{};
+    std::optional<core::ExecutionScopeId> scope{};
+};
+
+struct RunExportTrace {
+    core::OutputId output;
+    OutputReference source;
+    ResultIdentity producer;
+};
+using RunLoopExportTrace = RunExportTrace;
+struct RunLoopIteration {
+    core::ExecutionScopeId scope;
+    core::InvocationKey loop;
+    std::int64_t index;
+    std::vector<RunLoopExportTrace> exports{};
+};
+
+struct RunGroupCall {
+    core::ExecutionScopeId scope;
+    core::InvocationKey group;
+    std::vector<RunExportTrace> exports{};
 };
 
 // A logical terminal status does not imply that callbacks, leases or workers
@@ -45,9 +66,11 @@ struct RunProgress {
     ExecutionStatus status{ExecutionStatus::Pending};
     bool quiescent{false};
     std::vector<core::Diagnostic> diagnostics;
-    std::vector<RunNodeProgress> nodes{}; // In planned control order when reported by the backend.
+    std::vector<RunNodeProgress> nodes{}; // Root in planned control order, followed by each body call in its own planned order.
     std::vector<RunControlLinkProgress> control_links{};
     std::vector<core::NodeId> call_order{}; // Actual dispatch order, after input and lease preparation.
+    std::vector<RunLoopIteration> iterations{};
+    std::vector<RunGroupCall> groups{};
 };
 struct RunWaitResult { RunWaitOutcome outcome; RunProgress progress; };
 

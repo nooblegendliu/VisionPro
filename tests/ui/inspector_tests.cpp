@@ -8,6 +8,7 @@
 
 #include <QtNodes/internal/NodeGraphicsObject.hpp>
 #include <QApplication>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QDialog>
 #include <QDialogButtonBox>
@@ -142,7 +143,76 @@ class InspectorTests final : public QObject {
 
 private Q_SLOTS:
     void commits_binding_and_group_outlet_through_dialogs();
+    void edits_loop_settings_and_collects_a_selected_field();
 };
+
+void InspectorTests::edits_loop_settings_and_collects_a_selected_field()
+{
+    const auto draft = canvas_example();
+    const auto tools = registry();
+    ControlGraphModel model(draft, draft.workflows.front().id, tools);
+    ControlScene scene(model);
+    EditorInspector inspector(model, scene, tools);
+    inspector.show();
+    QVERIFY(scene.add_group("Count objects", {}, ControlScene::GroupKind::Loop));
+    const auto loop_id = scene.selected_nodes().at(0);
+    QVERIFY(scene.open_group(model.canvas_id(loop_id)));
+    QVERIFY(scene.add_tool(key<ToolTypeId>("visionpro.sim.add"), {}));
+    const auto child = scene.selected_nodes().at(0);
+    QVERIFY(group_config(model, loop_id).entries == std::vector{child});
+    QVERIFY(scene.parent_scope());
+    QVERIFY(scene.reveal_node(loop_id));
+    QTRY_VERIFY(inspector.findChild<QPushButton*>(QStringLiteral("editLoopSettings")));
+    QVERIFY(binding_button(inspector, QStringLiteral("start")) && binding_button(inspector, QStringLiteral("end")));
+    QVERIFY(!binding_button(inspector, QStringLiteral("index")));
+    const auto settings = exercise_dialog(inspector, *inspector.findChild<QPushButton*>(QStringLiteral("editLoopSettings")), {
+        [](QDialog& dialog) -> QPushButton* {
+            auto* step = dialog.findChild<QLineEdit*>(QStringLiteral("loopStep"));
+            auto* end = dialog.findChild<QCheckBox*>(QStringLiteral("loopInclusiveEnd"));
+            auto* interval = dialog.findChild<QLineEdit*>(QStringLiteral("loopInterval"));
+            auto* stop = dialog.findChild<QComboBox*>(QStringLiteral("loopBreakSource"));
+            if (!step || !end || !interval || !stop || stop->count() != 2) { return nullptr; }
+            step->setText(QStringLiteral("-2"));
+            end->setChecked(true);
+            interval->setText(QStringLiteral("17"));
+            stop->setCurrentIndex(1);
+            return accept_button(dialog);
+        }});
+    QVERIFY2(settings.isEmpty(), qPrintable(settings));
+    const auto edited = *group_config(model, loop_id).loop;
+    QVERIFY(edited.step == -2 && edited.inclusive_end && edited.interval_ms == 17 && edited.break_source == child);
+    QCoreApplication::processEvents();
+    auto* kind = inspector.findChild<QComboBox*>(QStringLiteral("publicPortKind"));
+    QVERIFY(kind && select_choice(*kind, QStringLiteral("Output")));
+    const auto add = exercise_dialog(inspector, *inspector.findChild<QPushButton*>(QStringLiteral("addPublicPort")), {
+        [](QDialog& dialog) -> QPushButton* {
+            auto* id = dialog.findChild<QLineEdit*>(QStringLiteral("publicPortId"));
+            if (!id) { return nullptr; }
+            id->setText(QStringLiteral("areas"));
+            return accept_button(dialog);
+        },
+        [](QDialog& dialog) -> QPushButton* {
+            auto* source = dialog.findChild<QComboBox*>(QStringLiteral("bindingSource"));
+            auto* selector = dialog.findChild<QLineEdit*>(QStringLiteral("bindingSelector"));
+            if (!source || !selector || !select_choice(*source, QStringLiteral("Objects"), true)) { return nullptr; }
+            selector->setText(QStringLiteral("0/area_pixels"));
+            return accept_button(dialog);
+        },
+        [](QDialog& dialog) -> QPushButton* {
+            auto* mode = dialog.findChild<QComboBox*>(QStringLiteral("choice"));
+            return mode && select_choice(*mode, QStringLiteral("Collect")) ? accept_button(dialog) : nullptr;
+        }});
+    QVERIFY2(add.isEmpty(), qPrintable(add));
+    const auto& result = group_config(model, loop_id);
+    QCOMPARE(result.interface.outputs.size(), 1u);
+    QVERIFY(result.interface.outputs.front().type == DataType::list(DataType::integer()));
+    QVERIFY(result.loop->exports.front().mode == LoopExportMode::Collect);
+    const OutputReference expected{draft.workflows.front().id, child, key<OutputId>("objects"),
+        {ElementSelection{0}, FieldSelection{key<FieldId>("area_pixels")}}};
+    QVERIFY(result.outputs.front().source == expected);
+    scene.undoStack().undo();
+    QVERIFY(group_config(model, loop_id).loop->exports.empty() && group_config(model, loop_id).interface.outputs.empty());
+}
 
 void InspectorTests::commits_binding_and_group_outlet_through_dialogs()
 {

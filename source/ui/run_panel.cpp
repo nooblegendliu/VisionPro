@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <array>
+#include <map>
 
 namespace visionpro::ui {
 namespace {
@@ -139,7 +140,7 @@ QString diagnostic_text(const Diagnostic& item)
         .arg(enum_text(item.severity, std::array{"Info", "Warning", "Error"}), text(error_code_name(item.code)), text(item.message), where);
 }
 
-QString value_text(const DataValue& value)
+QString value_text(const DataValue& value, bool preview_list = true)
 {
     if (const auto* content = value.as_bool()) { return *content ? QStringLiteral("true") : QStringLiteral("false"); }
     if (const auto* content = value.as_int64()) { return QString::number(*content); }
@@ -165,11 +166,19 @@ QString value_text(const DataValue& value)
         return QStringLiteral("Point (%1, %2) · %3")
             .arg(QString::number(content->x, 'g', 17), QString::number(content->y, 'g', 17), id_text(content->coordinate_frame));
     }
-    if (const auto* list = value.elements()) { return QStringLiteral("List (%1 items)").arg(list->size()); }
+    if (const auto* list = value.elements()) {
+        auto summary = QStringLiteral("List (%1 items)").arg(list->size());
+        if (!preview_list || list->empty()) { return summary; }
+        constexpr std::size_t limit = 8;
+        QStringList items;
+        for (std::size_t i = 0; i < std::min(list->size(), limit); ++i) { items.append(value_text((*list)[i], false)); }
+        if (list->size() > limit) { items.append(QStringLiteral("…")); }
+        return summary + QStringLiteral(" [") + items.join(QStringLiteral(", ")) + QStringLiteral("]");
+    }
     if (const auto* bytes = value.as_binary()) { return QStringLiteral("Binary (%1 bytes)").arg(bytes->size()); }
     if (value.type().kind() == TypeKind::Optional) {
         const auto* item = value.optional_value();
-        return item ? value_text(*item) : QStringLiteral("None");
+        return item ? value_text(*item, preview_list) : QStringLiteral("None");
     }
     if (value.type().schema_id()) { return id_text(*value.type().schema_id()); }
     return enum_text(value.type().kind(), std::array{"Bool", "Int64", "Float64", "String", "Binary", "Enum",
@@ -246,11 +255,13 @@ RunPanel::RunPanel(QWidget* parent)
     layout->addWidget(splitter, 1);
     nodes_ = new QTreeWidget(splitter);
     nodes_->setObjectName(QStringLiteral("runNodes"));
-    nodes_->setHeaderLabels({QStringLiteral("Node"), QStringLiteral("Status")});
+    nodes_->setHeaderLabels({QStringLiteral("Node"), QStringLiteral("Status"), QStringLiteral("Iteration")});
     nodes_->setRootIsDecorated(false);
     nodes_->setUniformRowHeights(true);
     nodes_->header()->setSectionResizeMode(0, QHeaderView::Stretch);
     nodes_->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+    nodes_->header()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+    nodes_->setColumnHidden(2, true);
 
     auto* call = new QWidget(splitter);
     auto* call_layout = new QVBoxLayout(call);
@@ -327,6 +338,20 @@ std::optional<InvocationKey> RunPanel::selected_invocation() const
     return node ? node->invocation : std::nullopt;
 }
 
+std::optional<std::int64_t> RunPanel::selected_iteration_index() const
+{
+    const auto* node = selected_node();
+    if (!node || !node->scope) { return std::nullopt; }
+    const auto iteration = std::ranges::find(progress_->iterations, *node->scope, &RunLoopIteration::scope);
+    return iteration == progress_->iterations.end() ? std::nullopt : std::optional{iteration->index};
+}
+
+QString RunPanel::selected_scope_path() const
+{
+    const auto* node = selected_node();
+    return node && node->scope ? nodes_->currentItem()->text(2) : QString{};
+}
+
 std::optional<OutputId> RunPanel::selected_output() const
 {
     const int row = outputs_->currentIndex();
@@ -345,7 +370,13 @@ void RunPanel::rebuild_history()
     const auto add_run = [&](const RunHandle& run, bool retired) {
         const auto* workflow = find_workflow(run.request().snapshot().solution(), run.identity().workflow);
         const auto name = workflow ? text(workflow->name) : id_text(run.identity().workflow);
-        const auto kind = std::holds_alternative<NodeTarget>(run.request().target()) ? QStringLiteral(" · Node debug") : QString{};
+        QString kind;
+        if (const auto* target = std::get_if<NodeTarget>(&run.request().target())) {
+            const auto* node = workflow ? find_node(*workflow, target->node) : nullptr;
+            if (node && std::holds_alternative<GroupConfiguration>(node->configuration)) {
+                kind = run.request().debug_state() == DebugStatePolicy::Active ? QStringLiteral(" · Group run") : QStringLiteral(" · Group debug");
+            } else { kind = QStringLiteral(" · Node debug"); }
+        }
         const auto suffix = retired ? QStringLiteral(" (outside history)") : QString{};
         const int row = history_->count();
         history_->addItem(QStringLiteral("Run %1 · %2%3%4").arg(id_text(run.identity().run), name, kind, suffix));
@@ -410,6 +441,26 @@ void RunPanel::refresh_run()
 
     {
         const QSignalBlocker blocker(nodes_);
+        nodes_->setColumnHidden(2, progress.iterations.empty() && progress.groups.empty());
+        nodes_->headerItem()->setText(2, progress.groups.empty() ? QStringLiteral("Iteration") : QStringLiteral("Scope"));
+        std::map<ExecutionScopeId, std::pair<ExecutionScopeId, QString>> scopes;
+        for (const auto& iteration : progress.iterations) {
+            scopes.emplace(iteration.scope, std::pair{iteration.loop.scope, QString::number(iteration.index)});
+        }
+        for (const auto& group : progress.groups) {
+            const auto* owner = flow ? find_node(*flow, group.group.node) : nullptr;
+            scopes.emplace(group.scope, std::pair{group.group.scope, owner ? text(owner->name) : id_text(group.group.node)});
+        }
+        std::map<ExecutionScopeId, QString> labels;
+        for (const auto& [scope, owner] : scopes) {
+            QStringList path{owner.second};
+            auto ancestor = scopes.find(owner.first);
+            while (ancestor != scopes.end() && path.size() <= static_cast<qsizetype>(scopes.size())) {
+                path.prepend(ancestor->second.second);
+                ancestor = scopes.find(ancestor->second.first);
+            }
+            labels.emplace(scope, QStringLiteral("%1 · Scope %2").arg(path.join(QStringLiteral(" / ")), id_text(scope)));
+        }
         const auto count = static_cast<int>(progress.nodes.size());
         while (nodes_->topLevelItemCount() > count) { delete nodes_->takeTopLevelItem(nodes_->topLevelItemCount() - 1); }
         const int previous_count = nodes_->topLevelItemCount();
@@ -425,7 +476,11 @@ void RunPanel::refresh_run()
             }
             const auto state = status_text(node.status);
             if (state != item->text(1)) { item->setText(1, state); }
-            if (old_node && old_node->node == node.node && (!old_node->invocation || old_node->invocation == node.invocation)) {
+            const auto scope = node.scope ? labels.find(*node.scope) : labels.end();
+            const auto label = scope == labels.end() ? QString{} : scope->second;
+            if (label != item->text(2)) { item->setText(2, label); }
+            if (old_node && old_node->node == node.node && old_node->scope == node.scope
+                && (!old_node->invocation || old_node->invocation == node.invocation)) {
                 selected_row = row;
             }
         }
@@ -447,7 +502,8 @@ void RunPanel::refresh_call()
         const auto& request = run->request();
         if (const auto* target = std::get_if<NodeTarget>(&request.target())) {
             const auto policy = request.debug_state() == DebugStatePolicy::Active ? QStringLiteral("Active") : QStringLiteral("Isolated");
-            lines.append(QStringLiteral("Debug target %1 · State policy %2").arg(id_text(target->node), policy));
+            lines.append(QStringLiteral("%1 %2 · State policy %3").arg(request.debug_state() == DebugStatePolicy::Active
+                ? QStringLiteral("Run target") : QStringLiteral("Debug target"), id_text(target->node), policy));
         }
         if (!request.inputs().empty()) {
             lines.append(QStringLiteral("Run inputs"));
@@ -477,6 +533,22 @@ void RunPanel::refresh_call()
         outputs_->setEnabled(outputs_->count() > 0);
         if (node) {
             lines.append(node->invocation ? invocation_text(*node->invocation) : QStringLiteral("Node %1").arg(id_text(node->node)));
+            if (node->scope) {
+                const auto owner = std::ranges::find(progress_->groups, *node->scope, &RunGroupCall::scope);
+                if (owner != progress_->groups.end()) {
+                    lines.append(QStringLiteral("Group call · %1").arg(invocation_text(owner->group)));
+                }
+                const auto iteration = std::ranges::find(progress_->iterations, *node->scope, &RunLoopIteration::scope);
+                if (iteration != progress_->iterations.end()) {
+                    lines.append(QStringLiteral("Loop index %1 · %2").arg(iteration->index).arg(invocation_text(iteration->loop)));
+                    for (const auto& exported : iteration->exports) {
+                        if (exported.producer.invocation == node->invocation) {
+                            lines.append(QStringLiteral("Loop output %1 · Attempt %2")
+                                .arg(id_text(exported.output), id_text(exported.producer.attempt)));
+                        }
+                    }
+                }
+            }
             if (node->skip_reason) {
                 lines.append(QStringLiteral("Skip reason: %1").arg(enum_text(*node->skip_reason,
                     std::array{"Disabled", "Upstream closed", "Fail fast", "Run cancelled", "Run timed out", "Not selected"})));
@@ -506,6 +578,18 @@ void RunPanel::refresh_call()
             if (result.elapsed) { lines.append(QStringLiteral("Elapsed: %1 ns").arg(result.elapsed->count())); }
             if (!result.outputs.empty()) { lines.append(QStringLiteral("Outputs")); }
             for (const auto& output : result.outputs) { lines.append(output_text(output)); }
+            if (!result.selected_control_outputs.empty()) {
+                QStringList outlets;
+                for (const auto& port : result.selected_control_outputs) { outlets.append(id_text(port)); }
+                lines.append(QStringLiteral("Selected control outlets: %1").arg(outlets.join(QStringLiteral(", "))));
+            }
+            const auto group = std::ranges::find(progress_->groups, result.identity.invocation, &RunGroupCall::group);
+            if (group != progress_->groups.end()) {
+                for (const auto& exported : group->exports) {
+                    lines.append(QStringLiteral("Group output %1 · %2 · Attempt %3")
+                        .arg(id_text(exported.output), invocation_text(exported.producer.invocation), id_text(exported.producer.attempt)));
+                }
+            }
             if (!result.diagnostics.empty()) { lines.append(QStringLiteral("Node diagnostics")); }
             for (const auto& item : result.diagnostics) { lines.append(diagnostic_text(item)); }
         }

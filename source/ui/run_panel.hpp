@@ -23,6 +23,8 @@ public:
 
     [[nodiscard]] std::optional<workflow::RunHandle> selected_run() const;
     [[nodiscard]] std::optional<core::InvocationKey> selected_invocation() const;
+    [[nodiscard]] std::optional<std::int64_t> selected_iteration_index() const;
+    [[nodiscard]] QString selected_scope_path() const;
     [[nodiscard]] std::optional<core::OutputId> selected_output() const;
 
 signals:

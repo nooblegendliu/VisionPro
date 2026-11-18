@@ -378,8 +378,58 @@ Fixture grouped_fixture()
     return result;
 }
 
+void validate_loop_exports()
+{
+    auto base = fixture(3);
+    auto interface = ports("test.loop");
+    for (const auto name : {"start", "end", "index"}) {
+        auto in = input(); in.id = key<InputId>(name);
+        interface.inputs.push_back(in);
+    }
+    const auto exported = key<OutputId>("values");
+    interface.outputs.push_back({exported, "Values", DataType::list(DataType::integer())});
+    const auto child = base.at(2).id;
+    const auto loop_id = base.at(1).id;
+    base.at(1).configuration = GroupConfiguration{interface, {child}, {{exported, base.output(2)}}, {},
+        LoopConfiguration{1, false, 0, {{exported, LoopExportMode::Collect}}, child}};
+    base.flow().containment = {{loop_id, child}};
+    base.at(2).bindings = {{key<InputId>("data"), {ScopedInputReference{base.flow().id, loop_id, key<InputId>("index"), {}}}}};
+    check(ok(base.validate()), "A loop collects typed values from its body and exposes the internal index to its children.");
+    const auto group = [](Fixture& f) -> GroupConfiguration& { return std::get<GroupConfiguration>(f.at(1).configuration); };
+    auto changed = base;
+    group(changed).loop->step = 0;
+    rejected(changed.validate(), "A zero step is rejected before execution.", loop_id);
+    changed = base;
+    group(changed).loop->interval_ms = -1;
+    rejected(changed.validate(), "A negative wait interval is invalid.", loop_id);
+    changed = base;
+    group(changed).loop->break_source = changed.at(3).id;
+    rejected(changed.validate(), "A break source cannot refer to a sibling of the loop.", loop_id);
+    changed.flow().containment.push_back({loop_id, changed.at(3).id});
+    rejected(changed.validate(), "A break source inside the body must be reachable.", loop_id);
+    changed = base;
+    changed.at(1).bindings = {{key<InputId>("index"), {ConfigValue::integer(1)}}};
+    rejected(changed.validate(), "The iteration index cannot be provided as an external binding.", loop_id);
+    changed = base;
+    group(changed).interface.outputs.front().type = DataType::list(DataType::boolean());
+    rejected(changed.validate(), "Collect validates the body source against the list element type.", loop_id);
+    changed = base;
+    auto& region = group(changed);
+    region.interface.outputs.front().type = DataType::optional(DataType::integer());
+    region.loop->exports.front().mode = LoopExportMode::First;
+    check(ok(changed.validate()), "First supports a typed Optional result for an empty loop.");
+    region.interface.outputs.front().type = DataType::integer();
+    region.loop->exports.front().mode = LoopExportMode::Sum;
+    rejected(changed.validate(), "Sum requires an explicit initial value.", loop_id);
+    region.loop->exports.front().initial = ConfigValue::integer(12);
+    check(ok(changed.validate()), "Sum accepts an initial value of the exported numeric type.");
+    region.loop->exports.front().initial = ConfigValue::boolean(true);
+    rejected(changed.validate(), "Sum rejects an initial value of a different type.", loop_id);
+}
+
 void validation_groups()
 {
+    validate_loop_exports();
     const auto original = grouped_fixture();
     auto checked = original.validate();
     check(ok(checked), "nested Group inputs, data exports and control exports are valid through public boundaries");

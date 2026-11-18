@@ -1,0 +1,943 @@
+{
+  "coordinates": [
+    {
+      "handedness": "left_handed",
+      "id": "s4.sample.rectangles",
+      "kind": "image",
+      "origin": {
+        "x": 0.0,
+        "y": 0.0
+      },
+      "unit": "pixel",
+      "x_axis": {
+        "x": 1.0,
+        "y": 0.0
+      },
+      "y_axis": {
+        "x": 0.0,
+        "y": -1.0
+      }
+    }
+  ],
+  "format": "visionpro.solution",
+  "format_version": 1,
+  "id": "5ca4f87a-ea1e-4d62-89b0-000000006000",
+  "layouts": [
+    {
+      "nodes": [
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000001101",
+          "x": 45.0,
+          "y": 80.0
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000001102",
+          "x": 275.0,
+          "y": 80.0
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000001103",
+          "x": 505.0,
+          "y": 80.0
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000006104",
+          "x": 735.0,
+          "y": 80.0
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000006105",
+          "x": 50.0,
+          "y": 80.0
+        }
+      ],
+      "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006100"
+    }
+  ],
+  "name": "S6.1 · 双 Blob 质心点集",
+  "queues": [],
+  "resources": [
+    {
+      "id": "5ca4f87a-ea1e-4d62-89b0-000000000201",
+      "kind": "image",
+      "location": {
+        "expected_sha256": null,
+        "kind": "external_file",
+        "path": {
+          "base": "solution_directory",
+          "named_root": null,
+          "path": "图像/双区域 输入.png"
+        },
+        "read_policy": "per_invocation",
+        "revision": null
+      },
+      "name": "双区域灰度 PNG"
+    }
+  ],
+  "revision": "1",
+  "variables": [],
+  "workflows": [
+    {
+      "containment": [
+        {
+          "child": "5ca4f87a-ea1e-4d62-89b0-000000006105",
+          "parent": "5ca4f87a-ea1e-4d62-89b0-000000006104"
+        }
+      ],
+      "control_exports": [],
+      "control_links": [
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000003101",
+          "output": null,
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000001101",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000001102"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000003102",
+          "output": null,
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000001102",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000001103"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000003103",
+          "output": null,
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000001103",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000006104"
+        }
+      ],
+      "enabled": true,
+      "entries": [
+        "5ca4f87a-ea1e-4d62-89b0-000000001101"
+      ],
+      "id": "5ca4f87a-ea1e-4d62-89b0-000000006100",
+      "interface": {
+        "control_outputs": [],
+        "id": "s6.sample.blob_loop",
+        "inputs": [],
+        "outputs": [
+          {
+            "allowed_absence": [],
+            "display_name": "points",
+            "id": "points",
+            "required": true,
+            "semantics": {
+              "coordinate_system": null,
+              "unit": "unspecified"
+            },
+            "type": {
+              "element": {
+                "kind": "point2d"
+              },
+              "kind": "list"
+            }
+          }
+        ],
+        "version": 1
+      },
+      "name": "按 Blob 个数遍历组件",
+      "nodes": [
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "enum",
+                      "members": [
+                        {
+                          "display_name": "Gray8",
+                          "id": "Gray8"
+                        },
+                        {
+                          "display_name": "Native8",
+                          "id": "Native8"
+                        }
+                      ],
+                      "schema": "visionpro.image.read_file.decode_mode",
+                      "version": 1
+                    },
+                    "value": "Gray8"
+                  }
+                }
+              ],
+              "target": {
+                "id": "decode_mode",
+                "kind": "parameter"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "point2d"
+                    },
+                    "value": {
+                      "coordinate_frame": "s4.sample.rectangles",
+                      "unit": "pixel",
+                      "x": 0.0,
+                      "y": 0.0
+                    }
+                  }
+                }
+              ],
+              "target": {
+                "id": "frame_origin",
+                "kind": "parameter"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "type": "visionpro.image.read_file"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000001101",
+          "join": "all_activated",
+          "name": "读取灰度图",
+          "resources": [
+            {
+              "resource": {
+                "id": "5ca4f87a-ea1e-4d62-89b0-000000000201",
+                "kind": "image",
+                "revision": null
+              },
+              "slot": "source"
+            }
+          ]
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000001101",
+                    "output": {
+                      "id": "image",
+                      "kind": "port"
+                    },
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006100"
+                  }
+                }
+              ],
+              "target": {
+                "id": "image",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "region2d"
+                    },
+                    "value": {
+                      "boundary_policy": "reject",
+                      "coordinate_frame": "s4.sample.rectangles",
+                      "empty_policy": "error",
+                      "exclusions": [],
+                      "fill": null,
+                      "id": "5ca4f87a-ea1e-4d62-89b0-000000004101",
+                      "source": {
+                        "coordinate_frame": "s4.sample.rectangles",
+                        "geometry": {
+                          "kind": "full_image"
+                        },
+                        "kind": "primitive",
+                        "local_direction_radians": 0.0,
+                        "transform": null,
+                        "unit": "pixel"
+                      },
+                      "unit": "pixel"
+                    }
+                  }
+                }
+              ],
+              "target": {
+                "id": "roi",
+                "kind": "parameter"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "128"
+                  }
+                }
+              ],
+              "target": {
+                "id": "threshold",
+                "kind": "parameter"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "enum",
+                      "members": [
+                        {
+                          "display_name": "Binary",
+                          "id": "Binary"
+                        },
+                        {
+                          "display_name": "Binary inverse",
+                          "id": "BinaryInverse"
+                        }
+                      ],
+                      "schema": "visionpro.image.threshold.mode",
+                      "version": 1
+                    },
+                    "value": "Binary"
+                  }
+                }
+              ],
+              "target": {
+                "id": "mode",
+                "kind": "parameter"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "type": "visionpro.image.threshold"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000001102",
+          "join": "all_activated",
+          "name": "阈值 128",
+          "resources": []
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000001102",
+                    "output": {
+                      "id": "binary",
+                      "kind": "port"
+                    },
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006100"
+                  }
+                }
+              ],
+              "target": {
+                "id": "binary",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "8"
+                  }
+                }
+              ],
+              "target": {
+                "id": "connectivity",
+                "kind": "parameter"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "type": "visionpro.image.blob"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000001103",
+          "join": "all_activated",
+          "name": "测量连通域",
+          "resources": []
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "0"
+                  }
+                }
+              ],
+              "target": {
+                "id": "start",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000001103",
+                    "output": {
+                      "id": "count",
+                      "kind": "port"
+                    },
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006100"
+                  }
+                }
+              ],
+              "target": {
+                "id": "end",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000001103",
+                    "output": {
+                      "id": "components",
+                      "kind": "port"
+                    },
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006100"
+                  }
+                }
+              ],
+              "target": {
+                "id": "components",
+                "kind": "input"
+              }
+            }
+          ],
+          "configuration": {
+            "control_exports": [],
+            "entries": [
+              "5ca4f87a-ea1e-4d62-89b0-000000006105"
+            ],
+            "interface": {
+              "control_outputs": [],
+              "id": "s6.sample.component_loop",
+              "inputs": [
+                {
+                  "binding": {
+                    "allowed_conversions": [
+                      "exact"
+                    ],
+                    "allowed_sources": [
+                      "constant",
+                      "run_output",
+                      "public_input"
+                    ],
+                    "cardinality": "single_source",
+                    "time": "before_invocation"
+                  },
+                  "constraints": {
+                    "allowed_values": [],
+                    "integer_range": null,
+                    "max_length": null,
+                    "real_range": null
+                  },
+                  "default_value": null,
+                  "display_name": "start",
+                  "id": "start",
+                  "required": true,
+                  "semantics": {
+                    "coordinate_system": null,
+                    "unit": "unspecified"
+                  },
+                  "type": {
+                    "kind": "int64"
+                  }
+                },
+                {
+                  "binding": {
+                    "allowed_conversions": [
+                      "exact"
+                    ],
+                    "allowed_sources": [
+                      "constant",
+                      "run_output",
+                      "public_input"
+                    ],
+                    "cardinality": "single_source",
+                    "time": "before_invocation"
+                  },
+                  "constraints": {
+                    "allowed_values": [],
+                    "integer_range": null,
+                    "max_length": null,
+                    "real_range": null
+                  },
+                  "default_value": null,
+                  "display_name": "end",
+                  "id": "end",
+                  "required": true,
+                  "semantics": {
+                    "coordinate_system": null,
+                    "unit": "unspecified"
+                  },
+                  "type": {
+                    "kind": "int64"
+                  }
+                },
+                {
+                  "binding": {
+                    "allowed_conversions": [
+                      "exact"
+                    ],
+                    "allowed_sources": [
+                      "constant",
+                      "run_output",
+                      "public_input"
+                    ],
+                    "cardinality": "single_source",
+                    "time": "before_invocation"
+                  },
+                  "constraints": {
+                    "allowed_values": [],
+                    "integer_range": null,
+                    "max_length": null,
+                    "real_range": null
+                  },
+                  "default_value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "0"
+                  },
+                  "display_name": "index",
+                  "id": "index",
+                  "required": false,
+                  "semantics": {
+                    "coordinate_system": null,
+                    "unit": "unspecified"
+                  },
+                  "type": {
+                    "kind": "int64"
+                  }
+                },
+                {
+                  "binding": {
+                    "allowed_conversions": [
+                      "exact"
+                    ],
+                    "allowed_sources": [
+                      "constant",
+                      "run_output",
+                      "public_input"
+                    ],
+                    "cardinality": "single_source",
+                    "time": "before_invocation"
+                  },
+                  "constraints": {
+                    "allowed_values": [],
+                    "integer_range": null,
+                    "max_length": null,
+                    "real_range": null
+                  },
+                  "default_value": null,
+                  "display_name": "components",
+                  "id": "components",
+                  "required": true,
+                  "semantics": {
+                    "coordinate_system": null,
+                    "unit": "unspecified"
+                  },
+                  "type": {
+                    "element": {
+                      "fields": [
+                        {
+                          "id": "area_pixels",
+                          "type": {
+                            "kind": "int64"
+                          }
+                        },
+                        {
+                          "id": "centroid",
+                          "type": {
+                            "kind": "point2d"
+                          }
+                        },
+                        {
+                          "id": "bounds",
+                          "type": {
+                            "fields": [
+                              {
+                                "id": "origin",
+                                "type": {
+                                  "kind": "point2d"
+                                }
+                              },
+                              {
+                                "id": "width",
+                                "type": {
+                                  "kind": "int64"
+                                }
+                              },
+                              {
+                                "id": "height",
+                                "type": {
+                                  "kind": "int64"
+                                }
+                              }
+                            ],
+                            "kind": "record",
+                            "schema": "visionpro.image.blob.bounds",
+                            "version": 1
+                          }
+                        }
+                      ],
+                      "kind": "record",
+                      "schema": "visionpro.image.blob.component",
+                      "version": 1
+                    },
+                    "kind": "list"
+                  }
+                }
+              ],
+              "outputs": [
+                {
+                  "allowed_absence": [],
+                  "display_name": "points",
+                  "id": "points",
+                  "required": true,
+                  "semantics": {
+                    "coordinate_system": null,
+                    "unit": "unspecified"
+                  },
+                  "type": {
+                    "element": {
+                      "kind": "point2d"
+                    },
+                    "kind": "list"
+                  }
+                },
+                {
+                  "allowed_absence": [],
+                  "display_name": "areas",
+                  "id": "areas",
+                  "required": true,
+                  "semantics": {
+                    "coordinate_system": null,
+                    "unit": "unspecified"
+                  },
+                  "type": {
+                    "element": {
+                      "kind": "int64"
+                    },
+                    "kind": "list"
+                  }
+                },
+                {
+                  "allowed_absence": [],
+                  "display_name": "first_area",
+                  "id": "first_area",
+                  "required": true,
+                  "semantics": {
+                    "coordinate_system": null,
+                    "unit": "unspecified"
+                  },
+                  "type": {
+                    "element": {
+                      "kind": "int64"
+                    },
+                    "kind": "optional"
+                  }
+                },
+                {
+                  "allowed_absence": [],
+                  "display_name": "last_area",
+                  "id": "last_area",
+                  "required": true,
+                  "semantics": {
+                    "coordinate_system": null,
+                    "unit": "unspecified"
+                  },
+                  "type": {
+                    "element": {
+                      "kind": "int64"
+                    },
+                    "kind": "optional"
+                  }
+                },
+                {
+                  "allowed_absence": [],
+                  "display_name": "total_area",
+                  "id": "total_area",
+                  "required": true,
+                  "semantics": {
+                    "coordinate_system": null,
+                    "unit": "unspecified"
+                  },
+                  "type": {
+                    "kind": "int64"
+                  }
+                }
+              ],
+              "version": 1
+            },
+            "kind": "loop",
+            "loop": {
+              "break_source": null,
+              "exports": [
+                {
+                  "initial": null,
+                  "mode": "collect",
+                  "output": "points"
+                },
+                {
+                  "initial": null,
+                  "mode": "collect",
+                  "output": "areas"
+                },
+                {
+                  "initial": null,
+                  "mode": "first",
+                  "output": "first_area"
+                },
+                {
+                  "initial": null,
+                  "mode": "last",
+                  "output": "last_area"
+                },
+                {
+                  "initial": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "0"
+                  },
+                  "mode": "sum",
+                  "output": "total_area"
+                }
+              ],
+              "inclusive_end": false,
+              "interval_ms": "0",
+              "step": "1"
+            },
+            "outputs": [
+              {
+                "output": "points",
+                "source": {
+                  "node": "5ca4f87a-ea1e-4d62-89b0-000000006105",
+                  "output": {
+                    "id": "item",
+                    "kind": "port"
+                  },
+                  "selector": [
+                    {
+                      "field": "centroid",
+                      "kind": "field"
+                    }
+                  ],
+                  "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006100"
+                }
+              },
+              {
+                "output": "areas",
+                "source": {
+                  "node": "5ca4f87a-ea1e-4d62-89b0-000000006105",
+                  "output": {
+                    "id": "item",
+                    "kind": "port"
+                  },
+                  "selector": [
+                    {
+                      "field": "area_pixels",
+                      "kind": "field"
+                    }
+                  ],
+                  "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006100"
+                }
+              },
+              {
+                "output": "first_area",
+                "source": {
+                  "node": "5ca4f87a-ea1e-4d62-89b0-000000006105",
+                  "output": {
+                    "id": "item",
+                    "kind": "port"
+                  },
+                  "selector": [
+                    {
+                      "field": "area_pixels",
+                      "kind": "field"
+                    }
+                  ],
+                  "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006100"
+                }
+              },
+              {
+                "output": "last_area",
+                "source": {
+                  "node": "5ca4f87a-ea1e-4d62-89b0-000000006105",
+                  "output": {
+                    "id": "item",
+                    "kind": "port"
+                  },
+                  "selector": [
+                    {
+                      "field": "area_pixels",
+                      "kind": "field"
+                    }
+                  ],
+                  "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006100"
+                }
+              },
+              {
+                "output": "total_area",
+                "source": {
+                  "node": "5ca4f87a-ea1e-4d62-89b0-000000006105",
+                  "output": {
+                    "id": "item",
+                    "kind": "port"
+                  },
+                  "selector": [
+                    {
+                      "field": "area_pixels",
+                      "kind": "field"
+                    }
+                  ],
+                  "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006100"
+                }
+              }
+            ]
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000006104",
+          "join": "all_activated",
+          "name": "遍历组件，汇集质心",
+          "resources": []
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "public_input",
+                  "value": {
+                    "group": "5ca4f87a-ea1e-4d62-89b0-000000006104",
+                    "input": "components",
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006100"
+                  }
+                }
+              ],
+              "target": {
+                "id": "list",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "public_input",
+                  "value": {
+                    "group": "5ca4f87a-ea1e-4d62-89b0-000000006104",
+                    "input": "index",
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006100"
+                  }
+                }
+              ],
+              "target": {
+                "id": "index",
+                "kind": "input"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "type": "visionpro.list.blob_at"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000006105",
+          "join": "all_activated",
+          "name": "按索引取 Blob 组件",
+          "resources": []
+        }
+      ],
+      "outputs": [
+        {
+          "output": "points",
+          "source": {
+            "node": "5ca4f87a-ea1e-4d62-89b0-000000006104",
+            "output": {
+              "id": "points",
+              "kind": "port"
+            },
+            "selector": [],
+            "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006100"
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -48,7 +48,7 @@ S5.6 通过 GUI/CLI 对照、交互生命周期回归和负载验收。[S5 验�
 | 3. 无 GUI 执行与配置往返验证 | S3.1–S3.9 完成。Release 82/82 项通过，26 项 S3 必验范围全部通过 |
 | 4. 无 GUI 视觉闭环 | 使用少量真实 OpenCV 工具及固定图像验证结果 |
 | 5. 基础可视化界面 | S5.1–S5.6 已验收。整体验收见 §9.10 |
-| 6. 后续能力 | 完整循环、多流程并行、触发、共享服务、设备及扩展工具 |
+| 6. 运行与工业接入 | [S6.1–S6.12 实施与验收计划](s6-plan.md)给出框架与节点的实施顺序、固定输入、验收入口和设备验证条件 |
 
 绑定校验与解析先于或伴随执行器实现。
 第三阶段可以单线程调度，但不能只验收单链，把分叉/汇合整体留到后续。
@@ -425,6 +425,8 @@ $cli = '.\out\build\s39\source\app\Release\visionpro_cli.exe'
 
 `$manifest` 和 `$workflowId` 使用实际方案的文件路径和流程 UUID。`offset=7` 对应验收夹具的公开 Int64 输入。
 成功退出码为 `0`，参数错误为 `2`，其他失败为 `1`。诊断 JSON 写入 stderr，已受理的失败运行也在 stdout 保留终态摘要。
+`run`、`save` 和 `--help` 在返回前显式刷新并检查 stdout。输出写入或刷新失败时返回 `1`，
+并在 stderr 报告 `stage=report`、`ExecutionBoundaryFailure`；已执行的流程或已提交的保存不会因此回滚。
 摘要字段见 [data-model.md §4.11](data-model.md#411-s39-命令行运行摘要)，实测记录见 [§8.20](#820-s39-与-s3-整体验收记录)。
 
 命令行静态注册下列模拟工具，配置版本均为 1。
@@ -2260,3 +2262,56 @@ ROI 专用编辑见 §9.8，GUI/CLI 结果对照见 §9.10。
 2026-11-16 完成 Windows x64 Release 回归。GUI 和 OpenCV 开启 **116/116** 项 CTest 通过，独立无 GUI 和无 OpenCV 构建 **92/92** 项通过。Windows 原生 Qt 平台复测通过双入口对照、生命周期和图像用例，部署窗口成功创建并正常关闭。[复现命令](#329-s56-release-构建与验收)
 
 三条 S4 固定流程各完成原始、语义修改、仅布局修改并重载的对照，共 **9 对**。新增回归验证运行中编辑与历史图像所有权，以及窗口销毁后迟到的完成和实际退出。负载在默认保留 16 轮、观察容量 32 的配置下通过验收门限。[验收矩阵、数值与交接](s5-acceptance.md)
+
+## 10. S6 实施与验证
+
+### 10.1 S6.1 循环与点集
+
+2026-11-18 在 Windows x64 Release 上完成全量回归。Qt 与 OpenCV 配置 **120/120** 项 CTest 通过，无 GUI、无 OpenCV 配置 **95/95** 项通过。桌面对照通过 Qt offscreen 平台操作编辑器、保存和重载，CLI 由独立进程运行。两套构建的回归日志分别位于 `out/build/s61-gui/ctest.log` 和 `out/build/s61-headless/ctest.log`。
+
+[双 Blob 循环方案](../samples/s6-loop/solution.json)复用 S4 的「双区域 输入.png」。从桌面打开方案，运行「按 Blob 个数遍历组件」，在运行面板查看「遍历组件，汇集质心」的公开输出。在标有迭代 0 和 1 的两行取项调用间切换，可查看各次的调用身份和导出来源。用 **File → Save As** 保存到新目录，重新打开后运行。独立 CLI 读取另存目录的 `solution.json`，将下方 `$solution` 替换为它的绝对路径即可对照。
+
+| 场景 | 验收依据与结果 |
+|---|---|
+| 两个 Blob | 桌面和独立 CLI 执行相同修订。索引 0、1 各派发一次，使用不同作用域和调用身份。`points` 按顺序导出像素质心 (2, 1.5) 和 (8, 6)，每项可追溯到对应调用的 `item.centroid`。`areas` 为 [6, 9]，首项、末项、求和分别为 6、9、15。 |
+| 零次循环 | 在桌面把阈值改为 255，保存并重载。桌面和 CLI 均成功，取项调用 0 次，点集和面积列表为空，可选首／末项均无值，求和为初值 0。核心测试另验必需首项缺失会报错，以及非零归约初值会保留。 |
+| 中途取消 | 桌面设置 30 秒迭代间隔，等待第一项已收集，再触发取消。3 秒内进入静止状态，只执行一次取项，循环状态为 `Cancelled`，未发布部分点集。无 GUI 测试还在间隔内运行另一条流程，验证等待期间调度器能处理其他工作。 |
+| 核心边界 | 整数列表用例覆盖反向含终点、嵌套循环与提前退出、零步长、计数溢出及中途越界。两轮运行各自导出累计序列 [1, 2]，验证每轮状态的隔离。 |
+
+在 Windows x64 的 PowerShell 中从仓库根目录执行。两套构建沿用 [§3.28 的 Release 配置](#328-s55-release-构建与测试)，将目录设为 `out/build/s61-gui` 与 `out/build/s61-headless`。前者开启 Qt 与 OpenCV，后者均关闭。
+
+```powershell
+$guiBuild = 'out/build/s61-gui'
+$coreBuild = 'out/build/s61-headless'
+$openCvBin = (Resolve-Path (Join-Path $env:OpenCV_DIR '../bin')).Path
+$env:Path = "$openCvBin;$env:Path"
+$solution = (Resolve-Path 'samples/s6-loop/solution.json').Path
+& "$guiBuild/source/app/visionpro_cli.exe" run --solution $solution --workflow 5ca4f87a-ea1e-4d62-89b0-000000006100
+ctest --test-dir $guiBuild -C Release -R 'visionpro_loop_parity_tests|app.structured_loops|workflow.loop_state_and_plan_capability' --output-on-failure
+ctest --test-dir $coreBuild -C Release -R 'app.structured_loops|workflow.loop_state_and_plan_capability' --output-on-failure
+```
+
+### 10.2 S6.2 Group 调用与跨方案复用
+
+2026-11-18 完成 Windows x64 Release 回归。Qt 与 OpenCV 配置 **125/125** 项 CTest 通过，无 GUI、无 OpenCV 配置 **99/99** 项通过。Qt offscreen 编辑器将 Group 导出后在另一个方案内导入两次、接线、保存并重载。移走源方案和导出包后，桌面和独立 CLI 仍从目标方案得到同一组像素质心 (2, 1.5)、(8, 6) 和总面积 15，导出来源可追溯至各自的子作用域。包测试覆盖必需宿主服务或资产缺失、摘要不匹配、同名异 ID、坐标定义冲突与失败回滚。完整日志见 `out/build/s62-gui/ctest.log` 和 `out/build/s62-headless/ctest.log`。
+
+[双 Blob Group 方案](../samples/s6-group/solution.json)以 `threshold` 为公开输入，默认 128。Group 内的分叉分别启动图像处理和会话计数。公开数据端口包括点集、面积列表、首末面积、总面积和实例调用次数 `calls`。控制出口 `measured` 激活宿主中的面积读取节点。
+
+1. 从桌面打开样例，运行「双 Blob Group 调用」。查看 Group 的 `points`、`total_area` 和 `calls`。选择 Group，在 **Run** 菜单中独立调试，将公开阈值改为 255，可见空点集和总面积 0。**Run Selected Group** 可单独推进该实例的活动计数。
+2. 选中普通 Group，经 **File** 菜单导出到新目录。包内的 `subgraph.json` 和资产子目录须一起保留。在另一份已保存方案中选中目标流程，通过 **Import Subgraph Package** 导入两次。每次导入选中新实例。将 A 设为流程入口，将 A 的 `measured` 出口连到 B，再保存并重载。
+3. 在新的桌面会话运行该流程，两个实例各得到两个质心和调用次数 1。单独以活动状态运行 A，其计数升至 2；再运行整条流程，A 和 B 分别为 3、2。CLI 进程从新会话启动，复现保存配置的首次运行结果。实例状态保留在所属会话中，子图包和方案文件只保存配置。
+
+命令在仓库根目录的 PowerShell 执行。Release 配置沿用 [§3.28](#328-s55-release-构建与测试)，目录改为 `out/build/s62-gui` 和 `out/build/s62-headless`。原始样例具有固定 ID，导入的新实例使用目标方案中的新 ID。
+
+```powershell
+$guiBuild = 'out/build/s62-gui'
+$coreBuild = 'out/build/s62-headless'
+$env:Path = (Resolve-Path (Join-Path $env:OpenCV_DIR '../bin')).Path + ';' + $env:Path
+$solution = (Resolve-Path 'samples/s6-group/solution.json').Path
+$flow = '5ca4f87a-ea1e-4d62-89b0-000000006210'
+$group = '5ca4f87a-ea1e-4d62-89b0-000000006211'
+& "$guiBuild/source/app/visionpro_cli.exe" run --solution $solution --workflow $flow
+& "$guiBuild/source/app/visionpro_cli.exe" run --solution $solution --workflow $flow --group $group --input threshold=255
+ctest --test-dir $guiBuild -C Release -R '^visionpro_group_parity_tests$' --output-on-failure
+ctest --test-dir $coreBuild -C Release -R 'infrastructure.subgraph_package|workflow.group_state_domains|workflow.group_exports_and_debug|workflow.enabled_workflow_requests' --output-on-failure
+```

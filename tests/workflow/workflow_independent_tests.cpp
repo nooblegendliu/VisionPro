@@ -237,16 +237,18 @@ void group_boundary()
     flow.entries = {group};
     const auto snapshot = fixture.capture();
 
-    const auto submitted = fixture.engine->submit(take(RunRequest::create(snapshot, target('4'), {}, debug())));
-    const auto* refusal = std::get_if<RunRejected>(&submitted);
-    check(refusal && refusal->diagnostic.code == ErrorCode::MissingCapability
-        && refusal->diagnostic.location.node == group && fixture.calls->created.empty(),
-        "An independent Group target reports its missing execution capability before any factory call.");
+    const auto grouped = accepted(*fixture.engine, take(RunRequest::create(snapshot, target('4'), {}, debug())));
+    const auto group_progress = finished(grouped);
+    check(group_progress.groups.size() == 1 && group_progress.groups.front().group.node == group
+        && fixture.calls->started == std::vector{uuid<NodeId>('1'), target().node, uuid<NodeId>('3')},
+        "An independent Group executes exactly its three internal tools in control order.");
+    sum_is(grouped, group_progress.nodes.back(), 111);
 
     const auto child = accepted(*fixture.engine, take(RunRequest::create(snapshot, target(), amount(25), debug())));
     const auto progress = finished(child);
     check(progress.nodes.size() == 1 && progress.control_links.empty()
-        && fixture.calls->created == std::vector{target().node} && fixture.calls->started == fixture.calls->created,
+        && fixture.calls->created == std::vector{uuid<NodeId>('1'), target().node, uuid<NodeId>('3'), target().node}
+        && fixture.calls->started == fixture.calls->created,
         "A child tool may run independently of its enabled Group's control graph.");
     sum_is(child, progress.nodes.front(), 35);
 

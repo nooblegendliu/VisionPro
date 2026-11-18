@@ -305,8 +305,8 @@ QVariant ControlGraphModel::nodeData(NodeId node, NodeRole role) const
     case NodeRole::Caption: {
         const auto& value = active_workflow()->nodes[nodes_.at(node).source_index];
         auto name = QString::fromStdString(value.name);
-        if (std::holds_alternative<GroupConfiguration>(value.configuration)) {
-            name += QStringLiteral(" (Group)");
+        if (const auto* group = std::get_if<GroupConfiguration>(&value.configuration)) {
+            name += group->loop ? QStringLiteral(" (Loop)") : QStringLiteral(" (Group)");
         }
         if (!value.enabled) { name += QStringLiteral(" (Disabled)"); }
         return name;

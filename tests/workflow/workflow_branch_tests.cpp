@@ -405,6 +405,147 @@ void branch_selection()
     check(fixture.driver->calls(uuid<NodeId>('9')) == 2, "An unavailable mandatory binding does not send.");
 }
 
+void group_exports_and_debug()
+{
+    Fixture fixture;
+    auto draft = solution(1, true, false);
+    auto& flow = draft.workflows.front();
+    const auto outer = uuid<NodeId>('b'), inner = uuid<NodeId>('c'), choose = uuid<NodeId>('1'), measure = uuid<NodeId>('2');
+    const auto mask = key<InputId>("mask");
+    const auto out = key<OutputId>("value");
+    const auto yes = key<ControlOutputId>("yes"), done = key<ControlOutputId>("done");
+    auto port = input("mask", DataType::integer(), BindingSourceKind::PublicInput);
+    port.binding.allowed_sources.push_back(BindingSourceKind::GlobalRead);
+    const auto region = [&](std::string_view name, std::vector<NodeId> entries, OutputReference source, ControlOutputMapping control) {
+        const ControlOutputMapping completed{done, control.source, {}};
+        return GroupConfiguration{{key<SchemaId>(name), 1, {port}, {{out, "Value", DataType::integer()}}, {{yes, "Yes"}, {done, "Done"}}},
+            std::move(entries), {{out, std::move(source)}}, {std::move(control), completed}};
+    };
+    flow.interface = {key<SchemaId>("s62.flow"), 1, {port}};
+    flow.outputs.clear();
+    const auto branch = key<ControlOutputId>("left");
+    flow.nodes = {
+        {outer, "Outer", region("s62.outer", {inner}, {flow.id, inner, out, {}}, {yes, inner, yes}),
+            {{mask, {ScopedInputReference{flow.id, {}, mask, {}}}}}},
+        {inner, "Inner", region("s62.inner", {choose, measure}, {flow.id, measure, key<OutputId>("reading"), {}}, {yes, choose, branch}),
+            {{mask, {ScopedInputReference{flow.id, outer, mask, {}}}}}},
+        node('1', "s34.choose", "Choose", {{mask, {ScopedInputReference{flow.id, inner, mask, {}}}}}),
+        node('2', "s34.measure", "Measure", {{key<InputId>("value"), {ConfigValue::integer(7)}}}),
+        node('3', "s34.probe", "Internal branch"), node('4', "s34.probe", "Outer successor"),
+        node('5', "s34.probe", "Unconditional successor"), node('6', "s34.probe", "Completed child successor")};
+    flow.containment = {{outer, inner}, {inner, choose}, {inner, measure}, {inner, uuid<NodeId>('3')}};
+    flow.entries = {outer};
+    flow.control_links = {{uuid<ControlLinkId>('1'), choose, branch, uuid<NodeId>('3')},
+        {uuid<ControlLinkId>('2'), outer, yes, uuid<NodeId>('4')},
+        {uuid<ControlLinkId>('3'), outer, {}, uuid<NodeId>('5')}, {uuid<ControlLinkId>('4'), outer, done, uuid<NodeId>('6')}};
+    auto capture = [&] { return take(ConfigSnapshot::capture(draft, fixture.registry.descriptors(),
+        {fixture.engine->session(), take(fixture.snapshots.next())})); };
+    const RunTrigger manual{TriggerKind::Manual, key<SchemaId>("s62.group.test")};
+    auto start = [&](RunRequest request) {
+        auto submission = fixture.engine->submit(request);
+        if (const auto* failure = std::get_if<RunRejected>(&submission)) { throw std::runtime_error(failure->diagnostic.message); }
+        return std::get<RunHandle>(std::move(submission));
+    };
+    const auto snapshot = capture();
+    for (std::int64_t bit : {1, 0}) {
+        const auto handle = start(take(RunRequest::create(snapshot, WorkflowTarget{flow.id}, {{mask, DataValue::integer(bit)}}, manual)));
+        const auto trace = wait_for(handle);
+        check(trace.status == ExecutionStatus::Succeeded && trace.groups.size() == 2 && trace.iterations.empty(),
+            "Two nested Group calls execute exactly once and retain child scopes.");
+        const auto parent = result(handle, progress_of(trace, 'b', ExecutionStatus::Succeeded));
+        const auto child = result(handle, progress_of(trace, 'c', ExecutionStatus::Succeeded));
+        check(*std::get<DataValue>(parent.output(out)->content).as_int64() == 7
+            && trace.groups[0].exports.front().producer.invocation == child.data().identity.invocation
+            && trace.groups[1].exports.front().producer.invocation.node == measure,
+            "Marshalled public outputs retain the exact child invocation at each boundary.");
+        check(parent.data().selected_control_outputs == (bit ? std::vector{yes, done} : std::vector{done}),
+            "A named child outlet follows selection while a successful child always opens its completion mapping.");
+        progress_of(trace, '5', ExecutionStatus::Succeeded);
+        progress_of(trace, '6', ExecutionStatus::Succeeded);
+        progress_of(trace, '3', bit ? ExecutionStatus::Succeeded : ExecutionStatus::Skipped);
+        progress_of(trace, '4', bit ? ExecutionStatus::Succeeded : ExecutionStatus::Skipped);
+    }
+
+    auto& inner_group = std::get<GroupConfiguration>(flow.nodes[1].configuration);
+    inner_group.entries = {choose};
+    flow.control_links.push_back({uuid<ControlLinkId>('5'), choose, branch, measure});
+    const auto decision = key<OutputId>("decision_status");
+    inner_group.interface.outputs.insert(inner_group.interface.outputs.begin(), OutputDescriptor{
+        decision, "Decision status", take(system_field_type(SystemField::ExecutionStatus))});
+    inner_group.outputs.insert(inner_group.outputs.begin(), OutputMapping{decision, {flow.id, choose, SystemField::ExecutionStatus, {}}});
+    const auto closed = start(take(RunRequest::create(capture(), WorkflowTarget{flow.id}, {{mask, DataValue::integer(0)}}, manual)));
+    const auto incomplete = wait_for(closed);
+    const auto failed = result(closed, progress_of(incomplete, 'c', ExecutionStatus::Failed));
+    const auto failed_group = std::ranges::find(incomplete.groups, inner, [](const RunGroupCall& call) { return call.group.node; });
+    check(incomplete.status == ExecutionStatus::Failed && !failed.output(out) && !failed.output(decision)
+        && failed_group != incomplete.groups.end() && failed_group->exports.empty()
+        && failed.data().diagnostics.front().code == ErrorCode::InputUnavailable
+        && failed.data().diagnostics.front().location.output == out,
+        "One missing required export prevents publication of all Group outputs and their producer traces.");
+    inner_group.interface.outputs.erase(inner_group.interface.outputs.begin());
+    inner_group.outputs.erase(inner_group.outputs.begin());
+    auto& public_output = inner_group.interface.outputs.front();
+    const auto required = public_output;
+    public_output.required = false;
+    for (const auto reason : {OutputAbsenceReason::NotSelected, OutputAbsenceReason::Disabled}) {
+        public_output.allowed_absence = {reason};
+        const auto declared = validate_public_interface(inner_group.interface);
+        const auto* invalid = std::get_if<Diagnostic>(&declared);
+        check(invalid && invalid->code == ErrorCode::InvalidDescriptor && invalid->location.output == out,
+            "Control closure cannot be declared as a successful public output omission.");
+    }
+    public_output.allowed_absence = {OutputAbsenceReason::ConditionNotMet};
+    auto& producer = *std::ranges::find(flow.nodes, measure, &Node::id);
+    for (const bool disabled : {false, true}) {
+        producer.enabled = !disabled;
+        const auto skipped = start(take(RunRequest::create(capture(), WorkflowTarget{flow.id},
+            {{mask, DataValue::integer(disabled ? 1 : 0)}}, manual)));
+        const auto progress = wait_for(skipped);
+        const auto& skipped_node = progress_of(progress, '2', ExecutionStatus::Skipped);
+        const auto record = result(skipped, progress_of(progress, 'c', ExecutionStatus::Failed));
+        const auto frame = std::ranges::find(progress.groups, inner, [](const RunGroupCall& call) { return call.group.node; });
+        check(!skipped_node.invocation && skipped_node.skip_reason == (disabled ? NodeSkipReason::Disabled : NodeSkipReason::NotSelected)
+            && frame != progress.groups.end() && frame->exports.empty() && !record.output(out)
+            && record.data().diagnostics.front().code == ErrorCode::InputUnavailable,
+            "A skipped producer preserves its control reason and creates neither an output slot nor an export identity.");
+    }
+    producer.enabled = true;
+    public_output = required;
+    flow.control_links.pop_back();
+    inner_group.entries = {choose, measure};
+
+    // The detached target is nested and its surrounding persistent input is now invalid.
+    const auto external = uuid<VariableId>();
+    draft.variables.push_back({external, "Host mask", DataType::integer(), ConfigValue::integer(0)});
+    flow.nodes[1].bindings.front().sources = {GlobalReference{external, {}, {}}};
+    const auto detached = capture();
+    const auto debug = RunTrigger{TriggerKind::Debug, key<SchemaId>("s62.debug")};
+    const auto missing = RunRequest::create(detached, NodeTarget{flow.id, inner}, {}, debug);
+    const auto* error = std::get_if<Diagnostic>(&missing);
+    check(error && error->code == ErrorCode::MissingRequiredValue && error->location.input == mask,
+        "Missing host input is diagnosed on the Group public port.");
+    const auto group = start(take(RunRequest::create(detached, NodeTarget{flow.id, inner}, {{mask, DataValue::integer(1)}}, debug)));
+    const auto trace = wait_for(group);
+    check(trace.groups.size() == 1 && trace.groups.front().group.node == inner && trace.groups.front().group.scope.value() == 0
+        && std::ranges::count(trace.call_order, outer) == 0 && std::ranges::count(trace.call_order, uuid<NodeId>('4')) == 0,
+        "Debugging a nested Group ignores outer bindings, enclosing Groups and exterior successors.");
+    const auto& input_trace = progress_of(trace, 'c', ExecutionStatus::Succeeded).bindings.front().sources.front();
+    check(std::holds_alternative<IndependentInputTrace>(input_trace.origin), "Injected Group input has independent-call provenance.");
+
+    const auto unavailable = fixture.engine->submit(take(RunRequest::create(detached, NodeTarget{flow.id, outer}, {{mask, DataValue::integer(1)}}, debug)));
+    const auto* refusal = std::get_if<RunRejected>(&unavailable);
+    check(refusal && refusal->diagnostic.code == ErrorCode::GlobalUnavailable && refusal->diagnostic.location.variable == external,
+        "Detached host must explicitly supply a global used inside its Group.");
+    const std::array globals{GlobalVariableEntry{external, DataValue::integer(0), 3, ExternalUpdateOrigin{fixture.engine->session(), key<SchemaId>("s62.host")}}};
+    const auto supplied = start(take(RunRequest::create(detached, NodeTarget{flow.id, outer}, {{mask, DataValue::integer(1)}}, debug, {}, {}, globals)));
+    check(wait_for(supplied).status == ExecutionStatus::Succeeded, "The explicitly injected host service satisfies the exact dependency.");
+
+    flow.nodes[0].configuration = region("s62.outer", {inner}, {flow.id, measure, key<OutputId>("reading"), {}}, {yes, inner, yes});
+    const auto illegal = fixture.engine->submit(take(RunRequest::create(capture(), WorkflowTarget{flow.id}, {{mask, DataValue::integer(1)}}, manual)));
+    refusal = std::get_if<RunRejected>(&illegal);
+    check(refusal && refusal->diagnostic.code == ErrorCode::ScopeViolation, "A parent cannot export through its child's public boundary.");
+}
+
 void branch_fail_fast()
 {
     Fixture fixture;
@@ -456,6 +597,7 @@ int main(int argc, char** argv)
     try {
         const std::string_view test = argc == 2 ? argv[1] : "";
         if (test == "branch_selection") { branch_selection(); }
+        else if (test == "group_exports_and_debug") { group_exports_and_debug(); }
         else if (test == "branch_fail_fast") { branch_fail_fast(); }
         else { throw std::runtime_error("Unknown branch integration test."); }
         std::cout << test << ": " << checks << " checks, 0 failures\n";

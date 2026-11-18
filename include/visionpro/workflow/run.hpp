@@ -25,6 +25,7 @@ enum class TriggerKind { Manual, Continuous, External, Debug };
 struct RunTrigger { TriggerKind kind; core::SchemaId source; };
 enum class DebugStatePolicy { Isolated, Active };
 struct RunInput { core::InputId id; core::DataValue value; };
+struct WorkflowRunInputs { core::WorkflowId workflow; std::vector<RunInput> inputs; };
 enum class InputOrigin { Provided, Default };
 struct FixedRunInput { core::InputId id; core::DataValue value; InputOrigin origin; };
 
@@ -40,6 +41,11 @@ public:
         RunTarget target, const std::vector<RunInput>& inputs, RunTrigger trigger,
         std::optional<core::CorrelationId> correlation = std::nullopt,
         std::optional<DebugStatePolicy> debug_state = std::nullopt,
+        std::span<const core::GlobalVariableEntry> globals = {});
+    // Fix the enabled workflows and all their input values in one immutable snapshot.
+    // Preparation is side-effect free. Hosts submit the returned requests when ready.
+    [[nodiscard]] static core::Result<std::vector<RunRequest>> enabled_workflows(const ConfigSnapshot& snapshot,
+        std::span<const WorkflowRunInputs> inputs, RunTrigger trigger,
         std::span<const core::GlobalVariableEntry> globals = {});
     [[nodiscard]] const ConfigSnapshot& snapshot() const noexcept;
     [[nodiscard]] const RunTarget& target() const noexcept;

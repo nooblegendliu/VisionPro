@@ -1,4 +1,6 @@
+#include "windows_path.hpp"
 #include "solution_save.hpp"
+#include "imported_asset.hpp"
 
 #include "managed_cleanup.hpp"
 #include "solution_codec.hpp"
@@ -101,6 +103,7 @@ Result<SavePreparation> prepare_save(const SolutionDocument& source, const Solut
         const auto* managed = std::get_if<ManagedResource>(&resource.location);
         if (!managed || supplied.contains(resource.id)) { continue; }
         const auto* existing = find_resource(previous, resource.id);
+        if (!existing && detail::is_imported_asset(resource.id, *managed)) { continue; }
         const auto* old = existing ? std::get_if<ManagedResource>(&existing->location) : nullptr;
         if (!old || existing->kind != resource.kind || !same_version(*old, *managed)) {
             return error(ErrorCode::InvalidResource, next, "A changed managed version requires an explicit file write.", resource.id);
@@ -117,7 +120,7 @@ Check compare_manifest(const SolutionDocument& source, const fs::path& manifest)
     auto bytes = detail::read_manifest(manifest);
     if (auto* failure = std::get_if<Diagnostic>(&bytes)) {
         std::error_code io;
-        const auto status = fs::symlink_status(manifest, io);
+        const auto status = fs::symlink_status(detail::windows_access_path(manifest), io);
         if (status.type() == fs::file_type::not_found) {
             return error(ErrorCode::SolutionSaveConflict, source.solution(), "The loaded manifest no longer exists.");
         }
@@ -155,9 +158,9 @@ struct StagedFiles {
     {
         if (committed) { return; }
         std::error_code ignored;
-        if (manifest_written) { fs::remove(preparation.temporary_manifest, ignored); }
-        for (const auto& file : std::span{preparation.files}.first(written)) { fs::remove(file.path, ignored); }
-        if (resource_directory_created) { fs::remove(preparation.resource_directory, ignored); }
+        if (manifest_written) { fs::remove(detail::windows_access_path(preparation.temporary_manifest), ignored); }
+        for (const auto& file : std::span{preparation.files}.first(written)) { fs::remove(detail::windows_access_path(file.path), ignored); }
+        if (resource_directory_created) { fs::remove(detail::windows_access_path(preparation.resource_directory), ignored); }
     }
 };
 
@@ -170,8 +173,8 @@ Check stage_files(StagedFiles& staged, const detail::SaveCheckpoint& checkpoint)
 {
     const auto& prepared = staged.preparation;
     if (!prepared.files.empty()) {
-        staged.resource_directory_created = fs::create_directory(prepared.resource_directory);
-        const auto attributes = GetFileAttributesW(prepared.resource_directory.c_str());
+        staged.resource_directory_created = fs::create_directory(detail::windows_access_path(prepared.resource_directory));
+        const auto attributes = GetFileAttributesW(detail::windows_access_path(prepared.resource_directory).c_str());
         if (attributes == INVALID_FILE_ATTRIBUTES || !(attributes & FILE_ATTRIBUTE_DIRECTORY)
             || (attributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
             return error(ErrorCode::InvalidPath, prepared.solution, "The managed resources directory must be a local directory in the package.");

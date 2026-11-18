@@ -132,6 +132,31 @@ Result<RunRequest> RunRequest::create(const ConfigSnapshot& snapshot, RunTarget 
         {globals.begin(), globals.end()}})};
 }
 
+Result<std::vector<RunRequest>> RunRequest::enabled_workflows(const ConfigSnapshot& snapshot,
+    std::span<const WorkflowRunInputs> inputs, RunTrigger trigger, std::span<const core::GlobalVariableEntry> globals)
+{
+    std::set<core::WorkflowId> supplied;
+    for (const auto& group : inputs) {
+        const auto* workflow = find_workflow(snapshot.solution(), group.workflow);
+        if (!workflow || !workflow->enabled || !supplied.insert(group.workflow).second) {
+            auto diagnostic = error(ErrorCode::InvalidRunRequest, "Batch inputs must name a unique enabled workflow in this snapshot.");
+            diagnostic.location.solution = snapshot.solution().id;
+            diagnostic.location.workflow = group.workflow;
+            return diagnostic;
+        }
+    }
+    std::vector<RunRequest> requests;
+    const std::vector<RunInput> empty;
+    for (const auto& flow : snapshot.solution().workflows) {
+        if (!flow.enabled) { continue; }
+        const auto it = std::ranges::find(inputs, flow.id, &WorkflowRunInputs::workflow);
+        auto request = create(snapshot, WorkflowTarget{flow.id}, it == inputs.end() ? empty : it->inputs, trigger, {}, {}, globals);
+        if (auto* failure = std::get_if<Diagnostic>(&request)) { return *failure; }
+        requests.push_back(std::get<RunRequest>(std::move(request)));
+    }
+    return requests;
+}
+
 const ConfigSnapshot& RunRequest::snapshot() const noexcept { return storage_->snapshot; }
 const RunTarget& RunRequest::target() const noexcept { return storage_->target; }
 std::span<const FixedRunInput> RunRequest::inputs() const noexcept { return storage_->inputs; }

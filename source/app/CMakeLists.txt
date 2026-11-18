@@ -2,7 +2,7 @@ add_library(visionpro_app_tools STATIC tool_catalog.cpp tool_catalog.hpp)
 target_include_directories(visionpro_app_tools PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>")
 target_link_libraries(visionpro_app_tools
     PUBLIC visionpro_core
-    PRIVATE visionpro_simulation_tools visionpro_build_options
+    PRIVATE visionpro_simulation_tools visionpro_list_tools visionpro_build_options
 )
 if(VISIONPRO_WITH_OPENCV)
     target_compile_definitions(visionpro_app_tools PRIVATE VISIONPRO_WITH_OPENCV)

@@ -2,7 +2,8 @@
 #include <visionpro/core/id_factory.hpp>
 #include <visionpro/core/runtime_id_factory.hpp>
 #include <visionpro/workflow/execution_plan.hpp>
-#include "control_schedule.hpp"
+#include "scoped_schedule.hpp"
+#include "loop_execution.hpp"
 #include "node_state_service.hpp"
 #include "observation_hub.hpp"
 
@@ -11,6 +12,7 @@
 #include <list>
 #include <map>
 #include <mutex>
+#include <set>
 #include <stdexcept>
 #include <thread>
 #include <utility>
@@ -147,6 +149,11 @@ private:
 
 enum class CallDecision { Waiting, Advance, Stop, Cancel };
 
+struct GroupExports {
+    std::size_t frame;
+    std::vector<RunExportTrace> sources;
+};
+
 class EngineRun final : public RunControl {
 public:
     EngineRun(const RunRequest& request, WorkflowRunId id, detail::ControlSchedule schedule,
@@ -244,7 +251,7 @@ public:
     {
         const std::lock_guard lock(mutex_);
         const auto globals = request().globals();
-        ResolutionContext context{identity(), key, {{key.scope, {}, {}, {}}}, {}, {}, {globals.begin(), globals.end()}};
+        ResolutionContext context{identity(), key, schedule_.ancestry(schedule_.frame_of(index)), {}, {}, {globals.begin(), globals.end()}};
         for (const auto producer : schedule_.producers(index)) {
             const auto& source = progress_.nodes[producer];
             if (const auto absent = schedule_.source_absence(producer)) {
@@ -256,6 +263,97 @@ public:
             }
         }
         return context;
+    }
+
+    ExecutionScopeId scope_for(std::size_t slot) const { return schedule_.scope(schedule_.frame_of(slot)).id; }
+
+    std::optional<std::size_t> enter_body(const ExecutionPlan& plan, const InvocationKey& call,
+        const GroupConfiguration& group, std::vector<RunInput> inputs, std::size_t slot, ExecutionScopeId id,
+        std::optional<std::int64_t> iteration = {})
+    {
+        const auto& scopes = plan.dependencies().scopes;
+        const auto body = std::ranges::find(scopes, std::optional{call.node}, &ScopeDependencies::group);
+        if (body == scopes.end()) { throw std::logic_error("Missing validated region body."); }
+        const auto& flow = *find_workflow(request().snapshot().solution(), body->workflow);
+        detail::ControlSchedule control(*body, flow, group.entries);
+        const std::lock_guard lock(mutex_);
+        observe_cancellation();
+        if (stopping_) { return {}; }
+        const auto previous_size = progress_.nodes.size();
+        const auto frame = schedule_.enter(std::move(control), {id, call.scope, call.node, std::move(inputs)}, schedule_.frame_of(slot));
+        for (const auto node : schedule_.nodes().subspan(previous_size)) {
+            RunNodeProgress progress{node};
+            progress.scope = id;
+            progress_.nodes.push_back(std::move(progress));
+        }
+        remaining_ += progress_.nodes.size() - previous_size;
+        eligible_.resize(progress_.nodes.size());
+        if (iteration) {
+            frame_trace_indices_.push_back(progress_.iterations.size());
+            progress_.iterations.push_back({id, call, *iteration});
+        } else {
+            frame_trace_indices_.push_back(progress_.groups.size());
+            progress_.groups.push_back({id, call});
+        }
+        apply_skips();
+        return frame;
+    }
+    void record_iteration_exports(std::size_t frame, std::vector<RunExportTrace> traces)
+    {
+        const std::lock_guard lock(mutex_);
+        progress_.iterations.at(frame_trace_indices_.at(frame - 1)).exports = std::move(traces);
+    }
+    bool body_done(std::size_t frame) const { return schedule_.settled(frame); }
+    void retire_body(std::size_t frame) { schedule_.retire(frame); }
+
+    std::optional<NodeResult> body_result(std::size_t frame, NodeId node) const
+    {
+        const auto at = schedule_.find(frame, node);
+        if (!at || !progress_.nodes[*at].invocation) { return {}; }
+        auto found = results_.lookup(identity(), *progress_.nodes[*at].invocation);
+        if (const auto* value = std::get_if<std::optional<NodeResult>>(&found)) { return *value; }
+        return {};
+    }
+
+    bool start_region(std::size_t slot, const InvocationKey& call, std::vector<RunBindingTrace> traces)
+    {
+        const std::lock_guard lock(mutex_);
+        observe_cancellation();
+        if (stopping_ || terminal(progress_.status)) { return false; }
+        auto& progress = progress_.nodes[slot];
+        progress.bindings = std::move(traces);
+        progress.invocation = call;
+        progress.status = ExecutionStatus::Running;
+        progress_.call_order.push_back(call.node);
+        active_regions_.insert(slot);
+        return true;
+    }
+
+    void finish_region(std::size_t slot, Result<std::vector<OutputSlot>> outputs,
+        std::vector<ControlOutputId> outlets = {}, std::optional<GroupExports> exports = {})
+    {
+        const std::lock_guard lock(mutex_);
+        observe_cancellation();
+        if (!active_regions_.contains(slot)) { return; }
+        if (auto* values = std::get_if<std::vector<OutputSlot>>(&outputs)) {
+            auto failure = commit_region(slot, ExecutionStatus::Succeeded, std::move(*values), {}, outlets);
+            if (!failure) {
+                if (exports) {
+                    progress_.groups.at(frame_trace_indices_.at(exports->frame - 1)).exports = std::move(exports->sources);
+                }
+                schedule_.source_ready(slot);
+                schedule_.complete(slot, outlets);
+                apply_skips();
+                finish_if_done();
+                return;
+            }
+            outputs = std::move(*failure);
+        }
+        auto failure = call_failure(std::get<Diagnostic>(std::move(outputs)), request(), progress_.nodes[slot].node);
+        terminate_region(slot, ExecutionStatus::Failed, {failure});
+        progress_.diagnostics.push_back(std::move(failure));
+        stop(ExecutionStatus::Failed);
+        finish_if_done();
     }
 
     void wait_for_data(std::size_t index, std::vector<RunBindingTrace> bindings)
@@ -398,6 +496,7 @@ public:
     void mark_quiescent()
     {
         const std::lock_guard lock(mutex_);
+        schedule_.release_inputs();
         progress_.quiescent = true;
         publish(RunObservationKind::RunQuiescent, progress_.status);
         changed_.notify_all();
@@ -409,9 +508,32 @@ private:
     RunProgress snapshot() const
     {
         auto result = progress_;
-        const auto links = schedule_.links();
-        result.control_links.assign(links.begin(), links.end());
+        result.control_links = schedule_.links();
         return result;
+    }
+
+    std::optional<Diagnostic> commit_region(std::size_t slot, ExecutionStatus status, std::vector<OutputSlot> outputs,
+        std::vector<Diagnostic> diagnostics, std::vector<ControlOutputId> outlets = {})
+    {
+        const auto attempt = std::get<AttemptId>(RuntimeIdFactory::from_value<AttemptId>(0));
+        auto& node = progress_.nodes[slot];
+        auto result = NodeResult::create({{identity(), *node.invocation, attempt}, status, Judgement::NotEvaluated,
+            std::move(outputs), std::move(diagnostics), {}, std::move(outlets)});
+        if (auto* bad = std::get_if<Diagnostic>(&result)) { return std::move(*bad); }
+        const auto& record = std::get<NodeResult>(result);
+        auto inserted = results_.insert(request().snapshot(), record);
+        if (auto* bad = std::get_if<Diagnostic>(&inserted)) { return std::move(*bad); }
+        node.status = status;
+        active_regions_.erase(slot);
+        --remaining_;
+        publish(RunObservationKind::ResultPublished, status, record.data().identity);
+        return {};
+    }
+
+    void terminate_region(std::size_t slot, ExecutionStatus status, std::vector<Diagnostic> diagnostics)
+    {
+        // Terminal records have no business outputs or control outlets to validate.
+        if (auto invalid = commit_region(slot, status, {}, std::move(diagnostics))) { throw std::logic_error(invalid->message); }
     }
 
     void observe_cancellation()
@@ -448,6 +570,14 @@ private:
         if (stopping_ || terminal(progress_.status)) { return; }
         stopping_ = status;
         schedule_.stop(close_reason(status));
+        while (!active_regions_.empty()) {
+            const auto slot = *active_regions_.begin();
+            std::vector<Diagnostic> diagnostics;
+            if (status == ExecutionStatus::Failed) {
+                diagnostics.push_back(error(ErrorCode::SourceFailed, "Region did not complete after a failure in the running workflow.", request(), progress_.nodes[slot].node));
+            }
+            terminate_region(slot, status, std::move(diagnostics));
+        }
         for (auto& node : progress_.nodes) {
             if (node.status != ExecutionStatus::Pending) { continue; }
             node.status = ExecutionStatus::Skipped;
@@ -473,7 +603,9 @@ private:
     std::condition_variable changed_;
     const std::shared_ptr<RunWakeup> wakeup_;
     const std::weak_ptr<detail::ObservationHub> observers_;
-    detail::ControlSchedule schedule_;
+    detail::ScopedSchedule schedule_;
+    std::set<std::size_t> active_regions_;
+    std::vector<std::size_t> frame_trace_indices_;
     RunProgress progress_;
     bool cancel_requested_{false};
     std::optional<ExecutionStatus> stopping_;
@@ -521,6 +653,11 @@ struct ActiveCall {
     CallDecision decision{CallDecision::Waiting};
 };
 
+struct GroupBody {
+    const GroupConfiguration* configuration;
+    std::size_t frame;
+};
+
 struct Work {
     Work(ExecutionPlan configured, std::shared_ptr<EngineRun> backend,
         std::shared_ptr<InvocationResourceProvider> provider)
@@ -531,8 +668,13 @@ struct Work {
     ExecutionPlan plan;
     std::shared_ptr<EngineRun> run;
     IdSequence<InvocationId> calls;
+    IdSequence<ExecutionScopeId> scopes{std::get<ExecutionScopeId>(RuntimeIdFactory::from_value<ExecutionScopeId>(1))};
+    std::map<std::size_t, detail::LoopExecution> loops;
+    std::map<std::size_t, GroupBody> groups;
+    std::optional<std::chrono::steady_clock::time_point> timer;
     std::vector<std::optional<InvocationId>> issued;
     std::map<std::size_t, ActiveCall> active_calls;
+    detail::RunStateCells run_states;
 };
 
 enum class WorkStep { Parked, Ready, Finished };
@@ -586,13 +728,13 @@ void settle_notified(Work& work)
 }
 
 Result<InvocationOperation> launch_call(ActiveCall& call, std::shared_ptr<ToolInstance> instance,
-    const RunRequest& request, detail::NodeStateService& states)
+    const RunRequest& request, detail::NodeStateService& states, detail::RunStateCells& run_states)
 {
     auto& invocation = call.invocation;
     const auto& configuration = invocation.context.data().configuration.data();
     const auto& flow = *find_workflow(invocation.snapshot.solution(), configuration.workflow);
     const auto& node = *find_node(flow, configuration.node);
-    auto acquired = states.acquire(invocation.context, node, request.debug_state() == DebugStatePolicy::Isolated, *instance);
+    auto acquired = states.acquire(invocation.context, node, request.debug_state() == DebugStatePolicy::Isolated, *instance, run_states);
     if (auto* failure = std::get_if<Diagnostic>(&acquired)) { return std::move(*failure); }
     call.state = std::get<std::shared_ptr<detail::InvocationStateLease>>(std::move(acquired));
     if (call.state) {
@@ -605,13 +747,192 @@ Result<InvocationOperation> launch_call(ActiveCall& call, std::shared_ptr<ToolIn
     return InvocationOperation::start(std::move(instance), invocation.context);
 }
 
+void start_region(Work& work, std::size_t slot, const ResolutionContext& context)
+{
+    auto& run = *work.run;
+    const auto& flow = *find_workflow(run.request().snapshot().solution(), run.identity().workflow);
+    const auto& group = std::get<GroupConfiguration>(find_node(flow, context.consumer.node)->configuration);
+    std::vector<RunBindingTrace> traces;
+    std::vector<RunInput> inputs;
+    for (const auto& port : group.interface.inputs) {
+        if (group.loop && port.id.text() == "index") { continue; }
+        auto resolution = work.plan.resolver().resolve(context, port.id, run.results_for_binding());
+        traces.push_back({port.id, std::visit([](const auto& value) { return value.sources; }, resolution)});
+        if (auto* fixed = std::get_if<ResolvedBinding>(&resolution)) {
+            traces.back().regions = std::move(fixed->regions);
+            inputs.push_back({port.id, std::move(fixed->value)});
+        } else if (std::holds_alternative<PendingBinding>(resolution)) {
+            run.wait_for_data(slot, std::move(traces));
+            return;
+        } else {
+            auto diagnostic = std::holds_alternative<BindingFailure>(resolution)
+                ? std::get<BindingFailure>(resolution).diagnostic : std::get<UnavailableBinding>(resolution).diagnostic;
+            run.preparation_failed(slot, std::move(diagnostic), std::move(traces));
+            return;
+        }
+    }
+    if (!group.loop) {
+        const auto id = work.scopes.next();
+        if (const auto* failure = std::get_if<Diagnostic>(&id)) {
+            run.preparation_failed(slot, *failure, std::move(traces));
+            return;
+        }
+        if (run.start_region(slot, context.consumer, std::move(traces))) {
+            auto frame = run.enter_body(work.plan, context.consumer, group, std::move(inputs), slot, std::get<ExecutionScopeId>(id));
+            if (frame) { work.groups.emplace(slot, GroupBody{&group, *frame}); }
+        }
+        return;
+    }
+    auto created = detail::LoopExecution::create(group, context.consumer, std::move(inputs));
+    if (auto* bad = std::get_if<Diagnostic>(&created)) {
+        run.preparation_failed(slot, *bad, std::move(traces));
+        return;
+    }
+    if (run.start_region(slot, context.consumer, std::move(traces))) {
+        work.loops.emplace(slot, std::get<detail::LoopExecution>(std::move(created)));
+    }
+}
+
+Result<bool> collect_iteration(EngineRun& run, detail::LoopExecution& loop)
+{
+    std::vector<RunLoopExportTrace> traces;
+    for (const auto& spec : loop.group->loop->exports) {
+        const auto& source = std::ranges::find(loop.group->outputs, spec.output, &OutputMapping::output)->source;
+        const auto record = run.body_result(*loop.frame, source.node);
+        if (!record) { return error(ErrorCode::InputUnavailable, "Loop export has no invocation in this iteration.", run.request(), source.node); }
+        auto value = detail::project_region_export(*record, source);
+        if (const auto* bad = std::get_if<Diagnostic>(&value)) { return *bad; }
+        traces.push_back({spec.output, source, record->data().identity});
+        auto saved = loop.collect(spec, std::get<DataValue>(value));
+        if (const auto* bad = std::get_if<Diagnostic>(&saved)) { return *bad; }
+    }
+    run.record_iteration_exports(*loop.frame, std::move(traces));
+    if (const auto target = loop.group->loop->break_source) {
+        const auto record = run.body_result(*loop.frame, *target);
+        if (record && record->data().status == ExecutionStatus::Succeeded) { return false; }
+    }
+    return loop.advance();
+}
+
+std::chrono::steady_clock::time_point interval_deadline(std::int64_t milliseconds)
+{
+    using Clock = std::chrono::steady_clock;
+    const auto now = Clock::now();
+    const auto available = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::time_point::max() - now);
+    return milliseconds >= available.count() ? Clock::time_point::max() : now + std::chrono::milliseconds(milliseconds);
+}
+
+Result<std::vector<OutputSlot>> group_outputs(EngineRun& run, const GroupBody& group, std::vector<RunExportTrace>& traces)
+{
+    std::vector<OutputSlot> outputs;
+    for (const auto& mapping : group.configuration->outputs) {
+        const auto& port = *std::ranges::find(group.configuration->interface.outputs, mapping.output, &OutputDescriptor::id);
+        const auto record = run.body_result(group.frame, mapping.source.node);
+        if (!record) {
+            auto failure = error(ErrorCode::InputUnavailable, "Group output producer did not run in this call.", run.request(), mapping.source.node);
+            failure.location.output = port.id;
+            return failure;
+        }
+        traces.push_back({port.id, mapping.source, record->data().identity});
+        if (const auto* source_port = std::get_if<OutputId>(&mapping.source.output)) {
+            const auto* source = record->output(*source_port);
+            const auto* absent = source ? std::get_if<NotProduced>(&source->content) : nullptr;
+            if (absent && allows_output_absence(port, absent->reason)) {
+                outputs.push_back({port.id, port.type, *absent});
+                continue;
+            }
+        }
+        auto value = detail::project_region_export(*record, mapping.source);
+        if (auto* failure = std::get_if<Diagnostic>(&value)) {
+            failure->location.output = port.id;
+            return *failure;
+        }
+        outputs.push_back({port.id, port.type, std::get<DataValue>(std::move(value))});
+    }
+    return outputs;
+}
+
+bool finish_groups(Work& work)
+{
+    auto& run = *work.run;
+    bool changed = false;
+    for (auto current = work.groups.begin(); current != work.groups.end() && run.can_continue();) {
+        const auto& [slot, group] = *current;
+        if (!run.body_done(group.frame)) { ++current; continue; }
+        std::vector<RunExportTrace> traces;
+        auto outputs = group_outputs(run, group, traces);
+        std::vector<ControlOutputId> selected;
+        for (const auto& mapping : group.configuration->control_exports) {
+            const auto result = run.body_result(group.frame, mapping.source);
+            if (!result || result->data().status != ExecutionStatus::Succeeded) { continue; }
+            const auto& outlets = result->data().selected_control_outputs;
+            if (!mapping.source_output || std::ranges::find(outlets, *mapping.source_output) != outlets.end()) {
+                selected.push_back(mapping.output);
+            }
+        }
+        run.retire_body(group.frame);
+        run.finish_region(slot, std::move(outputs), std::move(selected), GroupExports{group.frame, std::move(traces)});
+        current = work.groups.erase(current);
+        changed = true;
+    }
+    return changed;
+}
+
+bool advance_loops(Work& work)
+{
+    auto& run = *work.run;
+    bool changed = false;
+    work.timer.reset();
+    for (auto it = work.loops.begin(); it != work.loops.end() && run.can_continue();) {
+        auto current = it++;
+        const auto slot = current->first;
+        auto& loop = current->second;
+        if (loop.frame) {
+            if (!run.body_done(*loop.frame)) { continue; }
+            const auto more = collect_iteration(run, loop);
+            run.retire_body(*loop.frame);
+            loop.frame.reset();
+            changed = true;
+            if (const auto* bad = std::get_if<Diagnostic>(&more)) {
+                run.finish_region(slot, *bad);
+                work.loops.erase(current);
+                continue;
+            }
+            if (!std::get<bool>(more)) {
+                run.finish_region(slot, loop.outputs());
+                work.loops.erase(current);
+                continue;
+            }
+            loop.due = interval_deadline(loop.group->loop->interval_ms);
+        }
+        if (!loop.in_range()) {
+            run.finish_region(slot, loop.outputs());
+            work.loops.erase(current);
+            changed = true;
+        } else if (std::chrono::steady_clock::now() < loop.due) {
+            if (!work.timer || loop.due < *work.timer) { work.timer = loop.due; }
+        } else {
+            const auto id = work.scopes.next();
+            if (const auto* bad = std::get_if<Diagnostic>(&id)) {
+                run.finish_region(slot, *bad);
+                work.loops.erase(current);
+            } else {
+                loop.frame = run.enter_body(work.plan, loop.call, *loop.group, loop.body_inputs(), slot, std::get<ExecutionScopeId>(id), loop.index);
+            }
+            changed = true;
+        }
+    }
+    return changed;
+}
+
 void start_node(Work& work, std::size_t index, detail::NodeStateService& states)
 {
     auto& run = *work.run;
     const auto& request = work.plan.request();
     const auto node = run.nodes()[index];
-    const auto root = std::get<ExecutionScopeId>(RuntimeIdFactory::from_value<ExecutionScopeId>(0));
+    const auto scope = run.scope_for(index);
     const auto attempt = std::get<AttemptId>(RuntimeIdFactory::from_value<AttemptId>(0));
+    work.issued.resize(run.nodes().size());
     auto& issued = work.issued[index];
     if (!issued) {
         auto next = work.calls.next();
@@ -621,8 +942,13 @@ void start_node(Work& work, std::size_t index, detail::NodeStateService& states)
         }
         issued = std::get<InvocationId>(next);
     }
-    const auto context = run.context_for(index, {run.identity().run, node, root, *issued});
-    const auto& tool = *work.plan.tool(node);
+    const auto context = run.context_for(index, {run.identity().run, node, scope, *issued});
+    const auto* prepared_tool = work.plan.tool(node);
+    if (!prepared_tool) {
+        start_region(work, index, context);
+        return;
+    }
+    const auto& tool = *prepared_tool;
     auto* resources = work.resources.get();
     auto prepared = resources ? tool.prepare(context, attempt, run.results_for_binding(), *resources)
                               : tool.prepare(context, attempt, run.results_for_binding());
@@ -653,7 +979,7 @@ void start_node(Work& work, std::size_t index, detail::NodeStateService& states)
         work.active_calls.erase(entry);
         return;
     }
-    auto started = launch_call(call, std::get<std::shared_ptr<ToolInstance>>(std::move(created)), request, states);
+    auto started = launch_call(call, std::get<std::shared_ptr<ToolInstance>>(std::move(created)), request, states, work.run_states);
     if (auto* failure = std::get_if<Diagnostic>(&started)) {
         auto result = failed_call(request, call.invocation, std::move(*failure));
         static_cast<void>(run.accept_completion(index, call.invocation, call.state.get(), std::move(result)));
@@ -680,12 +1006,15 @@ WorkStep execute_step(Work& work, detail::NodeStateService& states)
     auto& run = *work.run;
     run.begin_step();
     settle_notified(work);
-    if (const auto ready = run.take_ready()) { start_node(work, *ready, states); }
-    if (run.has_ready() || (run.stopping() && std::ranges::any_of(work.active_calls,
+    const bool group_progress = finish_groups(work);
+    const bool loop_progress = advance_loops(work);
+    const auto ready = run.take_ready();
+    if (ready) { start_node(work, *ready, states); }
+    if (((!work.loops.empty() || !work.groups.empty()) && !run.stopping() && (ready || loop_progress || group_progress)) || run.has_ready() || (run.stopping() && std::ranges::any_of(work.active_calls,
         [](const auto& entry) { return entry.second.decision == CallDecision::Waiting; }))) {
         return WorkStep::Ready;
     }
-    if (!work.active_calls.empty()) { return WorkStep::Parked; }
+    if (!work.active_calls.empty() || (!run.stopping() && work.timer)) { return WorkStep::Parked; }
     if (!run.finished()) { run.blocked(); }
     return WorkStep::Finished;
 }
@@ -850,6 +1179,8 @@ private:
         ExecutionCapabilities supported;
         supported.asynchronous = true;
         supported.control_graph = true;
+        supported.structured_loops = true;
+        supported.composite_groups = true;
         supported.node_state = true;
         if (provider) {
             const auto kinds = provider->kinds();
@@ -873,13 +1204,21 @@ private:
     {
         std::unique_lock lock(events->mutex);
         for (;;) {
-            auto next = std::ranges::find_if(admitted, [](const auto& work) { return work->run->wakeup()->ready(); });
+            const auto now = std::chrono::steady_clock::now();
+            auto next = std::ranges::find_if(admitted, [&](const auto& work) {
+                return work->run->wakeup()->ready() || (work->timer && *work->timer <= now);
+            });
             if (next != admitted.end()) {
                 (*next)->run->wakeup()->clear();
                 return next;
             }
             if (stopping && admitted.empty()) { return std::nullopt; }
-            events->changed.wait(lock);
+            std::optional<std::chrono::steady_clock::time_point> deadline;
+            for (const auto& work : admitted) {
+                if (work->timer && (!deadline || *work->timer < *deadline)) { deadline = work->timer; }
+            }
+            if (deadline) { events->changed.wait_until(lock, *deadline); }
+            else { events->changed.wait(lock); }
         }
     }
 

@@ -1,3 +1,4 @@
+#include "windows_path.hpp"
 #include "solution_storage.hpp"
 
 #include <windows.h>
@@ -56,13 +57,13 @@ Check check_local_ntfs(const fs::path& directory)
     if (!absolute_path(directory)) {
         return error(ErrorCode::InvalidPath, "Save requires an absolute package directory.");
     }
-    const auto attributes = GetFileAttributesW(directory.c_str());
+    const auto attributes = GetFileAttributesW(detail::windows_access_path(directory).c_str());
     if (attributes == INVALID_FILE_ATTRIBUTES) { return io_error("Could not inspect the package directory", GetLastError()); }
     if ((attributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
         return error(ErrorCode::InvalidPath, "The package path must be a directory.");
     }
     std::wstring volume(32768, L'\0');
-    if (!GetVolumePathNameW(directory.c_str(), volume.data(), static_cast<DWORD>(volume.size()))) {
+    if (!GetVolumePathNameW(detail::windows_access_path(directory).c_str(), volume.data(), static_cast<DWORD>(volume.size()))) {
         return io_error("Could not determine the package volume", GetLastError());
     }
     if (GetDriveTypeW(volume.c_str()) != DRIVE_FIXED) {
@@ -134,7 +135,7 @@ Result<PackageWriteLock> PackageWriteLock::acquire(const fs::path& directory)
     auto checked = check_local_ntfs(directory);
     if (auto* failure = std::get_if<Diagnostic>(&checked)) { return std::move(*failure); }
     const auto sidecar = directory / package_lock_name;
-    NativeFile file(CreateFileW(sidecar.c_str(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
+    NativeFile file(CreateFileW(detail::windows_access_path(sidecar).c_str(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
         nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
     if (!file.valid()) { return io_error("Could not open the package save lock", GetLastError()); }
     BY_HANDLE_FILE_INFORMATION info{};
@@ -154,7 +155,7 @@ Result<PackageWriteLock> PackageWriteLock::acquire(const fs::path& directory)
 Result<std::string> read_manifest(const fs::path& manifest)
 {
     if (!absolute_path(manifest)) { return error(ErrorCode::InvalidPath, "The manifest path must be absolute."); }
-    NativeFile file(CreateFileW(manifest.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_DELETE,
+    NativeFile file(CreateFileW(detail::windows_access_path(manifest).c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_DELETE,
         nullptr, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, nullptr));
     if (!file.valid()) { return io_error("Could not open the solution manifest", GetLastError()); }
     if (GetFileType(file.get()) != FILE_TYPE_DISK) {
@@ -217,7 +218,7 @@ Result<std::string> sha256(std::span<const std::byte> bytes)
 Check write_staged_file(const fs::path& path, std::span<const std::byte> bytes)
 {
     if (!absolute_path(path)) { return error(ErrorCode::InvalidPath, "The staged file path must be absolute."); }
-    NativeFile file(CreateFileW(path.c_str(), GENERIC_WRITE | DELETE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr));
+    NativeFile file(CreateFileW(detail::windows_access_path(path).c_str(), GENERIC_WRITE | DELETE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr));
     if (!file.valid()) {
         const auto native_error = GetLastError();
         if (native_error == ERROR_FILE_EXISTS || native_error == ERROR_ALREADY_EXISTS) {
@@ -245,11 +246,11 @@ Check publish_file(const fs::path& from, const fs::path& to, bool replace)
     if (!absolute_path(from) || !absolute_path(to) || from == to) {
         return error(ErrorCode::InvalidPath, "Publication requires distinct absolute file paths.");
     }
-    const auto source = GetFileAttributesW(from.c_str());
+    const auto source = GetFileAttributesW(detail::windows_access_path(from).c_str());
     if (source == INVALID_FILE_ATTRIBUTES) { return io_error("Could not inspect the staged file", GetLastError()); }
     if (!regular_attributes(source)) { return error(ErrorCode::InvalidPath, "The staged file must be a regular file."); }
 
-    const auto target = GetFileAttributesW(to.c_str());
+    const auto target = GetFileAttributesW(detail::windows_access_path(to).c_str());
     if (target != INVALID_FILE_ATTRIBUTES) {
         if (!replace) { return error(ErrorCode::SolutionAlreadyExists, "The destination already exists."); }
         if (!regular_attributes(target)) {
@@ -262,7 +263,7 @@ Check publish_file(const fs::path& from, const fs::path& to, bool replace)
         }
     }
     // Copy is disabled so publication is a same-volume rename.
-    if (!MoveFileExW(from.c_str(), to.c_str(), replace ? MOVEFILE_REPLACE_EXISTING : 0)) {
+    if (!MoveFileExW(detail::windows_access_path(from).c_str(), detail::windows_access_path(to).c_str(), replace ? MOVEFILE_REPLACE_EXISTING : 0)) {
         const auto native_error = GetLastError();
         if (!replace && (native_error == ERROR_FILE_EXISTS || native_error == ERROR_ALREADY_EXISTS)) {
             return error(ErrorCode::SolutionAlreadyExists, "The destination already exists.");

@@ -92,16 +92,23 @@ ToolDescriptor threshold_descriptor()
     return tool;
 }
 
-ToolDescriptor blob_descriptor()
+} // namespace
+
+core::DataType blob_component_type()
 {
-    auto tool = descriptor("visionpro.image.blob", "Measure blobs");
     const auto integer = DataType::integer();
     const auto point = DataType::point2d();
     const auto bounds = std::get<DataType>(DataType::record(key<SchemaId>("visionpro.image.blob.bounds"), schema_version,
         {{key<FieldId>("origin"), point}, {key<FieldId>("width"), integer}, {key<FieldId>("height"), integer}}));
-    const auto component = std::get<DataType>(DataType::record(key<SchemaId>("visionpro.image.blob.component"), schema_version,
+    return std::get<DataType>(DataType::record(key<SchemaId>("visionpro.image.blob.component"), schema_version,
         {{key<FieldId>("area_pixels"), integer}, {key<FieldId>("centroid"), point}, {key<FieldId>("bounds"), bounds}}));
+}
 
+namespace {
+ToolDescriptor blob_descriptor()
+{
+    auto tool = descriptor("visionpro.image.blob", "Measure blobs");
+    const auto integer = DataType::integer();
     const auto region = DataType::region2d();
     auto roi = subscribable_parameter("roi", DataType::optional(region), pixels);
     roi.required = false;
@@ -110,7 +117,7 @@ ToolDescriptor blob_descriptor()
     connectivity.constraints.allowed_values = {ConfigValue::integer(4), ConfigValue::integer(8)};
     tool.parameters = {std::move(connectivity), std::move(roi)};
     tool.inputs = {input("binary", DataType::image(), {BindingSourceKind::RunOutput, BindingSourceKind::PublicInput}, pixels)};
-    tool.outputs = {output("count", integer), output("components", DataType::list(component)),
+    tool.outputs = {output("count", integer), output("components", DataType::list(blob_component_type())),
         output("total_area_pixels", integer), output("largest_area_pixels", DataType::optional(integer))};
     tool.resources = {{key<SchemaId>("mask"), ResourceKind::Mask, false}};
     tool.region_capabilities = region_capabilities();

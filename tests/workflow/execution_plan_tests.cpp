@@ -219,6 +219,11 @@ void capability_checks()
     const auto plan = take(ExecutionPlan::create(fixture.request(registry), registry, graph));
     check(plan.dependencies().scopes.front().data.size() == 3 && plan.capabilities().control_graph,
         "sibling dependencies coexist with the original control graph");
+    for (const auto node_id : plan.dependencies().scopes.front().reachable) {
+        const auto* prepared = plan.tool(node_id);
+        check(prepared && prepared->configuration().data().node == node_id,
+            "An ordinary branching DAG still has a prepared tool for each reachable node.");
+    }
     fixture.flow().nodes[2].bindings.front().sources = {output('2')};
     rejects(ExecutionPlan::create(fixture.request(registry), registry, graph), ErrorCode::DependencyCycle);
 

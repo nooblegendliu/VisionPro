@@ -11,7 +11,7 @@ namespace {
 
 using namespace core;
 
-enum class Operation { ReadByte, Add, Select, ForwardValues };
+enum class Operation { ReadByte, Add, Select, ForwardValues, CountCalls };
 
 template<SchemaIdentity Id>
 Id key(std::string_view spelling)
@@ -67,6 +67,22 @@ private:
         case Operation::ForwardValues:
             completed.outputs.push_back({descriptor.outputs.front().id, input_value(invocation, "values")});
             break;
+        case Operation::CountCalls: {
+            if (!invocation.state) {
+                return Diagnostic{ErrorCode::MissingCapability, Severity::Error, {}, "The counter requires node state."};
+            }
+            auto previous = invocation.state->read();
+            if (const auto* failure = std::get_if<Diagnostic>(&previous)) { return *failure; }
+            const auto* count = std::get<DataValue>(previous).as_int64();
+            if (!count || *count == std::numeric_limits<std::int64_t>::max()) {
+                return Diagnostic{ErrorCode::InvalidValue, Severity::Error, {}, "The counter cannot increment its Int64 state."};
+            }
+            auto next = DataValue::integer(*count + 1);
+            auto written = invocation.state->write(next);
+            if (const auto* failure = std::get_if<Diagnostic>(&written)) { return *failure; }
+            completed.outputs.push_back({descriptor.outputs.front().id, std::move(next)});
+            break;
+        }
         }
         return InvocationStart{std::move(completed)};
     }
@@ -138,10 +154,17 @@ std::vector<core::ToolRegistration> simulation_registrations()
     deliver.inputs = {input("values", list, {BindingSourceKind::RunOutput})};
     deliver.outputs = {values};
 
+    auto counter = descriptor("visionpro.sim.call_count", "Session call count");
+    counter.outputs = {value};
+    counter.execution.effects = ToolEffects::State;
+    counter.state = NodeStateDefinition{integer, ConfigValue::integer(0), StateScope::SolutionSession,
+        StateResetPolicy::DomainStart, StateCompatibilityPolicy::PreserveCompatible,
+        StateMutationTiming::OnResultAccepted, StateConcurrencyPolicy::Serialized};
+
     return {
         registration(std::move(reader), Operation::ReadByte), registration(std::move(adder), Operation::Add),
         registration(std::move(selector), Operation::Select), registration(std::move(collect), Operation::ForwardValues),
-        registration(std::move(deliver), Operation::ForwardValues)};
+        registration(std::move(deliver), Operation::ForwardValues), registration(std::move(counter), Operation::CountCalls)};
 }
 
 } // namespace visionpro::tools

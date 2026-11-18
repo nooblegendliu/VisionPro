@@ -4,6 +4,7 @@
 #include <visionpro/workflow/copy.hpp>
 
 #include "managed_cleanup.hpp"
+#include "package_assets.hpp"
 #include "resource_files.hpp"
 
 #include <algorithm>
@@ -46,57 +47,7 @@ struct AssetFile {
     ResourceId resource;
 };
 
-// Only directories and files created by this operation are rolled back.
-class PackageAssets {
-public:
-    explicit PackageAssets(SolutionId solution) : solution_(solution) {}
-    PackageAssets(const PackageAssets&) = delete;
-    PackageAssets& operator=(const PackageAssets&) = delete;
-    ~PackageAssets()
-    {
-        if (published_) { return; }
-        std::error_code ignored;
-        for (auto it = created_.rbegin(); it != created_.rend(); ++it) {
-            if (it->owned) { fs::remove(it->path, ignored); }
-        }
-    }
-
-    Check create_directory(const fs::path& directory, bool unique)
-    {
-        if (!unique) {
-            if (fs::is_directory(directory)) { return std::monostate{}; }
-            const auto parent = directory.parent_path();
-            if (parent.empty() || directory == parent) {
-                return error(ErrorCode::InvalidPath, solution_, "The package directory has no available filesystem root.");
-            }
-            auto prepared = create_directory(parent, false);
-            if (std::holds_alternative<Diagnostic>(prepared)) { return prepared; }
-        }
-        created_.push_back({directory});
-        auto& item = created_.back();
-        item.owned = fs::create_directory(directory);
-        if (!item.owned && (unique || !fs::is_directory(directory))) {
-            return error(ErrorCode::SolutionAlreadyExists, solution_, "The destination asset directory already exists.");
-        }
-        return std::monostate{};
-    }
-
-    Check copy(const fs::path& source, const fs::path& target, std::optional<std::string_view> digest)
-    {
-        created_.push_back({target});
-        auto result = detail::copy_resource_file(source, target, digest);
-        created_.back().owned = std::holds_alternative<std::monostate>(result);
-        return result;
-    }
-
-    void confirm_publication() noexcept { published_ = true; }
-
-private:
-    struct CreatedPath { fs::path path; bool owned{false}; };
-    const SolutionId solution_;
-    std::vector<CreatedPath> created_;
-    bool published_{false};
-};
+using detail::PackageAssets;
 
 std::optional<std::string> normalized_digest(std::optional<std::string_view> digest)
 {
@@ -179,7 +130,7 @@ private:
         if (auto* failure = std::get_if<Diagnostic>(&resolved)) { return std::move(*failure); }
         const auto& absolute = std::get<fs::path>(resolved);
         std::error_code io;
-        auto physical = fs::weakly_canonical(absolute, io);
+        auto physical = detail::windows_display_path(fs::weakly_canonical(detail::windows_access_path(absolute), io));
         if (io) { return error(ErrorCode::InvalidPath, solution_, "Could not resolve resource path: " + path.path); }
         if (is_within(physical, paths_.directory)) {
             if (has_source_) { return std::optional<fs::path>{std::move(physical)}; }
@@ -242,13 +193,13 @@ private:
             auto selected = detail::sequence_files(existing, *pattern);
             if (auto* failure = std::get_if<Diagnostic>(&selected)) { return std::move(*failure); }
             for (const auto& member : std::get<std::vector<fs::path>>(selected)) {
-                auto file = fs::canonical(member);
-                if (!fs::is_regular_file(file) || !is_within(file, paths_.directory)) {
+                auto file = detail::windows_display_path(fs::canonical(detail::windows_access_path(member)));
+                if (!fs::is_regular_file(detail::windows_access_path(file)) || !is_within(file, paths_.directory)) {
                     return error(ErrorCode::InvalidPath, solution_, "A package sequence contains a member outside the package: " + utf8(member));
                 }
                 files_.push_back({std::move(file), target / member.filename(), {}, resource});
             }
-        } else if (fs::exists(*directory) && !fs::is_directory(*directory)) {
+        } else if (fs::exists(detail::windows_access_path(*directory)) && !fs::is_directory(detail::windows_access_path(*directory))) {
             return error(ErrorCode::InvalidPath, solution_, "The package output location is not a directory: " + path.path);
         }
         path = package_path(target);
@@ -290,9 +241,9 @@ core::Result<SolutionTransferResult> transfer_solution(const fs::path& destinati
         if (!destination.is_absolute() || destination.native().find(L'\0') != std::wstring::npos) {
             return error(ErrorCode::InvalidPath, draft.id, "The destination must be an explicit absolute package directory.");
         }
-        const auto target = fs::weakly_canonical(destination);
+        const auto target = detail::windows_display_path(fs::weakly_canonical(detail::windows_access_path(destination)));
         std::error_code ignored;
-        if (fs::exists(fs::symlink_status(target / solution_manifest_name, ignored))) {
+        if (fs::exists(fs::symlink_status(detail::windows_access_path(target / solution_manifest_name), ignored))) {
             return error(ErrorCode::SolutionAlreadyExists, draft.id, "The destination already contains a solution manifest.");
         }
 

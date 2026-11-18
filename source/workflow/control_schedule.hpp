@@ -9,11 +9,13 @@ class ExecutionPlan;
 
 namespace detail {
 
-// Root-scope scheduling state for one validated plan. EngineRun serializes
+// Scheduling state for one validated acyclic scope. EngineRun serializes
 // mutations with run progress and result acceptance.
 class ControlSchedule final {
 public:
     explicit ControlSchedule(const ExecutionPlan& plan);
+    ControlSchedule(const ScopeDependencies& scope, const Workflow& flow, std::span<const core::NodeId> entries);
+    [[nodiscard]] bool settled() const noexcept { return unsettled_ == 0; }
 
     [[nodiscard]] std::span<const core::NodeId> nodes() const noexcept { return nodes_; }
     [[nodiscard]] std::span<const RunControlLinkProgress> links() const noexcept { return links_; }
@@ -57,6 +59,7 @@ private:
     std::deque<std::size_t> ready_;
     std::vector<std::pair<std::size_t, NodeSkipReason>> skipped_;
     bool stopped_{false};
+    std::size_t unsettled_{0};
 };
 
 } // namespace detail

@@ -117,7 +117,21 @@ std::wstring quote_argument(std::wstring_view argument)
 
 struct CommandResult { DWORD exit_code; std::string output; std::string error; };
 
-CommandResult invoke(const fs::path& executable, const fs::path& working, std::initializer_list<std::wstring> arguments)
+enum class OutputMode { File, BrokenPipe };
+
+HANDLE broken_output_pipe(SECURITY_ATTRIBUTES& attributes)
+{
+    HANDLE reader = nullptr;
+    HANDLE writer = nullptr;
+    if (!CreatePipe(&reader, &writer, &attributes, 0)) {
+        throw std::runtime_error("Could not create the broken-output fixture.");
+    }
+    CloseHandle(reader);
+    return writer;
+}
+
+CommandResult invoke(const fs::path& executable, const fs::path& working, std::initializer_list<std::wstring> arguments,
+    OutputMode output_mode = OutputMode::File)
 {
     const auto stdout_path = working / L"stdout.txt";
     const auto stderr_path = working / L"stderr.txt";
@@ -126,8 +140,9 @@ CommandResult invoke(const fs::path& executable, const fs::path& working, std::i
     PROCESS_INFORMATION information{};
     {
         SECURITY_ATTRIBUTES inheritable{sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE};
-        const Handle output(CreateFileW(stdout_path.c_str(), GENERIC_WRITE, FILE_SHARE_READ, &inheritable,
-            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr));
+        const Handle output(output_mode == OutputMode::BrokenPipe ? broken_output_pipe(inheritable)
+            : CreateFileW(stdout_path.c_str(), GENERIC_WRITE, FILE_SHARE_READ, &inheritable,
+                CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr));
         const Handle error(CreateFileW(stderr_path.c_str(), GENERIC_WRITE, FILE_SHARE_READ, &inheritable,
             CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr));
         const Handle input(CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &inheritable,
@@ -155,7 +170,7 @@ CommandResult invoke(const fs::path& executable, const fs::path& working, std::i
     }
     DWORD exit_code = 0;
     if (!GetExitCodeProcess(process.get(), &exit_code)) { throw std::runtime_error("Could not read the CLI exit code."); }
-    return {exit_code, read_file(stdout_path), read_file(stderr_path)};
+    return {exit_code, output_mode == OutputMode::File ? read_file(stdout_path) : std::string{}, read_file(stderr_path)};
 }
 
 Binding input_binding(std::string_view input, BindingSource source)
@@ -471,6 +486,28 @@ void rejected(const CommandResult& result, DWORD exit_code, std::string_view cod
     check(report.at("stage").is_string() && !report.at("stage").get_ref<const std::string&>().empty(), "Errors identify the failing stage.");
     check(std::ranges::any_of(report.at("diagnostics"), [&](const Json& item) { return text_is(item.at("code"), code); }),
         "Errors preserve the diagnostic code.");
+}
+
+void output_failures(const fs::path& executable)
+{
+    const Fixture fixture(executable, PayloadStorage::External);
+    const auto expect_output_failure = [&](std::initializer_list<std::wstring> arguments) {
+        const auto result = invoke(executable, fixture.scratch.path, arguments, OutputMode::BrokenPipe);
+        rejected(result, 1, "ExecutionBoundaryFailure");
+        const auto report = Json::parse(result.error);
+        check(report.at("stage") == "report", "An output failure is distinguished from workflow or save failure.");
+        check(report.at("diagnostics").at(0).at("message").get<std::string>().find("standard output") != std::string::npos,
+            "The diagnostic identifies the failed output stream.");
+    };
+
+    // The short help text fits in the CRT buffer, so failure must also be checked when flushing.
+    expect_output_failure({L"--help"});
+    const auto workflow = uuid<WorkflowId>('1').to_string();
+    expect_output_failure({L"run", L"--solution", fixture.manifest.native(), L"--workflow",
+        std::wstring(workflow.begin(), workflow.end()), L"--input", L"offset=7"});
+    expect_output_failure({L"save", L"--solution", fixture.manifest.native()});
+    check(Json::parse(read_file(fixture.manifest)).at("revision") == "13",
+        "Reporting failure does not undo an already committed save.");
 }
 
 void diagnostics(const fs::path& executable, PayloadStorage storage)
@@ -829,6 +866,7 @@ int wmain(int argc, wchar_t** argv)
         else if (group == L"diagnostics") { diagnostics(cli, PayloadStorage::Managed); }
         else if (group == L"external-roundtrip") { roundtrip(cli, PayloadStorage::External); }
         else if (group == L"external-diagnostics") { diagnostics(cli, PayloadStorage::External); }
+        else if (group == L"output-failures") { output_failures(cli); }
 #ifdef VISIONPRO_WITH_OPENCV
         else if (group == L"vision-roundtrip") { vision_roundtrip(cli); }
         else if (group == L"vision-diagnostics") { vision_diagnostics(cli); }

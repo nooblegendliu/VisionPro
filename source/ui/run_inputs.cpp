@@ -257,12 +257,12 @@ QString collect_input(const InputControls& field, EnteredRunInputs& result)
 } // namespace
 
 std::optional<EnteredRunInputs> choose_run_inputs(QWidget* parent, const workflow::Solution& solution,
-    std::span<const core::InputDescriptor> inputs, bool independent, std::span<const core::PixelFormat> image_formats)
+    std::span<const core::InputDescriptor> inputs, bool isolated, std::span<const core::PixelFormat> image_formats, bool group)
 {
     if (inputs.empty()) { return EnteredRunInputs{}; }
     QDialog dialog(parent);
     dialog.setObjectName(QStringLiteral("runInputsDialog"));
-    dialog.setWindowTitle(independent ? QStringLiteral("One-time Node Inputs") : QStringLiteral("Workflow Inputs"));
+    dialog.setWindowTitle(group ? QStringLiteral("Group Inputs") : isolated ? QStringLiteral("One-time Node Inputs") : QStringLiteral("Workflow Inputs"));
     auto* layout = new QVBoxLayout(&dialog);
     auto* scroll = new QScrollArea(&dialog);
     scroll->setWidgetResizable(true);
@@ -284,7 +284,7 @@ std::optional<EnteredRunInputs> choose_run_inputs(QWidget* parent, const workflo
     layout->addWidget(error);
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
     buttons->setObjectName(QStringLiteral("runInputButtons"));
-    buttons->button(QDialogButtonBox::Ok)->setText(independent ? QStringLiteral("Debug") : QStringLiteral("Run"));
+    buttons->button(QDialogButtonBox::Ok)->setText(isolated ? QStringLiteral("Debug") : QStringLiteral("Run"));
     layout->addWidget(buttons);
     QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
 

@@ -38,6 +38,8 @@ public:
     void open_document(const std::filesystem::path& directory);
     void save_document();
     void transfer_document(const std::filesystem::path& directory, infrastructure::SolutionTransfer operation);
+    void export_subgraph(const std::filesystem::path& directory, std::optional<core::NodeId> group = {});
+    void import_subgraph(const std::filesystem::path& directory);
     void open_preview_image(const std::filesystem::path& file, core::CoordinateSystemId frame, bool grayscale);
     void open_preview_resource(core::ResourceReference resource, core::CoordinateSystemId frame, bool grayscale);
     void preview_selected_roi();
@@ -55,7 +57,7 @@ private:
     void create_docks();
     void create_run_actions();
     void create_run_dock();
-    void start_run(bool independent);
+    void start_run(std::optional<workflow::DebugStatePolicy> debug = {});
     void show_selected_run_image();
     void choose_run_limits();
     void replace_canvas(workflow::Solution draft, bool writable = true);
@@ -66,6 +68,8 @@ private:
     bool confirm_replacement(Continuation action);
     void choose_open();
     void choose_transfer(infrastructure::SolutionTransfer operation, Continuation after = {});
+    void choose_subgraph_export(bool selected_group);
+    void choose_subgraph_import();
     void begin_save(Continuation after = {});
     void begin_transfer(const std::filesystem::path& directory, infrastructure::SolutionTransfer operation,
         Continuation after);
@@ -128,12 +132,16 @@ private:
     QAction* save_{};
     QAction* save_as_{};
     QAction* independent_copy_{};
+    QAction* export_workflow_{};
+    QAction* export_group_{};
+    QAction* import_subgraph_{};
     QAction* resource_copy_{};
     QAction* resource_root_{};
     QAction* preview_image_{};
     QAction* preview_resource_{};
     QAction* preview_roi_{};
     QAction* run_workflow_{};
+    QAction* run_group_{};
     QAction* debug_node_{};
     QAction* cancel_run_{};
     QAction* run_limits_{};
@@ -142,6 +150,7 @@ private:
     QAction* remove_workflow_{};
     QAction* add_tool_{};
     QAction* add_group_{};
+    QAction* add_loop_{};
     QAction* remove_nodes_{};
     QAction* remove_link_{};
     QAction* remove_invalid_link_{};

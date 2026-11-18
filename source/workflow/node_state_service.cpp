@@ -158,11 +158,22 @@ Result<std::shared_ptr<StateCell>> NodeStateService::select(
 }
 
 Result<std::shared_ptr<InvocationStateLease>> NodeStateService::acquire(const InvocationContext& context,
-    const Node& node, bool isolated, ToolInstance& instance)
+    const Node& node, bool isolated, ToolInstance& instance, RunStateCells& run_states)
 {
-    auto selected = select(context, node, isolated);
-    if (const auto* failure = std::get_if<Diagnostic>(&selected)) { return *failure; }
-    auto cell = std::get<std::shared_ptr<StateCell>>(std::move(selected));
+    const auto& definition = context.data().configuration.effective_state();
+    // Isolated Group debug owns a private session state for the lifetime of this request.
+    const bool per_run = definition && (definition->scope == StateScope::WorkflowRun
+        || (isolated && definition->scope == StateScope::SolutionSession));
+    const auto found = run_states.find(node.id);
+    std::shared_ptr<StateCell> cell;
+    if (per_run && found != run_states.end()) {
+        cell = found->second;
+    } else {
+        auto selected = select(context, node, isolated);
+        if (const auto* failure = std::get_if<Diagnostic>(&selected)) { return *failure; }
+        cell = std::get<std::shared_ptr<StateCell>>(std::move(selected));
+        if (per_run) { run_states.emplace(node.id, cell); }
+    }
     if (!cell) { return std::shared_ptr<InvocationStateLease>{}; }
     auto& record = cell->record;
     if (record.initialization == StateInitialization::NotInitialized) {

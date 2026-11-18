@@ -68,6 +68,7 @@ struct ExecutionPlan::Storage {
     std::shared_ptr<const ValidationIndex> index;
     std::vector<NodeId> entries;
     std::vector<PreparedTool> tools;
+    BindingResolver resolver;
 };
 
 core::Result<ExecutionPlan> ExecutionPlan::create(const RunRequest& request, const ToolRegistry& registry,
@@ -75,7 +76,15 @@ core::Result<ExecutionPlan> ExecutionPlan::create(const RunRequest& request, con
 {
     auto where = location(request);
     const auto* target = std::get_if<NodeTarget>(&request.target());
-    if (target) { where.node = target->node; }
+    if (target) {
+        where.node = target->node;
+        const auto& flow = *find_workflow(request.snapshot().solution(), target->workflow);
+        const auto& node = *find_node(flow, target->node);
+        const auto* group = std::get_if<GroupConfiguration>(&node.configuration);
+        if (group && !group->loop && !capabilities.composite_groups) {
+            return unsupported(where, "The consumer cannot execute composite Groups.");
+        }
+    }
     if (request.trigger().kind == TriggerKind::Continuous || request.trigger().kind == TriggerKind::External) {
         return unsupported(where, "Only manual and debug triggers can be planned.");
     }
@@ -95,25 +104,35 @@ core::Result<ExecutionPlan> ExecutionPlan::create(const RunRequest& request, con
     }
     const BindingResolver resolver{snapshot, index, request};
     std::vector<PreparedTool> tools;
-    tools.reserve(scope.reachable.size());
-    for (const auto& id : scope.reachable) {
-        const auto& configured = std::get<ToolConfiguration>(find_node(flow, id)->configuration);
-        if (auto checked = registry.validate(*snapshot.find_tool(configured.type));
-            auto* failure = std::get_if<Diagnostic>(&checked)) {
-            failure->location.solution = where.solution; failure->location.workflow = flow.id; failure->location.node = id;
-            return *failure;
+    for (const auto& region : index->scopes) {
+        for (const auto& id : region.reachable) {
+            const auto& node = *find_node(flow, id);
+            const auto* configured = std::get_if<ToolConfiguration>(&node.configuration);
+            if (!configured) {
+                const auto& group = std::get<GroupConfiguration>(node.configuration);
+                if (!capabilities.control_graph || (group.loop ? !capabilities.structured_loops : !capabilities.composite_groups)) {
+                    return unsupported(location(request, id), group.loop ? "The consumer cannot schedule loops." : "The consumer cannot schedule composite Groups.");
+                }
+                continue;
+            }
+            if (auto checked = registry.validate(*snapshot.find_tool(configured->type));
+                auto* failure = std::get_if<Diagnostic>(&checked)) {
+                failure->location.solution = where.solution; failure->location.workflow = flow.id; failure->location.node = id;
+                return *failure;
+            }
+            auto prepared = PreparedTool::create(resolver, flow.id, id);
+            if (const auto* failure = std::get_if<Diagnostic>(&prepared)) { return *failure; }
+            auto& tool = std::get<PreparedTool>(prepared);
+            if (auto checked = check_tool(tool.configuration(), capabilities, location(request, id));
+                const auto* failure = std::get_if<Diagnostic>(&checked)) { return *failure; }
+            tools.push_back(std::move(tool));
         }
-        auto prepared = PreparedTool::create(resolver, flow.id, id);
-        if (const auto* failure = std::get_if<Diagnostic>(&prepared)) { return *failure; }
-        auto& tool = std::get<PreparedTool>(prepared);
-        if (auto checked = check_tool(tool.configuration(), capabilities, location(request, id));
-            const auto* failure = std::get_if<Diagnostic>(&checked)) { return *failure; }
-        tools.push_back(std::move(tool));
     }
     return ExecutionPlan{std::make_shared<const Storage>(
-        Storage{request, registry, capabilities, std::move(index), std::move(entries), std::move(tools)})};
+        Storage{request, registry, capabilities, std::move(index), std::move(entries), std::move(tools), resolver})};
 }
 
+const BindingResolver& ExecutionPlan::resolver() const noexcept { return storage_->resolver; }
 const RunRequest& ExecutionPlan::request() const noexcept { return storage_->request; }
 const ExecutionCapabilities& ExecutionPlan::capabilities() const noexcept { return storage_->capabilities; }
 std::span<const core::NodeId> ExecutionPlan::entries() const noexcept { return storage_->entries; }

@@ -132,6 +132,7 @@ private slots:
     void mask_resources_and_boundary_policy();
     void window_previews_and_edits_symbolic_roi();
     void window_displays_images_from_the_selected_run();
+    void window_displays_blob_from_one_time_debug_image_data();
     void window_displays_blob_from_one_time_debug_image();
 };
 
@@ -403,8 +404,18 @@ void VisualTests::window_displays_images_from_the_selected_run()
     QVERIFY(scene->undoStack().isClean());
 }
 
+void VisualTests::window_displays_blob_from_one_time_debug_image_data()
+{
+    QTest::addColumn<bool>("in_group");
+    QTest::newRow("standalone node") << false;
+    QTest::newRow("Group public image") << true;
+}
+
 void VisualTests::window_displays_blob_from_one_time_debug_image()
 {
+    QFETCH(bool, in_group);
+    const auto group_id = id<NodeId>("000000001306");
+    const auto binary = key<InputId>("binary");
     const auto registry = take(app::make_tool_registry());
     const auto document = take(load_solution(fixture, registry));
     EditorWindow window(document.solution(), registry);
@@ -415,13 +426,27 @@ void VisualTests::window_displays_blob_from_one_time_debug_image()
     QVERIFY(canvas);
     auto* scene = qobject_cast<ControlScene*>(canvas->scene());
     QVERIFY(scene && scene->select_workflow(workflow_id));
-    QVERIFY(scene->edit_draft(QStringLiteral("Remove inherited ROI for isolated Blob debug"), [](Solution& draft) -> Result<std::monostate> {
+    QVERIFY(scene->edit_draft(QStringLiteral("Prepare isolated Blob debug"), [&](Solution& draft) -> Result<std::monostate> {
         auto workflow = std::ranges::find(draft.workflows, workflow_id, &Workflow::id);
         auto blob = std::ranges::find(workflow->nodes, blob_id, &Node::id);
         std::erase_if(blob->bindings, [](const Binding& item) { return item.target == BindingTarget{roi_id}; });
+        if (in_group) {
+            auto child = *blob;
+            auto input = std::ranges::find(child.bindings, BindingTarget{binary}, &Binding::target);
+            input->sources = {ScopedInputReference{workflow_id, group_id, binary, {}}};
+            const auto* tool = registry.find_descriptor(std::get<ToolConfiguration>(child.configuration).type);
+            GroupConfiguration group{{key<SchemaId>("test.ui.blob_group"), 1, tool->inputs}, {child.id}};
+            workflow->nodes = {{group_id, "Blob Group", std::move(group)}, std::move(child)};
+            workflow->entries = {group_id};
+            workflow->containment = {{group_id, blob_id}};
+            workflow->control_links.clear();
+            workflow->outputs.clear();
+            workflow->interface.outputs.clear();
+            std::erase_if(draft.layouts, [&](const auto& layout) { return layout.workflow == workflow_id; });
+        }
         return std::monostate{};
     }));
-    QVERIFY(scene->reveal_node(blob_id));
+    QVERIFY(scene->reveal_node(in_group ? group_id : blob_id));
     const int edit_index = scene->undoStack().index();
 
     QTemporaryDir temporary;
@@ -470,8 +495,12 @@ void VisualTests::window_displays_blob_from_one_time_debug_image()
     QVERIFY(debug && debug->request().debug_state() == DebugStatePolicy::Isolated);
     const auto progress = take(debug->inspect());
     QCOMPARE(progress.status, ExecutionStatus::Succeeded);
-    QVERIFY(progress.call_order == std::vector<NodeId>{blob_id});
-    const auto binary = key<InputId>("binary");
+    if (in_group) {
+        QVERIFY(progress.call_order == (std::vector<NodeId>{group_id, blob_id}));
+        QVERIFY(select_run_node(*run_panel->findChild<QTreeWidget*>(QStringLiteral("runNodes")), blob_id));
+    } else {
+        QVERIFY(progress.call_order == std::vector<NodeId>{blob_id});
+    }
     const auto* supplied = debug->request().input(binary);
     QVERIFY(supplied && supplied->origin == InputOrigin::Provided && supplied->value.as_image());
     const auto result = run_result(*debug, progress, blob_id);
@@ -481,12 +510,22 @@ void VisualTests::window_displays_blob_from_one_time_debug_image()
     QVERIFY(show_image->isEnabled());
     show_image->click();
     QVERIFY(images->frame() && *images->frame() == supplied->value.as_image()->image);
+    if (in_group) {
+        const auto* label = images->findChild<QLabel*>(QStringLiteral("imageProvenance"));
+        QVERIFY(label && label->text().contains(QStringLiteral("Blob Group · Scope"))
+            && label->text().contains(QStringLiteral("Invocation")));
+    }
     QCOMPARE(scene->undoStack().index(), edit_index);
     const auto* blob = find_node(*find_workflow(window.draft(), workflow_id), blob_id);
     const auto binding = std::ranges::find(blob->bindings, BindingTarget{binary}, &Binding::target);
     QVERIFY(binding != blob->bindings.end());
-    const auto* upstream = std::get_if<OutputReference>(&binding->sources.front());
-    QVERIFY(upstream && upstream->node == binary_source_id);
+    if (in_group) {
+        const auto* upstream = std::get_if<ScopedInputReference>(&binding->sources.front());
+        QVERIFY(upstream && upstream->group == group_id && upstream->input == binary);
+    } else {
+        const auto* upstream = std::get_if<OutputReference>(&binding->sources.front());
+        QVERIFY(upstream && upstream->node == binary_source_id);
+    }
 }
 
 } // namespace

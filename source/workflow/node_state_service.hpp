@@ -9,6 +9,7 @@
 namespace visionpro::workflow::detail {
 
 struct StateCell;
+using RunStateCells = std::map<core::NodeId, std::shared_ptr<StateCell>>;
 
 class InvocationStateLease final : public core::ToolStateAccess {
 public:
@@ -42,7 +43,7 @@ private:
 class NodeStateService final {
 public:
     [[nodiscard]] core::Result<std::shared_ptr<InvocationStateLease>> acquire(
-        const core::InvocationContext& context, const Node& node, bool isolated, core::ToolInstance& instance);
+        const core::InvocationContext& context, const Node& node, bool isolated, core::ToolInstance& instance, RunStateCells& run_states);
     [[nodiscard]] core::Result<std::monostate> reset(core::WorkflowId workflow, core::NodeId node);
     void clear() noexcept;
 

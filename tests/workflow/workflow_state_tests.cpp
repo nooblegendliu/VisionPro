@@ -2,6 +2,7 @@
 #include <visionpro/core/runtime_id_factory.hpp>
 #include <visionpro/core/schema_id_factory.hpp>
 #include <visionpro/workflow/workflow_engine.hpp>
+#include <visionpro/workflow/execution_plan.hpp>
 #include <visionpro/workflow/workflow_session.hpp>
 
 #include <algorithm>
@@ -354,6 +355,159 @@ void check_counts(Fixture& fixture, NodeId node, unsigned calls, unsigned initia
         "The factory rebuilds the instance per invocation and Init follows state-domain lifetime.");
 }
 
+void loop_state_and_plan_capability()
+{
+    Fixture fixture;
+    const auto counter = counter_node(fixture.descriptor, '1', 0, "per-run");
+    auto solution = counters(fixture.descriptor, {counter});
+    auto& flow = solution.workflows.front();
+    const auto request = [&](const ConfigSnapshot& snapshot) {
+        return take(RunRequest::create(snapshot, WorkflowTarget{flow.id}, {{key<InputId>("delta"), DataValue::integer(1)}},
+            {TriggerKind::Manual, key<SchemaId>("s61.state-test")}));
+    };
+    // This aggregate is the pre-loop graph consumer's complete capability declaration.
+    ExecutionCapabilities graph{false, true, true, {}};
+    const auto ordinary = take(ExecutionPlan::create(request(fixture.capture(solution)), fixture.registry, graph));
+    check(ordinary.dependencies().scopes.size() == 1 && ordinary.tool(counter.id),
+        "A DAG-only consumer can continue treating reachable nodes as ordinary tool configurations.");
+
+    const auto loop = uuid<NodeId>('2');
+    const auto default_integer = [&](std::string_view name, std::int64_t value) {
+        InputDescriptor port{key<InputId>(name), std::string(name), DataType::integer(), false, ConfigValue::integer(value)};
+        return port;
+    };
+    const auto delta = fixture.descriptor.inputs.front().id;
+    const auto totals = key<OutputId>("totals");
+    GroupConfiguration body{{key<SchemaId>("s61.state-loop"), 1,
+        {default_integer("start", 0), default_integer("end", 2), default_integer("index", 0), fixture.descriptor.inputs.front()},
+        {{totals, "Totals", DataType::list(DataType::integer())}}, {}}, {counter.id},
+        {{totals, {flow.id, counter.id, key<OutputId>("total"), {}}}}, {},
+        LoopConfiguration{1, false, 0, {{totals, LoopExportMode::Collect}}}};
+    flow.nodes.front().bindings.back().sources = {ScopedInputReference{flow.id, loop, delta, {}}};
+    flow.nodes.push_back({loop, "Count twice", body, {{delta, {ScopedInputReference{flow.id, {}, delta, {}}}}}});
+    flow.containment = {{loop, counter.id}};
+    flow.entries = {loop};
+    const auto snapshot = fixture.capture(solution);
+    const auto run_request = request(snapshot);
+
+    const auto refused = ExecutionPlan::create(run_request, fixture.registry, graph);
+    const auto* diagnostic = std::get_if<Diagnostic>(&refused);
+    check(diagnostic && diagnostic->code == ErrorCode::MissingCapability && diagnostic->location.node == loop,
+        "A DAG-only consumer must be refused a structured node before it dereferences a missing prepared tool.");
+    graph.structured_loops = true;
+    const auto plan = take(ExecutionPlan::create(run_request, fixture.registry, graph));
+    check(plan.capabilities().structured_loops && !plan.tool(loop) && plan.tool(counter.id),
+        "A loop-aware plan retains its structural region and prepares its body tool.");
+
+    const auto expected = take(DataValue::list(DataType::integer(), {DataValue::integer(1), DataValue::integer(2)}));
+    for (unsigned round = 1; round <= 2; ++round) {
+        const auto handle = accepted(fixture.engine->submit(run_request));
+        const auto progress = wait_for(handle);
+        const auto entry = std::ranges::find(progress.nodes, loop, &RunNodeProgress::node);
+        check(entry != progress.nodes.end() && entry->invocation, "The loop published its own logical invocation.");
+        const auto result = take(handle.lookup(*entry->invocation));
+        const auto* output = result ? result->output(totals) : nullptr;
+        const auto* values = output ? std::get_if<DataValue>(&output->content) : nullptr;
+        check(values && *values == expected, "Each run must collect [1,2] from the same per-run counter across its two iterations.");
+        check_counts(fixture, counter.id, round * 2, round);
+    }
+}
+
+void group_state_domains()
+{
+    Fixture fixture;
+    auto solution = counters(fixture.descriptor, {});
+    auto& flow = solution.workflows.front();
+    const auto delta = fixture.descriptor.inputs.front();
+    const auto totals = key<OutputId>("totals");
+    const OutputDescriptor output{totals, "Totals", DataType::list(DataType::integer())};
+    const auto number = [](std::string_view name, std::int64_t value) {
+        return InputDescriptor{key<InputId>(name), std::string(name), DataType::integer(), false, ConfigValue::integer(value)};
+    };
+    const auto add_group = [&](char outer_id, char loop_id, char child_id) {
+        const auto outer = uuid<NodeId>(outer_id);
+        const auto loop = uuid<NodeId>(loop_id);
+        auto counter = counter_node(fixture.descriptor, child_id, 0, "session");
+        counter.bindings.back().sources = {ScopedInputReference{flow.id, loop, delta.id, {}}};
+        GroupConfiguration body{{key<SchemaId>("s62.counter-loop"), 1,
+            {number("start", 0), number("end", 2), number("index", 0), delta}, {output}}, {counter.id},
+            {{totals, {flow.id, counter.id, key<OutputId>("total"), {}}}}, {},
+            LoopConfiguration{1, false, 0, {{totals, LoopExportMode::Collect}}}};
+        GroupConfiguration group{{key<SchemaId>("s62.counter-group"), 1, {delta}, {output}}, {loop},
+            {{totals, {flow.id, loop, totals, {}}}}, {}};
+        flow.entries.push_back(outer);
+        flow.containment.push_back({outer, loop});
+        flow.containment.push_back({loop, counter.id});
+        flow.nodes.push_back({outer, "Counter group", group, {{delta.id, {ScopedInputReference{flow.id, {}, delta.id, {}}}}}});
+        flow.nodes.push_back({loop, "Count twice", body, {{delta.id, {ScopedInputReference{flow.id, outer, delta.id, {}}}}}});
+        flow.nodes.push_back(std::move(counter));
+        return NodeTarget{flow.id, outer};
+    };
+    const auto first = add_group('1', '2', '3');
+    const auto other = add_group('4', '5', '6');
+    const auto snapshot = fixture.capture(solution);
+    const auto expect_pair = [&](const RunHandle& handle, const RunProgress& progress, NodeId group, std::int64_t begin) {
+        const auto call = std::ranges::find(progress.groups, group,
+            [](const RunGroupCall& trace) { return trace.group.node; });
+        check(call != progress.groups.end(), "An executed group has an invocation in this run.");
+        const auto result = take(handle.lookup(call->group));
+        const auto* entry = result ? result->output(totals) : nullptr;
+        const auto* value = entry ? std::get_if<DataValue>(&entry->content) : nullptr;
+        check(value && *value == take(DataValue::list(DataType::integer(), {DataValue::integer(begin), DataValue::integer(begin + 1)})),
+            "The group's session counter accumulates twice in the expected state domain.");
+    };
+    const auto first_handle = accepted(fixture.submit(snapshot, 1));
+    const auto both = wait_for(first_handle);
+    expect_pair(first_handle, both, first.node, 1);
+    expect_pair(first_handle, both, other.node, 1);
+    const auto active = accepted(fixture.submit(snapshot, 1, first, DebugStatePolicy::Active));
+    expect_pair(active, wait_for(active), first.node, 3);
+    const auto isolated = accepted(fixture.submit(snapshot, 1, first));
+    const auto debug = wait_for(isolated);
+    check(debug.groups.size() == 1 && debug.iterations.size() == 2, "Group debugging calls only the selected subtree.");
+    expect_pair(isolated, debug, first.node, 1);
+    const auto resumed = accepted(fixture.submit(snapshot, 1));
+    const auto final = wait_for(resumed);
+    expect_pair(resumed, final, first.node, 5);
+    expect_pair(resumed, final, other.node, 3);
+    check_counts(fixture, uuid<NodeId>('3'), 8, 2);
+    check_counts(fixture, uuid<NodeId>('6'), 4, 1);
+}
+
+void enabled_workflow_requests()
+{
+    Fixture fixture;
+    auto solution = counters(fixture.descriptor, {});
+    Workflow other{uuid<WorkflowId>('2'), "Other", {key<SchemaId>("s62.other"), 1}};
+    other.enabled = false;
+    const auto first = solution.workflows.front().id;
+    solution.workflows.push_back(other);
+    const auto original = fixture.capture(solution);
+    const RunTrigger trigger{TriggerKind::Manual, key<SchemaId>("s62.batch")};
+    const auto delta = key<InputId>("delta");
+    const std::array inputs{WorkflowRunInputs{first, {{delta, DataValue::integer(2)}}}};
+    const auto started = take(RunRequest::enabled_workflows(original, inputs, trigger));
+    check(started.size() == 1 && std::get<WorkflowTarget>(started.front().target()).workflow == first,
+        "Enabled workflow preparation freezes the enabled target set.");
+    check(std::holds_alternative<Diagnostic>(RunRequest::enabled_workflows(original, {}, trigger))
+        && std::holds_alternative<Diagnostic>(RunRequest::enabled_workflows(original,
+            std::array{inputs.front(), WorkflowRunInputs{other.id, {}}}, trigger)),
+        "Missing participant inputs and inputs for disabled workflows fail preparation.");
+    solution.workflows.back().enabled = true;
+    const auto next = fixture.capture(solution);
+    const auto prepared = take(RunRequest::enabled_workflows(next, inputs, trigger));
+    check(prepared.size() == 2 && std::get<WorkflowTarget>(prepared.back().target()).workflow == other.id
+        && prepared.front().snapshot().same_capture(next) && prepared.back().snapshot().same_capture(next)
+        && prepared.front().input(delta)->value == DataValue::integer(2)
+        && started.front().snapshot().same_capture(original) && !started.front().snapshot().solution().workflows.back().enabled,
+        "All newly prepared requests use the same new snapshot while old targets and inputs stay frozen.");
+    check(std::holds_alternative<Diagnostic>(RunRequest::enabled_workflows(next,
+        std::array{inputs.front(), inputs.front()}, trigger)), "Duplicate participant inputs fail the entire batch.");
+    for (auto& workflow : solution.workflows) { workflow.enabled = false; }
+    check(take(RunRequest::enabled_workflows(fixture.capture(solution), {}, trigger)).empty(),
+        "An empty enabled set prepares no requests.");
+}
+
 void lifetimes()
 {
     Fixture fixture;
@@ -652,6 +806,9 @@ int main(int argc, char** argv)
     const std::string_view test = argc > 1 ? argv[1] : "";
     try {
         if (test == "lifetimes") { lifetimes(); generation_on_configuration_edit(); }
+        else if (test == "loop-state") { loop_state_and_plan_capability(); }
+        else if (test == "group-state") { group_state_domains(); }
+        else if (test == "enabled-set") { enabled_workflow_requests(); }
         else if (test == "debug") { debug_isolation(); }
         else if (test == "acceptance") { state_acceptance(); immediate_mutation(); }
         else if (test == "publication") { session_publication_preserves_compatible_state(); }

@@ -1,6 +1,7 @@
 #include <visionpro/workflow/resolver.hpp>
 #include <visionpro/core/schema_id_factory.hpp>
 #include "runtime_values.hpp"
+#include "loop_execution.hpp"
 
 #include <algorithm>
 #include <map>
@@ -155,7 +156,8 @@ private:
     Check validate_scopes();
     Check validate_sources(const ScopeDependencies& scope);
     Check validate_scope_inputs(const ResolutionScope& scope);
-    bool independent() const { return request_ && std::holds_alternative<NodeTarget>(request_->target()); }
+    const NodeTarget* debug_target() const { return request_ ? std::get_if<NodeTarget>(&request_->target()) : nullptr; }
+    bool independent() const { return debug_target() && debug_target()->node == context_.consumer.node; }
     template<class Target> BindingResolution resolve(const Target& descriptor);
     Evaluation source(const BindingSource& value, std::size_t index);
     Evaluation output(const OutputReference& reference, std::size_t index);
@@ -254,7 +256,7 @@ Check Resolution::validate_context()
         if (!find_node(*flow_, *group)->enabled) { return error(ErrorCode::InvalidResolutionContext, "Consumer is inside a disabled Group."); }
     }
     if (const auto* tool = std::get_if<ToolConfiguration>(&node_->configuration)) { tool_ = snapshot_.find_tool(tool->type); }
-    if (request_) {
+    if (request_ && (independent() || !scope_->group)) {
         if (context_.scopes.size() != 1 || scope_->id.value() != 0 || scope_->parent
             || !scope_->inputs.empty() || !context_.visible_outer_scopes.empty()) {
             return error(ErrorCode::InvalidResolutionContext, "A planned invocation uses one root scope and the request's fixed inputs.");
@@ -284,7 +286,8 @@ Check Resolution::validate_scopes()
             if (scope.parent || scope.group) { return error(ErrorCode::InvalidResolutionContext, "Root scope must be the Workflow scope without a parent."); }
         } else {
             const auto* outer = scope.parent ? find(context_.scopes, *scope.parent) : nullptr;
-            if (!outer || (outer->group != scope.group && (!scope.group || parent(*flow_, *scope.group) != outer->group))) {
+            const bool detached_root = outer && outer->id.value() == 0 && debug_target() && scope.group == debug_target()->node;
+            if (!outer || (!detached_root && outer->group != scope.group && (!scope.group || parent(*flow_, *scope.group) != outer->group))) {
                 return error(ErrorCode::ScopeViolation, "Runtime scope must follow the static Group boundary or nest within the same owner.");
             }
             std::set<ExecutionScopeId> chain{scope.id};
@@ -297,6 +300,10 @@ Check Resolution::validate_scopes()
         }
     }
     for (const auto& scope : context_.scopes) {
+        if (request_ && scope.id.value() == 0) {
+            if (!scope.inputs.empty()) { return error(ErrorCode::InvalidResolutionContext, "Root inputs come from the fixed request."); }
+            continue;
+        }
         if (auto checked = validate_scope_inputs(scope); failed(checked)) { return checked; }
     }
     std::set<ExecutionScopeId> visible;
@@ -470,7 +477,7 @@ Evaluation Resolution::source(const BindingSource& source, std::size_t index)
         else if constexpr (std::is_same_v<T, OutputReference>) { return output(value, index); }
         else if constexpr (std::is_same_v<T, ScopedInputReference>) {
             if (value.workflow != flow_->id || value.group != scope_->group) { return invalid(error(ErrorCode::ScopeViolation, "Public input reference must address this exact scope owner.")); }
-            if (request_) {
+            if (request_ && !scope_->group) {
                 const auto* fixed = independent() ? nullptr : request_->input(value.input);
                 if (!fixed) { return invalid(error(ErrorCode::InputUnavailable, "No fixed public input exists for this invocation.")); }
                 traces_.push_back({index, PublicInputTrace{value, context_.run, scope_->id, fixed->origin}, {}});
@@ -591,6 +598,19 @@ BindingResolution Resolution::run()
     return failure({error(ErrorCode::UnknownTarget, "Resolution target is not declared by the current consumer."), {}});
 }
 } // namespace
+
+core::Result<core::DataValue> detail::project_region_export(const NodeResult& record, const OutputReference& source)
+{
+    if (const auto* system = std::get_if<SystemField>(&source.output)) {
+        auto value = system_value(record.data(), *system);
+        if (auto* bad = std::get_if<Diagnostic>(&value)) { return *bad; }
+        return selected(std::get<DataValue>(value), source.selector);
+    }
+    const auto* slot = record.output(std::get<OutputId>(source.output));
+    const auto* value = slot ? std::get_if<DataValue>(&slot->content) : nullptr;
+    if (!value) { return error(ErrorCode::InputUnavailable, "A region export requires a produced value in the current child scope."); }
+    return selected(*value, source.selector);
+}
 
 core::Result<BindingResolver> BindingResolver::create(const ConfigSnapshot& snapshot)
 {

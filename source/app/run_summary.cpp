@@ -398,19 +398,22 @@ json update_origin_json(const UpdateOrigin& origin)
         }}, origin);
 }
 
+json result_trace_json(const ResultTrace& trace)
+{
+    const auto* port = std::get_if<OutputId>(&trace.reference.output);
+    json result{{"kind", "result"}, {"node", id_text(trace.reference.node)},
+        {"output", port ? id_text(*port) : std::string(name(std::get<SystemField>(trace.reference.output)))},
+        {"output_kind", port ? "port" : "system"}, {"selector", selector_json(trace.reference.selector)},
+        {"scope", id_text(trace.scope)}, {"invocation", optional_id(trace.invocation)}, {"attempt", optional_id(trace.attempt)}};
+    add_run_identity(result, trace.run);
+    return result;
+}
+
 json source_json(const SourceTrace& source)
 {
     auto value = std::visit(Overload{
         [](ConstantTrace constant) { return json{{"kind", "constant"}, {"defaulted", constant.defaulted}}; },
-        [](const ResultTrace& trace) {
-            const auto* port = std::get_if<OutputId>(&trace.reference.output);
-            json result{{"kind", "result"}, {"node", id_text(trace.reference.node)},
-                {"output", port ? id_text(*port) : std::string(name(std::get<SystemField>(trace.reference.output)))},
-                {"output_kind", port ? "port" : "system"}, {"selector", selector_json(trace.reference.selector)},
-                {"scope", id_text(trace.scope)}, {"invocation", optional_id(trace.invocation)}, {"attempt", optional_id(trace.attempt)}};
-            add_run_identity(result, trace.run);
-            return result;
-        },
+        [](const ResultTrace& trace) { return result_trace_json(trace); },
         [](const PublicInputTrace& trace) {
             json result{{"kind", "public_input"}, {"input", id_text(trace.reference.input)}, {"scope", id_text(trace.scope)},
                 {"group", optional_id(trace.reference.group)}, {"selector", selector_json(trace.reference.selector)},
@@ -562,7 +565,7 @@ json output_json(const OutputSlot& slot)
 json node_json(const RunNodeProgress& node, const std::optional<NodeResult>& result)
 {
     json trace{{"id", id_text(node.node)}, {"status", name(node.status)}, {"skip_reason", optional_name(node.skip_reason)},
-        {"invocation", nullptr}, {"scope", nullptr}, {"attempt", nullptr}, {"judgement", nullptr},
+        {"invocation", nullptr}, {"scope", optional_id(node.scope)}, {"attempt", nullptr}, {"judgement", nullptr},
         {"selected_outputs", json::array()}, {"outputs", json::array()}, {"diagnostics", json::array()},
         {"bindings", array_json(node.bindings, binding_json)}, {"resources", array_json(node.resources, [](const RunResourceTrace& resource) {
             auto value = resource_json(resource.reference);
@@ -607,8 +610,26 @@ core::Result<nlohmann::json> summarize_run(const workflow::RunHandle& handle,
         {"load_diagnostics", diagnostics_json(load_diagnostics)}, {"diagnostics", diagnostics_json(progress.diagnostics)},
         {"nodes", std::move(nodes)}, {"call_order", array_json(progress.call_order, id_text<NodeId>)},
         {"control_links", array_json(progress.control_links, [](const RunControlLinkProgress& link) {
-            return json{{"id", id_text(link.link)}, {"status", name(link.status)}, {"close_reason", optional_name(link.close_reason)}};
+            json edge{{"id", id_text(link.link)}, {"status", name(link.status)}, {"close_reason", optional_name(link.close_reason)}};
+            if (link.scope) { edge["scope"] = id_text(*link.scope); }
+            return edge;
         })}};
+    const auto export_trace = [](const RunExportTrace& item) {
+        const auto& id = item.producer;
+        return json{{"output", id_text(item.output)}, {"producer", result_trace_json(
+            {item.source, id.run, id.invocation.scope, id.invocation.invocation, id.attempt})}};
+    };
+    summary["iterations"] = array_json(progress.iterations, [&](const RunLoopIteration& iteration) {
+        return json{{"scope", id_text(iteration.scope)}, {"index", std::to_string(iteration.index)},
+            {"loop_node", id_text(iteration.loop.node)}, {"parent_scope", id_text(iteration.loop.scope)},
+            {"loop_invocation", id_text(iteration.loop.invocation)},
+            {"exports", array_json(iteration.exports, export_trace)}};
+    });
+    summary["groups"] = array_json(progress.groups, [&](const RunGroupCall& call) {
+        return json{{"scope", id_text(call.scope)}, {"group_node", id_text(call.group.node)},
+            {"parent_scope", id_text(call.group.scope)}, {"group_invocation", id_text(call.group.invocation)},
+            {"exports", array_json(call.exports, export_trace)}};
+    });
     add_run_identity(summary, handle.identity());
     return summary;
 }

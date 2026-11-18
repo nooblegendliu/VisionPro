@@ -1,3 +1,4 @@
+#include "windows_path.hpp"
 #include <visionpro/infrastructure/solution_file.hpp>
 #include <visionpro/core/runtime_id_factory.hpp>
 #include <visionpro/workflow/validation.hpp>
@@ -53,20 +54,20 @@ struct TemporaryManifest {
     ~TemporaryManifest()
     {
         std::error_code ignored;
-        fs::remove(file, ignored);
-        fs::remove(directory, ignored);
+        fs::remove(detail::windows_access_path(file), ignored);
+        fs::remove(detail::windows_access_path(directory), ignored);
     }
 };
 
 bool manifest_exists(const fs::path& manifest)
 {
     std::error_code ignored;
-    return fs::exists(fs::symlink_status(manifest, ignored));
+    return fs::exists(fs::symlink_status(detail::windows_access_path(manifest), ignored));
 }
 
 Result<std::monostate> publish_manifest(const fs::path& directory, const std::string& text)
 {
-    fs::create_directories(directory);
+    fs::create_directories(detail::windows_access_path(directory));
     const auto manifest = directory / solution_manifest_name;
     const auto exists = [] {
         return error(ErrorCode::SolutionAlreadyExists, "The destination already contains a solution manifest.");
@@ -76,7 +77,7 @@ Result<std::monostate> publish_manifest(const fs::path& directory, const std::st
     if (auto* failure = std::get_if<Diagnostic>(&issued)) { return std::move(*failure); }
     auto staging = directory / (".visionpro-manifest-" + std::get<MessageId>(issued).to_string());
     auto file = staging / solution_manifest_name;
-    if (!fs::create_directory(staging)) {
+    if (!fs::create_directory(detail::windows_access_path(staging))) {
         return error(ErrorCode::SolutionIoFailure, "Could not reserve the temporary manifest directory.");
     }
     const TemporaryManifest temporary{std::move(staging), std::move(file)};
@@ -94,7 +95,7 @@ core::Result<SolutionDocument> load_solution(const fs::path& directory, const To
         if (!directory.is_absolute()) {
             return error(ErrorCode::InvalidPath, "The solution directory must be absolute.");
         }
-        auto base = fs::canonical(directory);
+        auto base = detail::windows_display_path(fs::canonical(detail::windows_access_path(directory)));
         const auto manifest = base / solution_manifest_name;
         auto bytes = detail::read_manifest(manifest);
         if (auto* failure = std::get_if<Diagnostic>(&bytes)) { return std::move(*failure); }

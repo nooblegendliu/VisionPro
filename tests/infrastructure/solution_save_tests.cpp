@@ -2,6 +2,7 @@
 
 #include <visionpro/core/id_factory.hpp>
 #include <visionpro/core/schema_id_factory.hpp>
+#include <visionpro/infrastructure/subgraph_package.hpp>
 
 #include <algorithm>
 #include <array>
@@ -174,7 +175,7 @@ private:
     std::shared_ptr<Gate> gate_;
 };
 
-ToolRegistry registry(const std::shared_ptr<Gate>& gate)
+ToolRegistry registry(const std::shared_ptr<Gate>& gate, bool with_state = false)
 {
     const auto schema = key<SchemaId>("s38.read");
     ToolDescriptor descriptor{
@@ -193,6 +194,14 @@ ToolRegistry registry(const std::shared_ptr<Gate>& gate)
         .execution = {},
         .state_parameters = {},
     };
+    if (with_state) {
+        InputDescriptor input{key<InputId>("offset"), "Offset", DataType::integer(), false, ConfigValue::integer(0)};
+        input.binding.allowed_sources = {BindingSourceKind::Constant, BindingSourceKind::GlobalRead};
+        descriptor.inputs.push_back(std::move(input));
+        descriptor.state = NodeStateDefinition{DataType::integer(), ConfigValue::integer(0), StateScope::SolutionSession,
+            StateResetPolicy::DomainStartAndExplicit, StateCompatibilityPolicy::PreserveCompatible,
+            StateMutationTiming::OnResultAccepted, StateConcurrencyPolicy::Serialized};
+    }
     const std::array registrations{ToolRegistration{std::move(descriptor), {schema, 1, 1, {}},
         std::make_shared<ByteFactory>(gate)}};
     return take(ToolRegistry::create(registrations));
@@ -688,6 +697,140 @@ void cleanup()
     current_output_is(fixture, 'n');
     check(read(fixture.external) == "external", "Cleanup never rewrites the external file.");
 }
+void reusable_packages()
+{
+    const Fixture fixture;
+    const auto tools = registry({}, true);
+    const auto source = fixture.open();
+    auto draft = source.solution();
+    auto& flow = draft.workflows.front();
+    auto& reader = flow.nodes.front();
+    const auto child = reader.id, group = id<NodeId>('2');
+    const auto port = key<OutputId>("byte");
+    const auto variable = id<VariableId>('6');
+    draft.variables.push_back({variable, "Offset", DataType::integer(), ConfigValue::integer(2)});
+    reader.bindings = {{key<InputId>("offset"), {GlobalReference{variable, {}, {}}}}};
+    const auto frame = key<CoordinateSystemId>("subgraph.pixels");
+    draft.coordinates.push_back({frame, CoordinateKind::Image, MeasurementUnit::Pixel, {0, 0}, {1, 0}, {0, -1}, Handedness::LeftHanded});
+    auto unused = draft.coordinates.front();
+    unused.id = key<CoordinateSystemId>("subgraph.unused");
+    draft.coordinates.push_back(unused);
+    const InputDescriptor position{key<InputId>("origin"), "Origin", DataType::point2d(), false,
+        take(ConfigValue::point2d({frame, MeasurementUnit::Pixel, 0, 0}))};
+    const PublicInterface ports{key<SchemaId>("reusable.byte"), 3, {position}, {{port, "Byte", DataType::integer(), {}}}, {}};
+    flow.nodes.push_back({group, "Read group", GroupConfiguration{ports, {child}, {{port, {flow.id, child, port, {}}}}, {}}});
+    flow.entries = {group};
+    flow.containment = {{group, child}};
+    draft.layouts = {{flow.id, {{child, 14, 25}}}};
+    const auto directory = fixture.scratch.path / "group-export";
+    take(export_subgraph_package(directory, draft, flow.id, group, tools, &source));
+    rejected(export_subgraph_package(directory, draft, flow.id, group, tools, &source), ErrorCode::SolutionAlreadyExists,
+        "Export never overwrites an existing reusable package.");
+    const auto wf_package = fixture.scratch.path / "workflow-export";
+    take(export_subgraph_package(wf_package, draft, flow.id, {}, tools, &source));
+
+    Solution destination{id<SolutionId>('7'), "Host", 1, 1,
+        {{id<WorkflowId>('8'), "Host workflow", {key<SchemaId>("subgraph.host"), 1, {}, {}, {}}}}};
+    destination.variables = draft.variables;
+    destination.coordinates = {draft.coordinates.front()};
+    const auto host_directory = fixture.scratch.path / ("host-" + std::string(64, 'h'));
+    fs::create_directory(host_directory);
+    take(write_new_solution(host_directory, destination));
+    const auto host = take(load_solution(host_directory, tools));
+    const auto target = destination.workflows.front().id;
+    const auto baseline = read(host_directory / solution_manifest_name);
+    const auto count_files = [&] { return std::distance(fs::recursive_directory_iterator(host_directory), fs::recursive_directory_iterator{}); };
+    const auto before = count_files();
+    auto wrong_host = destination;
+    wrong_host.variables.front().id = id<VariableId>('3');
+    const auto missing = import_subgraph_package(directory, wrong_host, target, {}, tools, &host);
+    rejected(missing, ErrorCode::MissingCapability, "A matching display name cannot replace a required host identity.");
+    check(std::get<Diagnostic>(missing).location.variable == variable, "The diagnostic identifies the required variable.");
+    rejected(import_subgraph_package(directory, destination, target, {}, tools, &host, {false, true}),
+        ErrorCode::MissingCapability, "A standalone host without node state rejects the package.");
+    rejected(import_subgraph_package(directory, destination, target, {}, tools, &host, {true, false}),
+        ErrorCode::MissingCapability, "A host without file leases rejects the package.");
+    wrong_host = destination;
+    wrong_host.coordinates.front().origin.x = 100;
+    rejected(import_subgraph_package(directory, wrong_host, target, {}, tools, &host), ErrorCode::CoordinateMismatch,
+        "Conflicting definitions under one stable coordinate ID cannot be merged.");
+    wrong_host = destination;
+    wrong_host.workflows.front().interface.id = ports.id;
+    wrong_host.workflows.front().interface.version = ports.version;
+    rejected(import_subgraph_package(directory, wrong_host, target, {}, tools, &host), ErrorCode::InvalidSchema,
+        "A host cannot reuse the imported public Schema identity/version with a different port set.");
+    check(read(host_directory / solution_manifest_name) == baseline && count_files() == before,
+        "Validation and late import failures preserve the host manifest and leave no copied assets.");
+
+    const auto first = take(import_subgraph_package(directory, destination, target, {}, tools, &host));
+    const auto second = take(import_subgraph_package(directory, first.solution, target, {}, tools, &host));
+    check(first.group && second.group && first.group != second.group && second.solution.coordinates.size() == 1
+        && second.solution.resources.size() == 2 && second.solution.resources[0].id != second.solution.resources[1].id,
+        "Repeated imports create different Group/resource identities and share only the compatible coordinate definition.");
+    auto final = second.solution;
+    auto& imported_flow = final.workflows.front();
+    const auto& instance = std::get<GroupConfiguration>(find_node(imported_flow, *first.group)->configuration);
+    const auto instance_child = instance.entries.at(0);
+    check(instance.interface.id == ports.id && instance.interface.version == 3 && instance_child != child
+        && instance.outputs.front().source.node == instance_child && instance.outputs.front().source.workflow == target
+        && final.layouts.front().nodes.front().node == instance_child,
+        "Public Schema/version, body, exported result and layout rebase on the new owning workflow.");
+    check(std::get<GlobalReference>(find_node(imported_flow, instance_child)->bindings.front().sources.front()).variable == variable,
+        "A declared host variable remains a reference to the exact host identity.");
+    imported_flow.entries = {*first.group};
+    const auto saved = take(save_solution(host, final));
+    check(saved.solution.resources.size() == 2 && std::get<ManagedResource>(saved.solution.resources.front().location).revision == 7,
+        "The normal save transaction can publish imported immutable managed versions.");
+    const auto& asset_path = std::get<ManagedResource>(saved.solution.resources.front().location).path.path;
+    const auto long_asset = host_directory / fs::path(std::u8string(asset_path.begin(), asset_path.end()));
+    check(long_asset.native().size() > MAX_PATH && take(read_file_bytes(long_asset))->size() == original_bytes.size(),
+        "An imported managed asset longer than MAX_PATH is published and readable at its full path.");
+    const auto as_workflow = take(import_subgraph_package(wf_package, saved.solution, {}, {}, tools, &host));
+    check(!as_workflow.group && as_workflow.workflow != flow.id && as_workflow.solution.workflows.size() == 2,
+        "A workflow package becomes a separate workflow in the target solution.");
+    const auto after = count_files();
+    const auto saved_manifest = read(host_directory / solution_manifest_name);
+    fs::path bundled_asset;
+    for (const auto& entry : fs::recursive_directory_iterator(directory)) {
+        if (entry.is_regular_file() && entry.path().filename() != subgraph_manifest_name) {
+            check(bundled_asset.empty(), "The fixture exports exactly one asset.");
+            bundled_asset = entry.path();
+        }
+    }
+    check(!bundled_asset.empty(), "The exported package contains its reader's asset.");
+    fs::rename(bundled_asset, fixture.scratch.path / "held-package-asset");
+    const auto missing_asset = import_subgraph_package(directory, saved.solution, target, {}, tools, &host);
+    rejected(missing_asset, ErrorCode::ResourceNotFound, "A missing package asset must reject the import.");
+    check(std::get<Diagnostic>(missing_asset).location.resource == id<ResourceId>('1')
+        && count_files() == after && read(host_directory / solution_manifest_name) == saved_manifest,
+        "A missing file identifies its resource and leaves the host intact.");
+    write(bundled_asset, "bad");
+    rejected(import_subgraph_package(directory, saved.solution, target, {}, tools, &host), ErrorCode::ResourceVersionMismatch,
+        "Tampered package bytes reject the import.");
+    check(count_files() == after, "A failed integrity check removes all staged files.");
+    fs::rename(directory, fixture.scratch.path / "moved-group");
+    fs::rename(wf_package, fixture.scratch.path / "moved-workflow");
+    fs::rename(fixture.managed, fixture.scratch.path / "moved-input");
+    auto execution = take(open_solution_execution(take(load_solution(host_directory, tools)), tools));
+    const auto no_values = start(execution, target);
+    const auto absent = take(no_values.wait(RunWaitTarget::Quiescence, std::chrono::steady_clock::now() + 5s));
+    check(absent.progress.status == ExecutionStatus::Failed && std::ranges::any_of(absent.progress.diagnostics,
+        [&](const auto& diagnostic) { return diagnostic.code == ErrorCode::GlobalUnavailable && diagnostic.location.variable == variable; }),
+        "The definition alone does not provide a runtime global value; the failure identifies the exact missing variable.");
+    const auto origin = key<SchemaId>("subgraph.test.host");
+    const std::array globals{GlobalVariableEntry{variable, DataValue::integer(19), 0,
+        ExternalUpdateOrigin{execution.engine->session(), origin}}};
+    const auto request = take(RunRequest::create(execution.snapshot, WorkflowTarget{target}, {},
+        {TriggerKind::Manual, origin}, {}, {}, globals));
+    auto submitted = execution.engine->submit(request);
+    if (const auto* rejected = std::get_if<RunRejected>(&submitted)) { throw std::runtime_error(rejected->diagnostic.message); }
+    const auto run = std::get<RunHandle>(submitted);
+    const auto completed = take(run.wait(RunWaitTarget::Quiescence, std::chrono::steady_clock::now() + 5s));
+    if (completed.progress.status != ExecutionStatus::Succeeded && !completed.progress.diagnostics.empty()) {
+        throw std::runtime_error(completed.progress.diagnostics.front().message);
+    }
+    check(completed.progress.status == ExecutionStatus::Succeeded, "The imported Group still runs after moving the source and both packages.");
+}
 } // namespace
 
 int main(int argc, char** argv)
@@ -699,6 +842,7 @@ int main(int argc, char** argv)
         else if (group == "cleanup") { cleanup(); }
         else if (group == "external-failures") { failures(PayloadStorage::External); }
         else if (group == "external-conflict") { conflict(PayloadStorage::External); }
+        else if (group == "subgraph") { reusable_packages(); }
         else if (group == "transfer") {
             transfer_packages();
             transfer_failures_and_explicit_copy();

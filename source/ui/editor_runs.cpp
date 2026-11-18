@@ -34,9 +34,11 @@ SchemaId trigger_id(bool independent)
 void EditorWindow::create_run_actions()
 {
     auto& menu = *menuBar()->addMenu(QStringLiteral("&Run"));
-    run_workflow_ = action(menu, QStringLiteral("Run Workflow"), "runWorkflow", [this] { start_run(false); },
+    run_workflow_ = action(menu, QStringLiteral("Run Workflow"), "runWorkflow", [this] { start_run(); },
         QKeySequence(Qt::Key_F5));
-    debug_node_ = action(menu, QStringLiteral("Debug Selected Node…"), "debugSelectedNode", [this] { start_run(true); },
+    run_group_ = action(menu, QStringLiteral("Run Selected Group…"), "runSelectedGroup",
+        [this] { start_run(DebugStatePolicy::Active); });
+    debug_node_ = action(menu, QStringLiteral("Debug Selected Node…"), "debugSelectedNode", [this] { start_run(DebugStatePolicy::Isolated); },
         QKeySequence(Qt::CTRL | Qt::Key_F5));
     cancel_run_ = action(menu, QStringLiteral("Cancel Run"), "cancelRun", [this] { run_controller_->cancel(); },
         QKeySequence(Qt::SHIFT | Qt::Key_F5));
@@ -73,7 +75,7 @@ void EditorWindow::create_run_dock()
     connect(run_panel_, &RunPanel::image_requested, this, &EditorWindow::show_selected_run_image);
 }
 
-void EditorWindow::start_run(bool independent)
+void EditorWindow::start_run(std::optional<DebugStatePolicy> debug)
 {
     if (busy_ || close_confirmed_ || !writable() || !run_controller_->can_start()) { return; }
     const auto id = model_->workflow_id();
@@ -82,26 +84,31 @@ void EditorWindow::start_run(bool independent)
     RunTarget target = WorkflowTarget{flow->id};
     std::span<const InputDescriptor> inputs = flow->interface.inputs;
     std::span<const PixelFormat> formats;
+    const bool independent = debug.has_value();
+    const bool isolated = debug == DebugStatePolicy::Isolated;
+    bool group_target = false;
     if (independent) {
         const auto selected = scene_->selected_nodes();
         const auto* node = selected.size() == 1 ? find_node(*flow, selected.front()) : nullptr;
         if (!node) { return; }
-        const auto* tool = std::get_if<ToolConfiguration>(&node->configuration);
-        if (!tool) {
-            report_error(QStringLiteral("Independent Group execution is currently unsupported."));
-            return;
-        }
-        const auto* descriptor = registry_.find_descriptor(tool->type);
-        if (!descriptor || descriptor->config_version != tool->config_version) {
-            report_error(QStringLiteral("The selected node requires an available tool and its exact configuration version."));
-            return;
+        if (const auto* group = std::get_if<GroupConfiguration>(&node->configuration)) {
+            if (group->loop) { return; }
+            inputs = group->interface.inputs;
+            group_target = true;
+        } else {
+            const auto& tool = std::get<ToolConfiguration>(node->configuration);
+            const auto* descriptor = registry_.find_descriptor(tool.type);
+            if (!descriptor || descriptor->config_version != tool.config_version) {
+                report_error(QStringLiteral("The selected node requires an available tool and its exact configuration version."));
+                return;
+            }
+            inputs = descriptor->inputs;
+            formats = descriptor->image_formats;
         }
         target = NodeTarget{flow->id, node->id};
-        inputs = descriptor->inputs;
-        formats = descriptor->image_formats;
     }
     auto entered = inputs.empty() ? std::optional{EnteredRunInputs{}}
-        : choose_run_inputs(this, draft(), inputs, independent, formats);
+        : choose_run_inputs(this, draft(), inputs, isolated, formats, group_target);
     if (!entered) { return; }
     if (run_error_) {
         run_error_.reset();
@@ -109,10 +116,11 @@ void EditorWindow::start_run(bool independent)
     }
     RunArguments arguments{target, std::move(entered->values),
         {independent ? TriggerKind::Debug : TriggerKind::Manual, trigger_id(independent)},
-        {}, independent ? std::optional{DebugStatePolicy::Isolated} : std::nullopt};
+        {}, debug};
     run_dock_->show();
     run_dock_->raise();
-    show_status(independent ? QStringLiteral("Preparing isolated debug call…") : QStringLiteral("Preparing workflow run…"));
+    show_status(isolated ? QStringLiteral("Preparing isolated debug call…")
+        : group_target ? QStringLiteral("Preparing Group run…") : QStringLiteral("Preparing workflow run…"));
     run_controller_->start(draft(), {source_, directory_, roots_}, std::move(arguments), std::move(entered->images));
 }
 
@@ -131,9 +139,14 @@ void EditorWindow::show_selected_run_image()
         const auto* flow = find_workflow(run->request().snapshot().solution(), run->identity().workflow);
         const auto* node = flow ? find_node(*flow, invocation->node) : nullptr;
         showing_run_image_ = true;
-        images_->set_provenance(QStringLiteral("Run %1  ·  Snapshot %2  ·  %3")
+        auto provenance = QStringLiteral("Run %1  ·  Snapshot %2  ·  %3")
             .arg(run->identity().run.value()).arg(run->identity().snapshot.snapshot.value())
-            .arg(QString::fromStdString(node ? node->name : invocation->node.to_string())));
+            .arg(QString::fromStdString(node ? node->name : invocation->node.to_string()));
+        const auto scope = run_panel_->selected_scope_path();
+        if (!scope.isEmpty()) {
+            provenance += QStringLiteral("  ·  %1  ·  Invocation %2").arg(scope).arg(invocation->invocation.value());
+        }
+        images_->set_provenance(provenance);
         images_dock_->show();
         images_dock_->raise();
     } catch (const std::exception& failure) {

@@ -59,7 +59,12 @@ public:
                 if (const auto* value = std::get_if<ConfigValue>(&source)) { collect(*value); }
             }
         }
-        if (const auto* group = std::get_if<GroupConfiguration>(&node.configuration)) { collect(group->interface); }
+        if (const auto* group = std::get_if<GroupConfiguration>(&node.configuration)) {
+            collect(group->interface);
+            if (group->loop) {
+                for (const auto& item : group->loop->exports) { if (item.initial) { collect(*item.initial); } }
+            }
+        }
     }
     void allocate_regions()
     {
@@ -216,6 +221,15 @@ public:
             for (auto& mapping : group->control_exports) {
                 mapping = control_export(mapping, node_owners.at(original.id));
             }
+            if (group->loop) {
+                for (auto& item : group->loop->exports) { if (item.initial) { item.initial = value(*item.initial); } }
+                if (auto& source = group->loop->break_source; source) {
+                    const auto found = identities.nodes.find(*source);
+                    if (found == identities.nodes.end()) {
+                        failure = error(ErrorCode::InvalidContainment, "A loop break source must be inside its copied subtree.");
+                    } else { source = found->second; }
+                }
+            }
         }
         owner_.reset();
         return result;
@@ -296,9 +310,13 @@ Result<SubgraphCopy> clone_subgraph(const Workflow& workflow, std::span<const No
     return result;
 }
 
-Result<SolutionCopy> clone_solution(const Solution& solution, ExternalReferencePolicy external_policy)
+Result<SolutionCopy> clone_solution(const Solution& solution, ExternalReferencePolicy external_policy,
+    std::optional<WorkflowId> destination_workflow)
 {
     if (!valid(external_policy)) { return error(ErrorCode::InvalidModel, "Copy requires a recognized external-reference policy."); }
+    if (destination_workflow && solution.workflows.size() != 1) {
+        return error(ErrorCode::InvalidModel, "Rebasing a copied scope requires exactly one source workflow.");
+    }
     if (auto checked = validate_model_shape(solution); const auto* invalid = std::get_if<Diagnostic>(&checked)) { return *invalid; }
     Copier copier(external_policy);
     std::set<SolutionId> solution_ids{solution.id};
@@ -334,7 +352,8 @@ Result<SolutionCopy> clone_solution(const Solution& solution, ExternalReferenceP
     for (const auto& queue : solution.queues) { queue_ids.insert(queue.id); }
     copier.assign(solution.id, copier.identities.solutions, solution_ids);
     for (const auto& workflow : solution.workflows) {
-        copier.assign(workflow.id, copier.identities.workflows, workflow_ids);
+        if (destination_workflow) { copier.identities.workflows.emplace(workflow.id, *destination_workflow); }
+        else { copier.assign(workflow.id, copier.identities.workflows, workflow_ids); }
         for (const auto& node : workflow.nodes) { copier.assign(node.id, copier.identities.nodes, node_ids); }
         for (const auto& link : workflow.control_links) { copier.assign(link.id, copier.identities.control_links, link_ids); }
     }

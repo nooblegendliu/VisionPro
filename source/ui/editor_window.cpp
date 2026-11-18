@@ -120,6 +120,13 @@ void EditorWindow::create_actions()
     independent_copy_ = action(file, QStringLiteral("Save &Independent Copy…"), "saveIndependentCopy",
         [this] { choose_transfer(infrastructure::SolutionTransfer::IndependentCopy); });
     file.addSeparator();
+    export_workflow_ = action(file, QStringLiteral("Export Current Workflow…"), "exportWorkflow",
+        [this] { choose_subgraph_export(false); });
+    export_group_ = action(file, QStringLiteral("Export Selected Group…"), "exportGroup",
+        [this] { choose_subgraph_export(true); });
+    import_subgraph_ = action(file, QStringLiteral("Import Subgraph Package…"), "importSubgraph",
+        [this] { choose_subgraph_import(); });
+    file.addSeparator();
     resource_copy_ = action(file, QStringLiteral("Copy Resource Into Solution…"), "copyResource", [this] { choose_resource_copy(); });
     resource_root_ = action(file, QStringLiteral("Set Named Resource Root…"), "setResourceRoot", [this] { choose_resource_root(); });
     file.addSeparator();
@@ -161,6 +168,11 @@ void EditorWindow::create_actions()
             scene_->add_group(*name, view_->mapToScene(view_->viewport()->rect().center()));
         }
     });
+    add_loop_ = action(graph, QStringLiteral("Add Loop…"), "addLoop", [this] {
+        if (const auto name = ask_name(this, QStringLiteral("Add Loop"), QStringLiteral("Loop"))) {
+            scene_->add_group(*name, view_->mapToScene(view_->viewport()->rect().center()), ControlScene::GroupKind::Loop);
+        }
+    });
     remove_nodes_ = action(graph, QStringLiteral("Remove Selected Nodes"), "removeNodes", [this] {
         scene_->remove_selected_nodes();
     }, QKeySequence::Delete);
@@ -188,6 +200,7 @@ void EditorWindow::create_actions()
     toolbar->setMovable(false);
     toolbar->addAction(add_tool_);
     toolbar->addAction(add_group_);
+    toolbar->addAction(add_loop_);
     toolbar->addSeparator();
     toolbar->addAction(up_);
     scope_path_ = new QLabel(toolbar);
@@ -353,6 +366,9 @@ void EditorWindow::refresh_actions()
     const bool active = model_->workflow_id().has_value();
     const auto selected = scene_->selected_nodes();
     const bool has_nodes = !selected.empty();
+    const auto* flow = active ? find_workflow(draft(), *model_->workflow_id()) : nullptr;
+    const auto* selected_node = flow && selected.size() == 1 ? find_node(*flow, selected.front()) : nullptr;
+    const auto* group = selected_node ? std::get_if<GroupConfiguration>(&selected_node->configuration) : nullptr;
     const auto& history = scene_->undoStack();
     const auto selection = diagnostics_->currentItem();
     const int issue = selection ? selection->data(Qt::UserRole).toInt() : -1;
@@ -364,10 +380,15 @@ void EditorWindow::refresh_actions()
     save_->setEnabled(editable && (!directory_ || !history.isClean() || !source_));
     save_as_->setEnabled(editable);
     independent_copy_->setEnabled(editable);
+    export_workflow_->setEnabled(editable && active);
+    export_group_->setEnabled(editable && group && !group->loop);
+    import_subgraph_->setEnabled(editable);
     resource_copy_->setEnabled(editable && source_.has_value() && has_resource);
     resource_root_->setEnabled(available);
     run_workflow_->setEnabled(editable && active && run_controller_->can_start());
-    debug_node_->setEnabled(editable && active && selected.size() == 1 && run_controller_->can_start());
+    run_group_->setEnabled(editable && group && !group->loop && run_controller_->can_start());
+    debug_node_->setEnabled(editable && selected_node && !(group && group->loop) && run_controller_->can_start());
+    debug_node_->setText(group ? QStringLiteral("Debug Selected Group…") : QStringLiteral("Debug Selected Node…"));
     cancel_run_->setEnabled(!close_confirmed_ && run_controller_->can_cancel());
     run_limits_->setEnabled(!close_confirmed_);
 #ifdef VISIONPRO_WITH_OPENCV
@@ -385,6 +406,7 @@ void EditorWindow::refresh_actions()
     remove_workflow_->setEnabled(editable && active);
     add_tool_->setEnabled(editable && active && tools_->currentRow() >= 0);
     add_group_->setEnabled(editable && active);
+    add_loop_->setEnabled(editable && active);
     remove_nodes_->setEnabled(editable && has_nodes && !scene_->selected_control());
     remove_link_->setEnabled(editable && scene_->selected_control().has_value());
     remove_invalid_link_->setEnabled(editable && displayed_validation_revision_ == validation_revision_

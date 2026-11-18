@@ -34,6 +34,11 @@ struct ValidationIndex { std::vector<ScopeDependencies> scopes; };
 [[nodiscard]] core::Result<std::vector<core::Diagnostic>> diagnose_solution(const Solution& solution,
     std::span<const core::ToolDescriptor> tools);
 
+// Checks registered and public port/type definitions without requiring every
+// caller to have wired its inputs. Used when inserting an editable instance.
+[[nodiscard]] core::Result<std::monostate> validate_public_catalog(const Solution& solution,
+    std::span<const core::ToolDescriptor> tools);
+
 // Stable public system-result projection, shared with the resolver.
 // Elapsed is an Int64 count of nanoseconds. Diagnostics is List<Record>.
 [[nodiscard]] core::Result<core::DataType> system_field_type(SystemField field);

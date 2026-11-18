@@ -114,11 +114,15 @@ public:
         std::span<const SchemaSupport> support) : solution_(solution), tools_(tools), support_(support) {}
     Result<ValidationIndex> run();
     Result<std::vector<Diagnostic>> diagnose();
+    Check public_catalog();
     Result<ValidationIndex> selected(const RunRequest& request);
 private:
     Check initialize();
     Check workflow(const Workflow& flow);
     Check selected_workflow(const detail::Parents& ownership);
+    Check selected_bodies(const detail::Parents& ownership, std::size_t first_scope);
+    Check select_scope(Scope owner, const detail::Parents& ownership, const Graph& candidates,
+        std::set<NodeId>& all_selected);
     Check independent_node(const detail::Parents& ownership, const Node& value);
     Check fixed_inputs(std::span<const InputDescriptor> declarations, const Node* target = nullptr);
     void begin_workflow(const Workflow& flow);
@@ -148,7 +152,11 @@ private:
     Scope parent(NodeId node) const;
     ScopeDependencies& scope_index(Scope scope) { return index_.scopes.at(scopes_.at(scope)); }
     const ToolDescriptor* descriptor(const Node& node) const;
-    bool independent() const { return request_ && std::holds_alternative<NodeTarget>(request_->target()); }
+    const NodeTarget* independent_target() const { return request_ ? std::get_if<NodeTarget>(&request_->target()) : nullptr; }
+    bool independent_boundary(Scope scope) const {
+        const auto* target = independent_target();
+        return target && parent(target->node) == scope;
+    }
     std::span<const InputDescriptor> inputs(const Node& node) const;
     std::span<const OutputDescriptor> outputs(const Node& node) const;
     std::span<const ControlOutputDescriptor> outlets(const Node& node) const;
@@ -481,7 +489,7 @@ Result<ValidationIndex> Validator::selected(const RunRequest& request)
     }
     begin_workflow(flow);
     const auto& parents = std::get<detail::Parents>(ownership);
-    auto checked = independent() ? independent_node(parents, *find_node(flow, std::get<NodeTarget>(request.target()).node))
+    auto checked = independent_target() ? independent_node(parents, *find_node(flow, independent_target()->node))
                                  : selected_workflow(parents);
     if (const auto* failure = std::get_if<Diagnostic>(&checked)) { return *failure; }
     return std::move(index_);
@@ -499,11 +507,44 @@ Check Validator::selected_workflow(const detail::Parents& ownership)
     if (auto checked = public_interface(flow.interface, location()); failed(checked)) { return checked; }
     if (auto checked = fixed_inputs(flow.interface.inputs); failed(checked)) { return checked; }
 
+    if (auto checked = selected_bodies(ownership, 0); failed(checked)) { return checked; }
+    return exports(flow.interface, flow.outputs, flow.control_exports, {});
+}
+
+Check Validator::selected_bodies(const detail::Parents& ownership, std::size_t first_scope)
+{
+    const auto& flow = *flow_;
     Graph candidates;
     for (const auto& link : flow.control_links) { candidates[link.source].push_back(link.target); }
-    const auto selected_nodes = reachable(candidates, flow.entries);
-    auto& scope = scope_index({});
-    scope.reachable.assign(selected_nodes.begin(), selected_nodes.end());
+    std::set<NodeId> all_selected;
+    for (std::size_t i = first_scope; i < index_.scopes.size(); ++i) {
+        if (auto checked = select_scope(index_.scopes[i].group, ownership, candidates, all_selected); failed(checked)) {
+            return checked;
+        }
+    }
+    combined_ = control_;
+    for (const auto& value : flow.nodes) {
+        if (!all_selected.contains(value.id)) { continue; }
+        if (auto checked = contextualize(node(value), location(value.id)); failed(checked)) { return checked; }
+    }
+    for (const auto& scope : std::span{index_.scopes}.subspan(first_scope)) {
+        if (!scope.group) { continue; }
+        const auto& group = std::get<GroupConfiguration>(find_node(flow, *scope.group)->configuration);
+        if (auto checked = exports(group.interface, group.outputs, group.control_exports, scope.group); failed(checked)) { return checked; }
+    }
+    return std::monostate{};
+}
+
+Check Validator::select_scope(Scope owner, const detail::Parents& ownership, const Graph& candidates,
+    std::set<NodeId>& all_selected)
+{
+    const auto& flow = *flow_;
+    const auto& entries = owner ? std::get<GroupConfiguration>(find_node(flow, *owner)->configuration).entries : flow.entries;
+    if (entries.empty()) { return error(ErrorCode::IncompleteExecutionScope, "An executable region requires an explicit entry.", location(owner)); }
+    const auto selected_nodes = reachable(candidates, entries);
+    auto& ids = scope_index(owner).reachable;
+    ids.assign(selected_nodes.begin(), selected_nodes.end());
+    all_selected.insert(selected_nodes.begin(), selected_nodes.end());
     std::vector<const ControlLink*> links;
     for (const auto& link : flow.control_links) {
         if (!selected_nodes.contains(link.target)) { continue; }
@@ -517,9 +558,7 @@ Check Validator::selected_workflow(const detail::Parents& ownership)
     for (const auto& value : flow.nodes) {
         if (!selected_nodes.contains(value.id)) { continue; }
         const auto where = location(value.id);
-        if (std::holds_alternative<GroupConfiguration>(value.configuration)) {
-            return error(ErrorCode::MissingCapability, "Execution plans do not yet support Group execution.", where);
-        }
+        if (value.enabled && std::holds_alternative<GroupConfiguration>(value.configuration)) { add_scope(value.id); }
         if (auto checked = contextualize(detail::validate_node_shape(flow, ownership, value), where);
             failed(checked)) { return checked; }
         if (auto checked = node_metadata(value); failed(checked)) { return checked; }
@@ -527,27 +566,24 @@ Check Validator::selected_workflow(const detail::Parents& ownership)
     for (const auto* link : links) {
         if (auto checked = add_control_link(*link); failed(checked)) { return checked; }
     }
-    combined_ = control_;
-    for (const auto& value : flow.nodes) {
-        if (!selected_nodes.contains(value.id)) { continue; }
-        if (auto checked = contextualize(node(value), location(value.id)); failed(checked)) { return checked; }
-    }
-    return exports(flow.interface, flow.outputs, flow.control_exports, {});
+    return std::monostate{};
 }
 
 Check Validator::independent_node(const detail::Parents& ownership, const Node& value)
 {
     const auto where = location(value.id);
-    if (std::holds_alternative<GroupConfiguration>(value.configuration)) {
-        return error(ErrorCode::MissingCapability, "An independent plan currently requires a tool node.", where);
-    }
+    const auto* group = std::get_if<GroupConfiguration>(&value.configuration);
+    if (group && group->loop) { return error(ErrorCode::MissingCapability, "Independent execution requires an ordinary Group or tool.", where); }
     if (auto checked = contextualize(detail::validate_node_shape(*flow_, ownership, value, true), where);
         failed(checked)) { return checked; }
     if (auto checked = node_metadata(value); failed(checked)) { return checked; }
     add_scope(parent(value.id));
     scope_index(parent(value.id)).reachable.push_back(value.id);
     if (auto checked = fixed_inputs(inputs(value), &value); failed(checked)) { return checked; }
-    return contextualize(node(value), where);
+    if (auto checked = contextualize(node(value), where); failed(checked)) { return checked; }
+    if (!group) { return std::monostate{}; }
+    add_scope(value.id);
+    return selected_bodies(ownership, 1);
 }
 
 Check Validator::fixed_inputs(std::span<const InputDescriptor> declarations, const Node* target)
@@ -572,7 +608,7 @@ Check Validator::control_outlet(const Node& source, const std::optional<ControlO
 }
 Result<SourceType> Validator::output(const OutputReference& ref, Scope scope)
 {
-    if (independent()) {
+    if (independent_boundary(scope)) {
         return error(ErrorCode::InputUnavailable, "An independent invocation cannot read an upstream result.");
     }
     if (ref.workflow != flow_->id) { return error(ErrorCode::ScopeViolation, "Ordinary result references cannot cross workflows."); }
@@ -602,7 +638,7 @@ Result<SourceType> Validator::source_type(const BindingSource& source, Scope sco
         if constexpr (std::is_same_v<T, ConfigValue>) { return SourceType{value.type(), detail::config_value_semantics(value)}; }
         else if constexpr (std::is_same_v<T, OutputReference>) { return output(value, scope); }
         else if constexpr (std::is_same_v<T, ScopedInputReference>) {
-            if (independent()) {
+            if (independent_boundary(scope)) {
                 return error(ErrorCode::InputUnavailable, "An independent invocation has no enclosing public input values for subscriptions.");
             }
             if (value.workflow != flow_->id || value.group != scope) {
@@ -620,6 +656,15 @@ Result<SourceType> Validator::source_type(const BindingSource& source, Scope sco
             if (!variable) {
                 auto where = DiagnosticLocation{}; where.variable = value.variable;
                 return error(ErrorCode::UnknownTarget, "Referenced global variable is not declared.", where);
+            }
+            if (const auto* target = independent_target(); target &&
+                std::holds_alternative<GroupConfiguration>(find_node(*flow_, target->node)->configuration)) {
+                const auto current = std::ranges::find(request_->globals(), value.variable, &GlobalVariableEntry::variable);
+                if (current == request_->globals().end() || (value.required_revision && current->revision != *value.required_revision)) {
+                    DiagnosticLocation where; where.variable = value.variable;
+                    return error(current == request_->globals().end() ? ErrorCode::GlobalUnavailable : ErrorCode::GlobalRevisionMismatch,
+                        "The independent Group host must supply the requested global value and revision.", where);
+                }
             }
             return select({variable->type, {}}, value.selector);
         }
@@ -748,8 +793,9 @@ template<class Target> Check Validator::target(const Node& node, const Target& d
 Check Validator::node(const Node& value)
 {
     const auto* tool = descriptor(value);
+    const bool injected = independent_target() && independent_target()->node == value.id;
     for (const auto& binding : value.bindings) {
-        if (independent() && std::holds_alternative<InputId>(binding.target)) { continue; }
+        if (injected && std::holds_alternative<InputId>(binding.target)) { continue; }
         bool known = false;
         auto where = location(value.id);
         if (const auto* id = std::get_if<InputId>(&binding.target)) {
@@ -760,7 +806,7 @@ Check Validator::node(const Node& value)
         }
         if (!known) { return error(ErrorCode::UnknownTarget, "Binding target is not declared by this node.", where); }
     }
-    if (!independent()) {
+    if (!injected) {
         for (const auto& input : inputs(value)) { if (auto checked = target(value, input); failed(checked)) { return checked; } }
     }
     if (tool) {
@@ -796,6 +842,14 @@ Check Validator::node(const Node& value)
 Check Validator::exports(const PublicInterface& interface, const std::vector<OutputMapping>& outputs,
     const std::vector<ControlOutputMapping>& controls, Scope scope)
 {
+    const auto* group = scope ? std::get_if<GroupConfiguration>(&find_node(*flow_, *scope)->configuration) : nullptr;
+    const auto* loop = group && group->loop ? &*group->loop : nullptr;
+    if (loop && group->entries.empty()) {
+        return error(ErrorCode::IncompleteExecutionScope, "A loop body requires an explicit entry.", location(scope));
+    }
+    if (loop && loop->break_source && !contains(scope_index(scope).reachable, *loop->break_source)) {
+        return error(ErrorCode::IncompleteExecutionScope, "Loop break source is outside the body entry range.", location(scope));
+    }
     for (const auto& declared : interface.outputs) {
         auto where = location(scope); where.output = declared.id;
         const auto it = std::ranges::find(outputs, declared.id, &OutputMapping::output);
@@ -803,7 +857,16 @@ Check Validator::exports(const PublicInterface& interface, const std::vector<Out
         auto source = output(it->source, scope);
         if (const auto* failure = std::get_if<Diagnostic>(&source)) { return contextualize(*failure, where); }
         const auto& info = std::get<SourceType>(source);
-        if (info.type != declared.type) { return error(ErrorCode::TypeMismatch, "Public output mapping requires an exact type match.", where); }
+        auto expected = declared.type;
+        if (loop) {
+            const auto item = std::ranges::find(loop->exports, declared.id, &LoopExport::output);
+            if (item == loop->exports.end()) { return error(ErrorCode::MissingRequiredValue, "A loop output requires an export mode.", where); }
+            if (item->mode == LoopExportMode::Collect || ((item->mode == LoopExportMode::First || item->mode == LoopExportMode::Last)
+                    && expected.kind() == TypeKind::Optional && info.type != expected)) {
+                expected = *declared.type.element_type();
+            }
+        }
+        if (info.type != expected) { return error(ErrorCode::TypeMismatch, "The exported value does not match the public output type.", where); }
         if (auto checked = contextualize(compatible_semantics(info.semantics, declared.semantics), where); failed(checked)) { return checked; }
         if (!contains(scope_index(scope).reachable, it->source.node)) {
             return error(ErrorCode::IncompleteExecutionScope, "Public output producer is outside the explicit entry range.", where);
@@ -859,6 +922,24 @@ core::Result<ValidationIndex> validate_solution(const Solution& solution,
 core::Result<std::vector<core::Diagnostic>> diagnose_solution(const Solution& solution,
     std::span<const core::ToolDescriptor> tools)
 { return Validator(solution, tools, {}).diagnose(); }
+
+Check Validator::public_catalog()
+{
+    if (auto setup = initialize(); failed(setup)) { return setup; }
+    for (const auto& flow : solution_.workflows) {
+        flow_ = &flow;
+        if (auto result = public_interface(flow.interface, location()); failed(result)) { return result; }
+        for (const auto& node : flow.nodes) {
+            if (const auto* group = std::get_if<GroupConfiguration>(&node.configuration)) {
+                if (auto result = public_interface(group->interface, location(node.id)); failed(result)) { return result; }
+            }
+        }
+    }
+    return std::monostate{};
+}
+
+core::Result<std::monostate> validate_public_catalog(const Solution& solution, std::span<const core::ToolDescriptor> tools)
+{ return Validator(solution, tools, {}).public_catalog(); }
 
 core::Result<ValidationIndex> detail::validate_execution_scope(const RunRequest& request)
 { return Validator(request.snapshot().solution(), request.snapshot().tools(), {}).selected(request); }

@@ -12,6 +12,9 @@ struct ExecutionCapabilities {
     bool control_graph{false};
     bool node_state{false};
     std::vector<core::ResourceKind> resource_leases;
+    // Separate opt-in: an ordinary DAG consumer expects each reachable node to be a prepared tool.
+    bool structured_loops{false};
+    bool composite_groups{false};
 };
 
 // A preflight product holding the request, its exact validation index and the
@@ -24,6 +27,7 @@ public:
         const core::ToolRegistry& registry, const ExecutionCapabilities& capabilities = {});
     [[nodiscard]] const RunRequest& request() const noexcept;
     [[nodiscard]] const ExecutionCapabilities& capabilities() const noexcept;
+    [[nodiscard]] const BindingResolver& resolver() const noexcept;
     [[nodiscard]] std::span<const core::NodeId> entries() const noexcept;
     [[nodiscard]] const ValidationIndex& dependencies() const noexcept;
     [[nodiscard]] const PreparedTool* tool(const core::NodeId& node) const noexcept;

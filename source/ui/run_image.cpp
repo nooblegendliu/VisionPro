@@ -53,7 +53,7 @@ Result<ImageHandle> selected_image(const DataValue& input, const Selector& selec
     return frame->image;
 }
 
-Result<ImageHandle> produced_image(const RunHandle& run, const ResultTrace& trace)
+Result<ImageHandle> produced_image(const RunHandle& run, const ResultTrace& trace, Selector path)
 {
     if (trace.run != run.identity() || trace.reference.workflow != run.identity().workflow) {
         return issue(ErrorCode::ResultIdentityMismatch, "The recorded image comes from another run.");
@@ -73,7 +73,8 @@ Result<ImageHandle> produced_image(const RunHandle& run, const ResultTrace& trac
     }
     const auto value = available_output(source->output(*output));
     if (const auto* failure = std::get_if<Diagnostic>(&value)) { return *failure; }
-    return selected_image(std::get<DataValue>(value), trace.reference.selector);
+    path.insert(path.begin(), trace.reference.selector.begin(), trace.reference.selector.end());
+    return selected_image(std::get<DataValue>(value), path);
 }
 
 Result<ImageHandle> fixed_image(const RunHandle& run, const InputId& input, InputOrigin origin, const Selector& selector)
@@ -85,40 +86,72 @@ Result<ImageHandle> fixed_image(const RunHandle& run, const InputId& input, Inpu
     return selected_image(fixed->value, selector);
 }
 
-Result<ImageHandle> blob_image(const RunHandle& run, const InvocationKey& invocation)
+Result<const SourceTrace*> input_source(const RunNodeProgress& node, const Workflow& flow, const InputId& input, Selector& path)
 {
-    const auto progress = run.inspect();
-    if (const auto* failure = std::get_if<Diagnostic>(&progress)) { return *failure; }
-    const auto& nodes = std::get<RunProgress>(progress).nodes;
-    const auto node = std::ranges::find_if(nodes, [&](const RunNodeProgress& call) {
-        return call.node == invocation.node && call.invocation == invocation;
-    });
-    if (node == nodes.end()) { return issue(ErrorCode::InputUnavailable, "The selected Blob invocation has no recorded inputs."); }
-    const auto binary = std::get<InputId>(SchemaIdFactory::parse<InputId>("binary"));
-    const auto binding = std::ranges::find(node->bindings, BindingTarget{binary}, &RunBindingTrace::target);
-    if (binding == node->bindings.end() || binding->sources.size() != 1 || binding->sources.front().accepted_absence) {
-        return issue(ErrorCode::InputUnavailable, "The selected Blob invocation has no single available binary source.");
+    const auto binding = std::ranges::find(node.bindings, BindingTarget{input}, &RunBindingTrace::target);
+    if (binding == node.bindings.end() || binding->sources.empty()) {
+        return issue(ErrorCode::InputUnavailable, "The selected input has no recorded source.");
     }
-    const auto& origin = binding->sources.front().origin;
-    if (const auto* result = std::get_if<ResultTrace>(&origin)) { return produced_image(run, *result); }
-    if (const auto* independent = std::get_if<IndependentInputTrace>(&origin)) {
-        const auto* target = std::get_if<NodeTarget>(&run.request().target());
-        if (!target || target->node != invocation.node || independent->run != run.identity() || independent->input != binary) {
-            return issue(ErrorCode::ResultIdentityMismatch, "The recorded debug image is outside this node invocation.");
+    const auto* configured = find_node(flow, node.node);
+    if (!configured) { return issue(ErrorCode::UnknownTarget, "The image consumer is absent from the snapshot."); }
+    const auto policy = std::ranges::find(configured->bindings, BindingTarget{input}, &Binding::target);
+    std::size_t position = 0;
+    if (!std::holds_alternative<IndependentInputTrace>(binding->sources.front().origin) && policy != configured->bindings.end()
+        && policy->cardinality == BindingCardinality::MultipleSources) {
+        const auto* index = path.empty() ? nullptr : std::get_if<ElementSelection>(&path.front());
+        if (!index) { return issue(ErrorCode::InvalidSelector, "The image path requires a list index."); }
+        position = index->index;
+        path.erase(path.begin());
+    }
+    for (const auto& source : binding->sources) {
+        if (!source.accepted_absence) {
+            if (position == 0) { return &source; }
+            --position;
         }
-        return fixed_image(run, independent->input, independent->origin, {});
     }
-    if (const auto* public_input = std::get_if<PublicInputTrace>(&origin)) {
-        if (public_input->run != run.identity() || public_input->reference.workflow != run.identity().workflow
-            || public_input->scope != invocation.scope) {
+    return issue(ErrorCode::InputUnavailable, "The selected image has no available source.");
+}
+
+Result<ImageHandle> blob_image(const RunHandle& run, InvocationKey call)
+{
+    const auto inspected = run.inspect();
+    if (const auto* failure = std::get_if<Diagnostic>(&inspected)) { return *failure; }
+    const auto& progress = std::get<RunProgress>(inspected);
+    const auto* flow = find_workflow(run.request().snapshot().solution(), run.identity().workflow);
+    if (!flow) { return issue(ErrorCode::UnknownTarget, "The image workflow is absent from the snapshot."); }
+    auto input = std::get<InputId>(SchemaIdFactory::parse<InputId>("binary"));
+    Selector path;
+    for (std::size_t depth = 0; depth <= progress.groups.size() + progress.iterations.size(); ++depth) {
+        const auto node = std::ranges::find(progress.nodes, std::optional{call}, &RunNodeProgress::invocation);
+        if (node == progress.nodes.end()) { return issue(ErrorCode::InputUnavailable, "The image invocation has no recorded inputs."); }
+        const auto source = input_source(*node, *flow, input, path);
+        if (const auto* failure = std::get_if<Diagnostic>(&source)) { return *failure; }
+        const auto& origin = std::get<const SourceTrace*>(source)->origin;
+        if (const auto* result = std::get_if<ResultTrace>(&origin)) { return produced_image(run, *result, std::move(path)); }
+        if (const auto* fixed = std::get_if<IndependentInputTrace>(&origin)) {
+            const auto* target = std::get_if<NodeTarget>(&run.request().target());
+            if (!target || target->node != call.node || fixed->run != run.identity() || fixed->input != input) {
+                return issue(ErrorCode::ResultIdentityMismatch, "The recorded debug image does not match the selected target.");
+            }
+            return fixed_image(run, input, fixed->origin, path);
+        }
+        const auto* capture = std::get_if<PublicInputTrace>(&origin);
+        if (!capture) { return issue(ErrorCode::InputUnavailable, "The recorded Blob source cannot provide a display image."); }
+        if (capture->run != run.identity() || capture->reference.workflow != flow->id || capture->scope != call.scope) {
             return issue(ErrorCode::ResultIdentityMismatch, "The recorded public image is outside this invocation's scope.");
         }
-        if (public_input->reference.group || !std::holds_alternative<WorkflowTarget>(run.request().target())) {
-            return issue(ErrorCode::InputUnavailable, "The recorded public image is outside the fixed workflow inputs.");
+        input = capture->reference.input;
+        path.insert(path.begin(), capture->reference.selector.begin(), capture->reference.selector.end());
+        if (!capture->reference.group && std::holds_alternative<WorkflowTarget>(run.request().target())) {
+            return fixed_image(run, input, capture->origin, path);
         }
-        return fixed_image(run, public_input->reference.input, public_input->origin, public_input->reference.selector);
+        const auto group = std::ranges::find(progress.groups, call.scope, &RunGroupCall::scope);
+        const auto loop = std::ranges::find(progress.iterations, call.scope, &RunLoopIteration::scope);
+        if (group != progress.groups.end() && group->group.node == capture->reference.group) { call = group->group; }
+        else if (loop != progress.iterations.end() && loop->loop.node == capture->reference.group) { call = loop->loop; }
+        else { return issue(ErrorCode::ResultIdentityMismatch, "The public input has no matching enclosing invocation."); }
     }
-    return issue(ErrorCode::InputUnavailable, "The recorded Blob source cannot provide a display image.");
+    return issue(ErrorCode::InvalidContainment, "The recorded image scope path contains a cycle.");
 }
 
 const OutputSlot* display_output(const NodeResult& result)

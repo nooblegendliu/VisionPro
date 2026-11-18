@@ -23,7 +23,8 @@ public:
     bool add_workflow(std::string name);
     bool remove_workflow(core::WorkflowId workflow);
     bool add_tool(core::ToolTypeId type, QPointF position);
-    bool add_group(std::string name, QPointF position);
+    enum class GroupKind { Group, Loop };
+    bool add_group(std::string name, QPointF position, GroupKind kind = GroupKind::Group);
     bool remove_selected_nodes();
     bool copy_selected_nodes();
     bool paste_nodes();

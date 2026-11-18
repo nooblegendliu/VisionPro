@@ -45,8 +45,8 @@ public:
     [[nodiscard]] const core::ToolExecutionConfiguration& configuration() const noexcept { return configuration_; }
     // Resolve data first. Leases are required/checked only when all targets are
     // ready, so waiting for producers never requires acquiring device access.
-    // For a plan-backed tool, use a single empty root ResolutionScope. Public
-    // workflow inputs and independent node inputs come from its fixed request.
+    // The empty root takes public inputs from the fixed request. A loop-body
+    // tool receives its current iteration inputs and ancestor scope chain.
     [[nodiscard]] InvocationPreparation prepare(const ResolutionContext& context, core::AttemptId attempt,
         const ResultStore& results, std::span<const core::InvocationResourceLease> leases = {}) const;
     [[nodiscard]] InvocationPreparation prepare(const ResolutionContext& context, core::AttemptId attempt,

@@ -157,6 +157,7 @@ struct Boundary {
     PublicInterface& interface;
     std::vector<OutputMapping>& outputs;
     std::vector<ControlOutputMapping>& controls;
+    LoopConfiguration* loop{};
 };
 
 std::optional<Boundary> boundary_at(Workflow& flow, const std::optional<NodeId>& group)
@@ -165,7 +166,7 @@ std::optional<Boundary> boundary_at(Workflow& flow, const std::optional<NodeId>&
     auto* node = mutable_node(flow, *group);
     auto* value = node ? std::get_if<GroupConfiguration>(&node->configuration) : nullptr;
     if (!value) { return std::nullopt; }
-    return Boundary{value->interface, value->outputs, value->control_exports};
+    return Boundary{value->interface, value->outputs, value->control_exports, value->loop ? &*value->loop : nullptr};
 }
 
 std::vector<NodeId>* entries_at(Workflow& flow, const std::optional<NodeId>& group)
@@ -525,7 +526,7 @@ std::optional<ConfigValue> region_constant(QWidget* owner, const RoiEditContext&
 }
 
 std::optional<ConfigValue> edit_constant(QWidget* owner, const RoiEditContext& context, const DataType& type,
-    const ConfigValue* prior)
+    const ConfigValue* prior, const QString& title = QStringLiteral("Constant"))
 {
     if (prior && prior->type() != type) { prior = nullptr; }
     const auto initial = prior ? constant_text(*prior) : QString{};
@@ -550,7 +551,7 @@ std::optional<ConfigValue> edit_constant(QWidget* owner, const RoiEditContext& c
     case TypeKind::Float64:
     case TypeKind::String: {
         bool accepted = false;
-        const auto value = QInputDialog::getText(owner, QStringLiteral("Constant"), type_text(type),
+        const auto value = QInputDialog::getText(owner, title, type_text(type),
             QLineEdit::Normal, initial, &accepted);
         if (!accepted) { return std::nullopt; }
         if (type.kind() == TypeKind::String) { return constant_result(owner, ConfigValue::string(utf8(value))); }
@@ -1403,31 +1404,76 @@ void public_output(const InspectorContext& context, const Workflow& flow, const 
     if (!name) { return; }
     const auto id = std::get<OutputId>(SchemaIdFactory::parse<OutputId>(name->id));
     const auto* group = group_at(flow, scope);
+    const auto* loop = group && group->loop ? &*group->loop : nullptr;
     const auto& outputs = group ? group->outputs : flow.outputs;
     const auto mapped = std::ranges::find(outputs, id, &OutputMapping::output);
     const auto prior = mapped == outputs.end() ? std::nullopt : std::optional<BindingSource>{mapped->source};
     auto selected = choose_reference(context.owner, outputs_in(flow, context.registry, scope), prior ? &*prior : nullptr,
         [&](BindingSourceKind, const DataType& type, const ValueSemantics& semantics) -> Check {
-            if (!existing) { return std::monostate{}; }
+            if (loop || !existing) { return std::monostate{}; }
             if (type != existing->type) { return error(ErrorCode::TypeMismatch, "The public output requires an exact type match."); }
             return check_semantics(semantics, existing->semantics);
         });
     if (!selected) { return; }
+    auto output_type = selected->type;
+    std::optional<LoopExport> reduction;
+    if (loop) {
+        const auto previous = std::ranges::find(loop->exports, id, &LoopExport::output);
+        const bool numeric = output_type.kind() == TypeKind::Int64 || output_type.kind() == TypeKind::Float64;
+        Choices<LoopExportMode> modes{{QStringLiteral("First"), LoopExportMode::First},
+            {QStringLiteral("Last"), LoopExportMode::Last}, {QStringLiteral("Collect"), LoopExportMode::Collect}};
+        if (numeric) { modes.emplace_back(QStringLiteral("Sum"), LoopExportMode::Sum); }
+        const auto current = previous == loop->exports.end() ? modes.end()
+            : std::ranges::find_if(modes, [&](const auto& item) { return item.second == previous->mode; });
+        const auto mode = choose(context.owner, QStringLiteral("Loop output"), QStringLiteral("Export mode"),
+            modes, current == modes.end() ? 0 : static_cast<std::size_t>(current - modes.begin()));
+        if (!mode) { return; }
+        reduction.emplace(LoopExport{id, *mode, {}});
+        if (*mode == LoopExportMode::Collect) { output_type = DataType::list(output_type); }
+        else if (*mode == LoopExportMode::Sum) {
+            const auto zero = output_type.kind() == TypeKind::Int64 ? ConfigValue::integer(0)
+                : std::get<ConfigValue>(ConfigValue::real(0.0));
+            const auto* initial = previous != loop->exports.end() && previous->initial && previous->initial->type() == output_type
+                ? &*previous->initial : &zero;
+            reduction->initial = edit_constant(context.owner, {context.model.draft(), context.registry}, output_type,
+                initial, QStringLiteral("Sum initial value"));
+            if (!reduction->initial) { return; }
+        } else {
+            const Choices<bool> empty{{QStringLiteral("Require an item"), false}, {QStringLiteral("Return None"), true}};
+            const auto allow = choose(context.owner, QStringLiteral("Loop output"), QStringLiteral("Empty loop"), empty,
+                existing && existing->type == DataType::optional(output_type) ? 1 : 0);
+            if (!allow) { return; }
+            if (*allow) { output_type = DataType::optional(output_type); }
+        }
+    }
     auto source = std::get<OutputReference>(std::move(selected->source));
     edit_boundary(context, flow.id, scope, QStringLiteral("Change public output"), [&](Solution& solution, Workflow&, Boundary boundary) -> Check {
         auto& ports = boundary.interface.outputs;
         const auto declaration = std::ranges::find(ports, id, &OutputDescriptor::id);
+        if (declaration == ports.end() || declaration->type != output_type
+            || (loop && declaration->semantics != selected->semantics)) {
+            if (const auto version = next_interface_version(solution, context.registry, boundary.interface);
+                std::holds_alternative<Diagnostic>(version)) { return version; }
+        }
         if (declaration != ports.end()) {
             if (!existing) { return error(ErrorCode::DuplicateSchemaMember, "That public output ID already exists."); }
             declaration->display_name = name->display;
+            if (loop) {
+                declaration->type = output_type;
+                declaration->semantics = selected->semantics;
+            }
         } else {
-            if (const auto version = next_interface_version(solution, context.registry, boundary.interface);
-                std::holds_alternative<Diagnostic>(version)) { return version; }
-            ports.push_back({id, name->display, selected->type, selected->semantics});
+            ports.push_back({id, name->display, output_type, selected->semantics});
         }
         const auto export_at = std::ranges::find(boundary.outputs, id, &OutputMapping::output);
         if (export_at == boundary.outputs.end()) { boundary.outputs.push_back({id, std::move(source)}); }
         else { export_at->source = std::move(source); }
+        if (boundary.loop && reduction) {
+            auto& exports = boundary.loop->exports;
+            const auto entry = std::ranges::find(exports, id, &LoopExport::output);
+            if (entry == exports.end()) { exports.push_back(std::move(*reduction)); }
+            else { *entry = std::move(*reduction); }
+        }
         return std::monostate{};
     });
 }
@@ -1542,6 +1588,7 @@ void remove_public_port(const InspectorContext& context, const WorkflowId& flow,
             } else if constexpr (std::is_same_v<Id, OutputId>) {
                 std::erase_if(boundary.interface.outputs, [&](const auto& output) { return output.id == id; });
                 std::erase_if(boundary.outputs, [&](const auto& entry) { return entry.output == id; });
+                if (boundary.loop) { std::erase_if(boundary.loop->exports, [&](const LoopExport& item) { return item.output == id; }); }
             } else {
                 std::erase_if(boundary.interface.control_outputs, [&](const auto& control) { return control.id == id; });
                 std::erase_if(boundary.controls, [&](const auto& entry) { return entry.output == id; });
@@ -1556,16 +1603,85 @@ void remove_public_port(const InspectorContext& context, const WorkflowId& flow,
     });
 }
 
+void edit_loop(const InspectorContext& context, const WorkflowId& workflow, const NodeId& scope)
+{
+    const auto* flow = find_workflow(context.model.draft(), workflow);
+    const auto* group = flow ? group_at(*flow, scope) : nullptr;
+    if (!group || !group->loop) { return; }
+    const auto& loop = *group->loop;
+    QDialog dialog(context.owner);
+    dialog.setWindowTitle(QStringLiteral("Loop settings"));
+    auto* layout = new QVBoxLayout(&dialog);
+    auto* form = new QFormLayout;
+    auto* step = new QLineEdit(QString::number(loop.step), &dialog);
+    step->setObjectName(QStringLiteral("loopStep"));
+    auto* inclusive = new QCheckBox(QStringLiteral("Include end value"), &dialog);
+    inclusive->setObjectName(QStringLiteral("loopInclusiveEnd"));
+    inclusive->setChecked(loop.inclusive_end);
+    auto* interval = new QLineEdit(QString::number(loop.interval_ms), &dialog);
+    interval->setObjectName(QStringLiteral("loopInterval"));
+    auto* stop = new QComboBox(&dialog);
+    stop->setObjectName(QStringLiteral("loopBreakSource"));
+    std::vector<std::optional<NodeId>> stops{std::nullopt};
+    stop->addItem(QStringLiteral("None"));
+    for (const auto& node : flow->nodes) {
+        if (parent_of(*flow, node.id) != scope) { continue; }
+        stops.push_back(node.id);
+        stop->addItem(QStringLiteral("%1 [%2]").arg(qtext(node.name), short_id(node.id)));
+        if (loop.break_source == node.id) { stop->setCurrentIndex(stop->count() - 1); }
+    }
+    form->addRow(QStringLiteral("Step"), step);
+    form->addRow(inclusive);
+    form->addRow(QStringLiteral("Interval (ms)"), interval);
+    form->addRow(QStringLiteral("Exit after node succeeds"), stop);
+    layout->addLayout(form);
+    close_buttons(dialog, *layout);
+    while (dialog.exec() == QDialog::Accepted) {
+        bool step_ok{}, interval_ok{};
+        const auto step_value = step->text().toLongLong(&step_ok);
+        const auto interval_value = interval->text().toLongLong(&interval_ok);
+        if (!step_ok || step_value == 0 || !interval_ok || interval_value < 0) {
+            warn(&dialog, QStringLiteral("Enter a nonzero integer step and a nonnegative interval in milliseconds."));
+            continue;
+        }
+        const auto break_source = stops.at(static_cast<std::size_t>(stop->currentIndex()));
+        if (loop.step == step_value && loop.interval_ms == interval_value && loop.inclusive_end == inclusive->isChecked()
+            && loop.break_source == break_source) { return; }
+        context.edit_node(workflow, scope, QStringLiteral("Change loop settings"), [&](Solution&, Workflow&, Node& node) -> Check {
+            auto& setting = *std::get<GroupConfiguration>(node.configuration).loop;
+            setting.step = step_value;
+            setting.interval_ms = interval_value;
+            setting.inclusive_end = inclusive->isChecked();
+            setting.break_source = break_source;
+            return std::monostate{};
+        });
+        break;
+    }
+}
+
+bool reserved_loop_input(const PortId& port)
+{
+    const auto* input = std::get_if<InputId>(&port);
+    return input && (input->text() == "start" || input->text() == "end" || input->text() == "index");
+}
+
 void boundary_controls(QVBoxLayout& panel, const InspectorContext& context, const Workflow& flow,
     const std::optional<NodeId>& scope)
 {
-    auto* group = section(panel, scope ? QStringLiteral("Group public interface") : QStringLiteral("Workflow public interface"));
+    const auto* config = group_at(flow, scope);
+    const bool loop = config && config->loop;
+    auto* group = section(panel, loop ? QStringLiteral("Loop interface")
+        : scope ? QStringLiteral("Group public interface") : QStringLiteral("Workflow public interface"));
     auto* layout = new QVBoxLayout(group);
+    if (loop) {
+        auto* settings = action(group, QStringLiteral("Loop settings…"), "editLoopSettings",
+            [context, id = flow.id, scope] { edit_loop(context, id, *scope); });
+        layout->addWidget(settings);
+    }
     auto* ports = new QListWidget(group);
     ports->setObjectName(QStringLiteral("publicPorts"));
     ports->setMaximumHeight(150);
     layout->addWidget(ports);
-    const auto* config = group_at(flow, scope);
     const auto& interface = config ? config->interface : flow.interface;
     const auto& outputs = config ? config->outputs : flow.outputs;
     const auto& controls = config ? config->control_exports : flow.control_exports;
@@ -1576,7 +1692,20 @@ void boundary_controls(QVBoxLayout& panel, const InspectorContext& context, cons
         ids.emplace_back(BoundaryKind::Input, input.id);
     }
     for (const auto& output : interface.outputs) {
-        ports->addItem(QStringLiteral("Output • %1 [%2]").arg(qtext(output.display_name), id_text(output.id)));
+        auto label = QStringLiteral("Output • %1 [%2]").arg(qtext(output.display_name), id_text(output.id));
+        if (loop) {
+            const auto& exports = config->loop->exports;
+            const auto item = std::ranges::find(exports, output.id, &LoopExport::output);
+            if (item != exports.end()) {
+                switch (item->mode) {
+                case LoopExportMode::First: label += QStringLiteral(" · First"); break;
+                case LoopExportMode::Last: label += QStringLiteral(" · Last"); break;
+                case LoopExportMode::Collect: label += QStringLiteral(" · Collect"); break;
+                case LoopExportMode::Sum: label += QStringLiteral(" · Sum"); break;
+                }
+            }
+        }
+        ports->addItem(label);
         const auto mapping = std::ranges::find(outputs, output.id, &OutputMapping::output);
         const auto target = mapping == outputs.end() ? QStringLiteral("Unmapped") : source_text(context.model.draft(), mapping->source);
         ports->item(ports->count() - 1)->setToolTip(QStringLiteral("%1\n%2").arg(type_text(output.type), target));
@@ -1598,7 +1727,8 @@ void boundary_controls(QVBoxLayout& panel, const InspectorContext& context, cons
     auto* add = new QHBoxLayout;
     auto* kind = new QComboBox(group);
     kind->setObjectName(QStringLiteral("publicPortKind"));
-    kind->addItems({QStringLiteral("Input"), QStringLiteral("Output"), QStringLiteral("Control outlet")});
+    kind->addItems({QStringLiteral("Input"), QStringLiteral("Output")});
+    if (!loop) { kind->addItem(QStringLiteral("Control outlet")); }
     add->addWidget(kind, 1);
     add->addWidget(action(group, QStringLiteral("Add"), "addPublicPort", [context, flow_id = flow.id, scope, kind] {
         edit_public_port(context, flow_id, scope, static_cast<BoundaryKind>(kind->currentIndex()), std::nullopt);
@@ -1614,8 +1744,14 @@ void boundary_controls(QVBoxLayout& panel, const InspectorContext& context, cons
         if (ports->currentRow() < 0) { return; }
         remove_public_port(context, flow_id, scope, ids[static_cast<std::size_t>(ports->currentRow())].second);
     });
-    change->setEnabled(!ids.empty());
-    remove->setEnabled(!ids.empty());
+    const auto update_controls = [ids, loop, change, remove](int index) {
+        const bool editable = index >= 0 && static_cast<std::size_t>(index) < ids.size()
+            && !(loop && reserved_loop_input(ids[static_cast<std::size_t>(index)].second));
+        change->setEnabled(editable);
+        remove->setEnabled(editable);
+    };
+    QObject::connect(ports, &QListWidget::currentRowChanged, group, update_controls);
+    update_controls(ports->currentRow());
     edit->addWidget(change);
     edit->addWidget(remove);
     layout->addLayout(edit);
@@ -1668,6 +1804,7 @@ void EditorInspector::refresh()
                     auto* group = section(*layout, QStringLiteral("Inputs"));
                     auto* form = new QFormLayout(group);
                     for (const auto& target : configuration->interface.inputs) {
+                        if (configuration->loop && target.id.text() == "index") { continue; }
                         binding_row(*form, group, context, *flow, *node, target);
                     }
                 }

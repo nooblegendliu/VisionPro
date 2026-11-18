@@ -113,6 +113,66 @@ Check control_mappings(const PublicInterface& interface, const std::vector<Contr
     return std::monostate{};
 }
 
+Check validate_loop(const GroupConfiguration& group, const Node& node, const Parents& parents)
+{
+    const auto& loop = *group.loop;
+    if (loop.step == 0 || loop.interval_ms < 0) {
+        return error(core::ErrorCode::ConstraintViolation, "Loop step must be nonzero and interval_ms must be nonnegative.");
+    }
+    if (!group.interface.control_outputs.empty()) {
+        return error(core::ErrorCode::MissingCapability, "Loop regions support only unconditional completion.");
+    }
+    for (const std::string_view name : {"start", "end", "index"}) {
+        const auto input = std::ranges::find_if(group.interface.inputs,
+            [&](const auto& descriptor) { return descriptor.id.text() == name; });
+        if (input == group.interface.inputs.end() || input->type != core::DataType::integer()) {
+            return error(core::ErrorCode::InvalidSchema, "A loop requires Int64 inputs named start, end and index.");
+        }
+        if (name == "index" && (input->required || std::ranges::find(node.bindings,
+                BindingTarget{input->id}, &Binding::target) != node.bindings.end())) {
+            auto diagnostic = error(core::ErrorCode::InvalidBinding, "The loop index is assigned internally and cannot have an external binding.");
+            diagnostic.location.input = input->id;
+            return diagnostic;
+        }
+    }
+    if (loop.break_source) {
+        const auto found = parents.find(*loop.break_source);
+        if (found == parents.end() || found->second != node.id) {
+            return error(core::ErrorCode::ScopeViolation, "The loop break source must be a direct child of the loop.");
+        }
+    }
+    std::set<core::OutputId> exported;
+    for (const auto& item : loop.exports) {
+        const auto port = std::ranges::find(group.interface.outputs, item.output, &core::OutputDescriptor::id);
+        if (port == group.interface.outputs.end() || !exported.insert(item.output).second) {
+            return error(core::ErrorCode::InvalidModel, "Each loop export must name a distinct public output.");
+        }
+        const auto fail_export = [&](std::string message) {
+            auto diagnostic = error(core::ErrorCode::TypeMismatch, std::move(message));
+            diagnostic.location.output = item.output;
+            return diagnostic;
+        };
+        if (item.mode == LoopExportMode::Sum) {
+            if ((port->type.kind() != core::TypeKind::Int64 && port->type.kind() != core::TypeKind::Float64)
+                || !item.initial || item.initial->type() != port->type) {
+                return fail_export("Sum requires an Int64 or Float64 output and an initial value of the same type.");
+            }
+        } else {
+            if (item.initial) { return fail_export("Only Sum accepts an initial value."); }
+            if (item.mode == LoopExportMode::Collect && port->type.kind() != core::TypeKind::List) {
+                return fail_export("Collect requires a List output.");
+            }
+            if (item.mode != LoopExportMode::Collect && item.mode != LoopExportMode::First && item.mode != LoopExportMode::Last) {
+                return fail_export("Unknown loop export mode.");
+            }
+        }
+    }
+    if (exported.size() != group.interface.outputs.size()) {
+        return error(core::ErrorCode::MissingRequiredValue, "Every loop output requires an explicit export mode.");
+    }
+    return std::monostate{};
+}
+
 } // namespace
 
 namespace detail {
@@ -146,6 +206,9 @@ Check validate_node_shape(const Workflow& workflow, const Parents& parents, cons
         for (auto checked : {validate_public_interface(group.interface), mappings(group.interface, group.outputs),
             entry_check(workflow, parents, node.id, group.entries), control_mappings(group.interface, group.control_exports)}) {
             if (failed(checked)) { return with_node(std::move(checked)); }
+        }
+        if (group.loop) {
+            if (auto checked = validate_loop(group, node, parents); failed(checked)) { return with_node(std::move(checked)); }
         }
     }
     std::set<BindingTarget> targets;

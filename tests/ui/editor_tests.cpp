@@ -74,8 +74,69 @@ private Q_SLOTS:
     void workflow_and_clipboard_share_history();
     void locates_cross_scope_link();
     void file_operations_use_the_editor_draft();
+    void imports_reusable_subgraphs_as_undoable_edits();
     void saved_canvas_runs_in_cli_process();
 };
+
+void EditorTests::imports_reusable_subgraphs_as_undoable_edits()
+{
+    QTemporaryDir scratch;
+    QVERIFY(scratch.isValid());
+    const fs::path root(scratch.path().toStdWString());
+    const auto initial = canvas_example();
+    const auto& flow = initial.workflows.front();
+    const auto original_group = flow.containment.front().parent;
+    const auto catalog = registry();
+    EditorWindow window(initial, catalog);
+    window.show();
+    const auto host = root / "host";
+    window.transfer_document(host, SolutionTransfer::SaveAs);
+    QTRY_VERIFY(!window.file_busy());
+    const auto original = read_manifest(host);
+    auto& history = scene(window).undoStack();
+    QVERIFY(scene(window).reveal_node(original_group));
+    QVERIFY(action(window, "exportGroup").isEnabled() && action(window, "exportWorkflow").isEnabled());
+    const auto group_package = root / L"组包";
+    window.export_subgraph(group_package, original_group);
+    QTRY_VERIFY(!window.file_busy());
+    const auto workflow_package = root / L"流程包";
+    window.export_subgraph(workflow_package);
+    QTRY_VERIFY(!window.file_busy());
+    QCOMPARE(history.count(), 0);
+
+    window.import_subgraph(group_package);
+    QTRY_VERIFY(!window.file_busy());
+    QCOMPARE(history.count(), 1);
+    const auto first = scene(window).selected_nodes().at(0);
+    QVERIFY(first != original_group);
+    window.import_subgraph(group_package);
+    QTRY_VERIFY(!window.file_busy());
+    QCOMPARE(history.count(), 2);
+    const auto second = scene(window).selected_nodes().at(0);
+    QVERIFY(second != first && second != original_group);
+    QVERIFY(std::get<GroupConfiguration>(find_node(window.draft().workflows.front(), first)->configuration).entries
+        != std::get<GroupConfiguration>(find_node(window.draft().workflows.front(), second)->configuration).entries);
+
+    window.import_subgraph(root / "missing");
+    QTRY_VERIFY(!window.file_busy());
+    QCOMPARE(history.index(), 2);
+    QVERIFY(scene(window).selected_nodes() == std::vector{second});
+    QCOMPARE(read_manifest(host), original);
+    history.undo();
+    QVERIFY(!find_node(window.draft().workflows.front(), second));
+    history.redo();
+    QVERIFY(find_node(window.draft().workflows.front(), second));
+    window.import_subgraph(workflow_package);
+    QTRY_VERIFY(!window.file_busy());
+    QCOMPARE(window.draft().workflows.size(), 2u);
+    QVERIFY(model(window).workflow_id() == window.draft().workflows.back().id && model(window).workflow_id() != flow.id);
+    window.save_document();
+    QTRY_VERIFY(!window.file_busy());
+    QVERIFY(history.isClean());
+    const auto saved = take(load_solution(host, catalog));
+    QCOMPARE(saved.solution().workflows.size(), 2u);
+    QVERIFY(find_node(saved.solution().workflows.front(), first) && find_node(saved.solution().workflows.front(), second));
+}
 
 void EditorTests::new_document_creates_empty_workflow()
 {

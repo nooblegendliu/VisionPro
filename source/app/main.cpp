@@ -26,6 +26,7 @@ struct Arguments {
     Command command;
     fs::path manifest{};
     std::optional<WorkflowId> workflow{};
+    std::optional<NodeId> group{};
     std::vector<InputArgument> inputs{};
     std::vector<NamedResourceRoot> roots{};
 };
@@ -36,9 +37,10 @@ public:
 };
 
 constexpr auto usage =
-    "visionpro_cli run --solution <solution.json> --workflow <uuid> [--input <id>=<value>]... [--root <id>=<directory>]...\n"
+    "visionpro_cli run --solution <solution.json> --workflow <uuid> [--group <uuid>] [--input <id>=<value>]... [--root <id>=<directory>]...\n"
     "visionpro_cli save --solution <solution.json> [--root <id>=<directory>]...\n"
-    "Inputs follow the workflow's public Bool, Int64, Float64 and String schemas.\n"
+    "Use --group to debug one composite Group in isolation. Inputs follow the selected public interface.\n"
+    "Explicit inputs support Bool, Int64, Float64 and String.\n"
 #ifdef VISIONPRO_WITH_OPENCV
     "The installed catalog contains the VisionPro simulation tools, visionpro.image.read_file, "
     "visionpro.image.threshold, visionpro.image.blob and visionpro.judge.integer_range.\n";
@@ -98,6 +100,9 @@ Arguments parse_arguments(std::span<wchar_t*> args)
         } else if (parsed.command == Command::Run && option == L"--workflow") {
             if (parsed.workflow) { throw UsageError("Specify one workflow ID."); }
             parsed.workflow = argument_value(IdFactory::parse<WorkflowId>(utf8(value)));
+        } else if (parsed.command == Command::Run && option == L"--group") {
+            if (parsed.group) { throw UsageError("Specify one Group ID."); }
+            parsed.group = argument_value(IdFactory::parse<NodeId>(utf8(value)));
         } else if (parsed.command == Command::Run && option == L"--input") {
             const auto [name, text] = assignment(value);
             const auto id = argument_value(SchemaIdFactory::parse<InputId>(utf8(name)));
@@ -137,14 +142,15 @@ DataValue input_value(const InputDescriptor& input, std::string_view text)
     }
 }
 
-std::vector<RunInput> fixed_inputs(const Arguments& args, const Workflow& flow)
+std::vector<RunInput> fixed_inputs(const Arguments& args, const PublicInterface& interface)
 {
     std::vector<RunInput> inputs;
     inputs.reserve(args.inputs.size());
     for (const auto& supplied : args.inputs) {
-        const auto found = std::ranges::find(flow.interface.inputs, supplied.id, &InputDescriptor::id);
-        if (found == flow.interface.inputs.end()) {
-            throw UsageError("Unknown workflow input '" + std::string(supplied.id.text()) + "'.");
+        const auto found = std::ranges::find(interface.inputs, supplied.id, &InputDescriptor::id);
+        if (found == interface.inputs.end()) {
+            const std::string prefix = args.group ? "Unknown Group input '" : "Unknown workflow input '";
+            throw UsageError(prefix + std::string(supplied.id.text()) + "'.");
         }
         inputs.push_back({supplied.id, input_value(*found, supplied.text)});
     }
@@ -157,6 +163,17 @@ int report_failure(std::string_view stage, const Diagnostic& diagnostic, int cod
     return code;
 }
 
+int finish_output()
+{
+    // Commit the buffered tail before reporting success instead of relying on process teardown.
+    std::cout.flush();
+    if (!std::cout) {
+        return report_failure("report", {ErrorCode::ExecutionBoundaryFailure, Severity::Error, {},
+            "Could not write the complete command output to standard output."});
+    }
+    return 0;
+}
+
 int save(const SolutionDocument& document)
 {
     auto saved = save_solution(document, document.solution());
@@ -166,7 +183,7 @@ int save(const SolutionDocument& document)
         {"diagnostics", diagnostics_json(result.cleanup.diagnostics)}};
     std::cout << json{{"solution", result.solution.id.to_string()}, {"revision", std::to_string(result.solution.revision)},
         {"status", "Committed"}, {"cleanup", cleanup}, {"load_diagnostics", diagnostics_json(document.diagnostics())}}.dump(2) << '\n';
-    return 0;
+    return finish_output();
 }
 
 int run(const Arguments& args, const SolutionDocument& document, const ToolRegistry& registry)
@@ -179,12 +196,28 @@ int run(const Arguments& args, const SolutionDocument& document, const ToolRegis
         return report_failure("request", {ErrorCode::InvalidRunRequest, Severity::Error, std::move(location),
             "The selected workflow ID is absent from the solution."});
     }
-    const auto inputs = fixed_inputs(args, *flow);
+    RunTarget target = WorkflowTarget{flow->id};
+    const auto* interface = &flow->interface;
+    if (args.group) {
+        const auto* node = find_node(*flow, *args.group);
+        const auto* group = node ? std::get_if<GroupConfiguration>(&node->configuration) : nullptr;
+        if (!group || group->loop) {
+            DiagnosticLocation location;
+            location.workflow = flow->id;
+            location.node = args.group;
+            return report_failure("request", {ErrorCode::InvalidRunRequest, Severity::Error, std::move(location),
+                "The selected node must be a composite Group in this workflow."});
+        }
+        target = NodeTarget{flow->id, node->id};
+        interface = &group->interface;
+    }
+    const auto inputs = fixed_inputs(args, *interface);
     auto opened = open_solution_execution(document, registry);
     if (const auto* failure = std::get_if<Diagnostic>(&opened)) { return report_failure("load", *failure); }
     const auto& execution = std::get<LoadedSolutionExecution>(opened);
     const auto trigger = argument_value(SchemaIdFactory::parse<SchemaId>("visionpro.cli"));
-    auto request = RunRequest::create(execution.snapshot, WorkflowTarget{flow->id}, inputs, {TriggerKind::Manual, trigger});
+    auto request = RunRequest::create(execution.snapshot, target, inputs,
+        {args.group ? TriggerKind::Debug : TriggerKind::Manual, trigger});
     if (const auto* failure = std::get_if<Diagnostic>(&request)) { return report_failure("request", *failure); }
     auto submitted = execution.engine->submit(std::get<RunRequest>(request));
     if (const auto* failure = std::get_if<RunRejected>(&submitted)) { return report_failure("admission", failure->diagnostic); }
@@ -201,6 +234,7 @@ int run(const Arguments& args, const SolutionDocument& document, const ToolRegis
     auto summary = summarize_run(*handle, wait.progress, document.diagnostics());
     if (const auto* failure = std::get_if<Diagnostic>(&summary)) { return report_failure("report", *failure); }
     std::cout << std::get<json>(summary).dump(2) << '\n';
+    if (const auto output_error = finish_output(); output_error != 0) { return output_error; }
     if (wait.progress.status == ExecutionStatus::Succeeded) { return 0; }
     std::cerr << json{{"stage", "execute"}, {"diagnostics", diagnostics_json(wait.progress.diagnostics)}}.dump(2) << '\n';
     return 1;
@@ -210,7 +244,7 @@ int execute(std::span<wchar_t*> args)
 {
     if (args.size() == 1 && std::wstring_view(args.front()) == L"--help") {
         std::cout << usage;
-        return 0;
+        return finish_output();
     }
     try {
         const auto options = parse_arguments(args);

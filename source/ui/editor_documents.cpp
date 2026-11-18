@@ -18,6 +18,7 @@
 #include <QUndoStack>
 
 #include <visionpro/core/schema_id_factory.hpp>
+#include <visionpro/infrastructure/subgraph_package.hpp>
 
 #include <algorithm>
 #include <exception>
@@ -57,6 +58,16 @@ Result<SolutionDocument> current_baseline(std::optional<SolutionDocument> source
     if (source) { return std::move(*source); }
     if (expected) { return reload_saved_solution(directory, *expected, registry, roots); }
     return file_error(ErrorCode::SolutionSaveConflict, "The document has no confirmed save baseline. Open the saved solution again.");
+}
+
+Result<std::monostate> resolve_provenance(std::optional<SolutionDocument>& source, const std::optional<fs::path>& directory,
+    const std::optional<Solution>& expected, const ToolRegistry& registry, std::span<const NamedResourceRoot> roots)
+{
+    if (source || !directory) { return std::monostate{}; }
+    auto loaded = current_baseline({}, *directory, expected, registry, roots);
+    if (auto* issue = std::get_if<Diagnostic>(&loaded)) { return std::move(*issue); }
+    source = std::get<SolutionDocument>(std::move(loaded));
+    return std::monostate{};
 }
 
 #ifdef VISIONPRO_WITH_OPENCV
@@ -151,7 +162,15 @@ void EditorWindow::start_file_task(const QString& status, Task task, Apply apply
         refresh_actions();
         try {
             if (auto* issue = std::get_if<Diagnostic>(&outcome->value())) {
-                report_error(QString::fromStdString(issue->message));
+                auto message = QString::fromStdString(issue->message);
+                const auto& location = issue->location;
+                QStringList identifiers;
+                if (location.workflow) { identifiers.append(QStringLiteral("Workflow %1").arg(QString::fromStdString(location.workflow->to_string()))); }
+                if (location.node) { identifiers.append(QStringLiteral("Node %1").arg(QString::fromStdString(location.node->to_string()))); }
+                if (location.resource) { identifiers.append(QStringLiteral("Resource %1").arg(QString::fromStdString(location.resource->to_string()))); }
+                if (location.variable) { identifiers.append(QStringLiteral("Variable %1").arg(QString::fromStdString(location.variable->to_string()))); }
+                if (!identifiers.empty()) { message += QStringLiteral("  ·  ") + identifiers.join(QStringLiteral(" / ")); }
+                report_error(message);
             } else {
                 apply(std::get<0>(std::move(outcome->value())));
             }
@@ -254,17 +273,66 @@ void EditorWindow::choose_transfer(SolutionTransfer operation, Continuation afte
 void EditorWindow::transfer_document(const fs::path& directory, SolutionTransfer operation)
 { begin_transfer(directory, operation, {}); }
 
+void EditorWindow::choose_subgraph_export(bool selected_group)
+{
+    const auto selection = scene_->selected_nodes();
+    if (selected_group && selection.size() != 1) { return; }
+    const auto target = QFileDialog::getExistingDirectory(this, QStringLiteral("Choose Folder for Subgraph Package"),
+        directory_ ? path_text(directory_->parent_path()) : QString{});
+    if (!target.isEmpty()) {
+        export_subgraph(file_path(target), selected_group ? std::optional{selection.front()} : std::nullopt);
+    }
+}
+
+void EditorWindow::choose_subgraph_import()
+{
+    const auto target = QFileDialog::getExistingDirectory(this, QStringLiteral("Open Subgraph Package"),
+        directory_ ? path_text(directory_->parent_path()) : QString{});
+    if (!target.isEmpty()) { import_subgraph(file_path(target)); }
+}
+
+void EditorWindow::export_subgraph(const fs::path& directory, std::optional<NodeId> group)
+{
+    if (busy_ || !writable() || !model_->workflow_id()) { return; }
+    start_file_task(QStringLiteral("Exporting subgraph…"),
+        [directory, candidate = draft(), workflow = *model_->workflow_id(), group, registry = registry_, source = source_,
+            current = directory_, expected = pending_baseline_, roots = roots_]() mutable -> Result<std::monostate> {
+            auto ready = resolve_provenance(source, current, expected, registry, roots);
+            if (auto* issue = std::get_if<Diagnostic>(&ready)) { return std::move(*issue); }
+            return export_subgraph_package(directory, candidate, workflow, group, registry, source ? &*source : nullptr);
+        },
+        [this, directory](std::monostate) { show_status(QStringLiteral("Exported subgraph to %1.").arg(path_text(directory))); });
+}
+
+void EditorWindow::import_subgraph(const fs::path& directory)
+{
+    if (busy_ || !writable()) { return; }
+    start_file_task(QStringLiteral("Importing subgraph…"),
+        [directory, candidate = draft(), workflow = model_->workflow_id(), parent = model_->scope(), registry = registry_,
+            source = source_, current = directory_, expected = pending_baseline_, roots = roots_]() mutable -> Result<SubgraphImport> {
+            auto ready = resolve_provenance(source, current, expected, registry, roots);
+            if (auto* issue = std::get_if<Diagnostic>(&ready)) { return std::move(*issue); }
+            return import_subgraph_package(directory, candidate, workflow, parent, registry, source ? &*source : nullptr);
+        },
+        [this, directory](SubgraphImport imported) {
+            if (!scene_->edit_draft(QStringLiteral("Import subgraph"), [&](Solution& candidate) -> Result<std::monostate> {
+                candidate = std::move(imported.solution);
+                return std::monostate{};
+            })) { return; }
+            scene_->select_workflow(imported.workflow);
+            if (imported.group) { scene_->reveal_node(*imported.group); }
+            show_status(QStringLiteral("Imported subgraph from %1.").arg(path_text(directory)));
+        });
+}
+
 void EditorWindow::begin_transfer(const fs::path& directory, SolutionTransfer operation, Continuation after)
 {
     if (busy_ || !writable()) { return; }
     start_file_task(QStringLiteral("Preparing solution files…"),
         [directory, operation, old_directory = directory_, source = source_, baseline = pending_baseline_,
             candidate = draft(), registry = registry_, roots = roots_]() mutable -> Result<CommittedDocument> {
-            if (old_directory && !source) {
-                auto confirmed = current_baseline({}, *old_directory, baseline, registry, roots);
-                if (auto* issue = std::get_if<Diagnostic>(&confirmed)) { return std::move(*issue); }
-                source = std::get<SolutionDocument>(std::move(confirmed));
-            }
+            auto ready = resolve_provenance(source, old_directory, baseline, registry, roots);
+            if (auto* issue = std::get_if<Diagnostic>(&ready)) { return std::move(*issue); }
             auto transfer = transfer_solution(directory, candidate, operation, source ? &*source : nullptr, roots);
             if (auto* issue = std::get_if<Diagnostic>(&transfer)) { return std::move(*issue); }
             auto result = std::get<SolutionTransferResult>(std::move(transfer));

@@ -25,11 +25,25 @@ struct ControlOutputMapping {
     std::optional<core::ControlOutputId> source_output;
 };
 struct ToolConfiguration { core::ToolTypeId type; std::uint32_t config_version; };
+enum class LoopExportMode { First, Last, Collect, Sum };
+struct LoopExport {
+    core::OutputId output;
+    LoopExportMode mode;
+    std::optional<core::ConfigValue> initial{};
+};
+struct LoopConfiguration {
+    std::int64_t step{1};
+    bool inclusive_end{false};
+    std::int64_t interval_ms{0};
+    std::vector<LoopExport> exports;
+    std::optional<core::NodeId> break_source{};
+};
 struct GroupConfiguration {
     PublicInterface interface;
     std::vector<core::NodeId> entries;
     std::vector<OutputMapping> outputs;
     std::vector<ControlOutputMapping> control_exports;
+    std::optional<LoopConfiguration> loop{};
 };
 struct NodeResourceBinding { core::SchemaId slot; core::ResourceReference resource; };
 enum class JoinPolicy { AllActivated };

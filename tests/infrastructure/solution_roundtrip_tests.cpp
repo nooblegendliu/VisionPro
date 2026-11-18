@@ -2,6 +2,7 @@
 #include <visionpro/core/runtime_id_factory.hpp>
 #include <visionpro/core/schema_id_factory.hpp>
 #include <visionpro/infrastructure/solution_file.hpp>
+#include <visionpro/workflow/copy.hpp>
 #include <visionpro/workflow/tool_execution.hpp>
 
 #include <array>
@@ -307,6 +308,57 @@ void check_state_projection(const Solution& solution, const ToolRegistry& regist
         "Tool configuration version and node slot reference stay independent of the file version.");
 }
 
+void loop_roundtrip(Solution draft, const ToolRegistry& registry, const PackageDirectories& directories)
+{
+    auto& flow = draft.workflows.front();
+    auto& region = std::get<GroupConfiguration>(flow.nodes.front().configuration);
+    const auto child = region.entries.front();
+    region.interface.inputs.insert(region.interface.inputs.end(),
+        {integer_input("start", 9), integer_input("end", 1), integer_input("index", 0)});
+    region.interface.control_outputs.clear();
+    region.control_exports.clear();
+    flow.control_links.front().output.reset();
+    region.loop = LoopConfiguration{-2, true, 7,
+        {{region.outputs.front().output, LoopExportMode::Sum, ConfigValue::integer(lowest)}}, child};
+    take(validate_solution(draft, registry.descriptors()));
+    const auto directory = directories.package(u8"循环方案");
+    take(write_new_solution(directory, draft));
+    const auto document = take(load_solution(directory, registry));
+    const auto& loaded = std::get<GroupConfiguration>(document.solution().workflows.front().nodes.front().configuration);
+    check(document.can_save() && loaded.loop && loaded.loop->step == -2 && loaded.loop->inclusive_end
+        && loaded.loop->interval_ms == 7 && loaded.loop->break_source == child
+        && loaded.loop->exports.front().mode == LoopExportMode::Sum
+        && loaded.loop->exports.front().initial == ConfigValue::integer(lowest)
+        && loaded.outputs.front().source == region.outputs.front().source,
+        "Loop settings, a full-width seed, break source and selected body output survive a file round trip.");
+    const auto copy = take(clone_solution(document.solution(), ExternalReferencePolicy::Preserve));
+    const auto& copied = std::get<GroupConfiguration>(copy.solution.workflows.front().nodes.front().configuration);
+    check(copied.loop->break_source == copy.identities.nodes.at(child) && copied.loop->break_source != child
+        && copied.outputs.front().source.node == copied.loop->break_source,
+        "A copied loop refers only to its own break source and export producer.");
+
+    const auto original = read_manifest(directory);
+    auto extended = original;
+    extended.insert(extended.find("\"inclusive_end\""), "\"new_loop_policy\":true,");
+    {
+        std::ofstream out(directory / "solution.json", std::ios::binary | std::ios::trunc);
+        out << extended;
+    }
+    const auto unknown = take(load_solution(directory, registry));
+    check(!unknown.can_save() && std::holds_alternative<Diagnostic>(save_solution(unknown, unknown.solution()))
+        && read_manifest(directory) == extended, "An unrecognized loop field prevents lossy overwrite.");
+    auto unsupported = original;
+    unsupported.replace(unsupported.find("\"sum\""), 5, "\"future_reduce\"");
+    {
+        std::ofstream out(directory / "solution.json", std::ios::binary | std::ios::trunc);
+        out << unsupported;
+    }
+    const auto refused = load_solution(directory, registry);
+    const auto* diagnostic = std::get_if<Diagnostic>(&refused);
+    check(diagnostic && diagnostic->code == ErrorCode::UnsupportedSolutionContent
+        && read_manifest(directory) == unsupported, "An unknown reduction cannot be interpreted or overwrite the manifest.");
+}
+
 void roundtrip()
 {
     const auto tool = counter_tool();
@@ -334,6 +386,7 @@ void roundtrip()
     check(reopened.solution().variables.at(0).initial_value == ConfigValue::integer(lowest)
         && reopened.solution().variables.at(1).initial_value == ConfigValue::integer(highest) && factory->calls == 0,
         "Both Int64 boundaries reopen exactly and configuration handling leaves the tool factory unused.");
+    loop_roundtrip(original, registry, directories);
 }
 
 } // namespace

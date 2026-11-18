@@ -41,10 +41,12 @@ std::vector<core::NodeId> control_order(const ScopeDependencies& scope)
 } // namespace
 
 ControlSchedule::ControlSchedule(const ExecutionPlan& plan)
-    : nodes_(control_order(plan.dependencies().scopes.front())), states_(nodes_.size())
+    : ControlSchedule(plan.dependencies().scopes.front(),
+        *find_workflow(plan.request().snapshot().solution(), plan.dependencies().scopes.front().workflow), plan.entries()) {}
+
+ControlSchedule::ControlSchedule(const ScopeDependencies& scope, const Workflow& flow, std::span<const core::NodeId> entries)
+    : nodes_(control_order(scope)), states_(nodes_.size()), unsettled_(nodes_.size())
 {
-    const auto& scope = plan.dependencies().scopes.front();
-    const auto& flow = *find_workflow(plan.request().snapshot().solution(), scope.workflow);
     std::map<core::NodeId, std::size_t> indices;
     for (std::size_t index = 0; index < nodes_.size(); ++index) { indices.emplace(nodes_[index], index); }
     for (const auto& node : flow.nodes) {
@@ -54,7 +56,7 @@ ControlSchedule::ControlSchedule(const ExecutionPlan& plan)
     }
     // An entry grants a virtual arrival. Its actual incoming edges still
     // have to settle before it is considered for execution.
-    for (const auto& entry : plan.entries()) { states_[indices.at(entry)].arrived = true; }
+    for (const auto& entry : entries) { states_[indices.at(entry)].arrived = true; }
 
     routes_.reserve(scope.control_links.size());
     links_.reserve(scope.control_links.size());
@@ -114,6 +116,7 @@ void ControlSchedule::complete(std::size_t index, std::span<const core::ControlO
     auto& source = states_[index];
     if (stopped_ || source.phase != Phase::Dispatched) { return; }
     source.phase = Phase::Completed;
+    --unsettled_;
 
     std::vector<std::size_t> determined;
     for (const auto edge : source.outgoing) {
@@ -188,6 +191,7 @@ void ControlSchedule::propagate(std::vector<std::size_t>& determined)
             reason = node.not_selected ? NodeSkipReason::NotSelected : NodeSkipReason::UpstreamClosed;
         }
         node.phase = Phase::Skipped;
+        --unsettled_;
         skipped_.emplace_back(index, reason);
         source_ready(index);
 

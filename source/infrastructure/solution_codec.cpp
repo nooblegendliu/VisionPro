@@ -36,6 +36,9 @@ template<> struct EnumNames<workflow::MissingReason> {
 template<> struct EnumNames<workflow::JoinPolicy> {
     static constexpr auto values = std::to_array<std::string_view>({"all_activated"});
 };
+template<> struct EnumNames<workflow::LoopExportMode> {
+    static constexpr auto values = std::to_array<std::string_view>({"first", "last", "collect", "sum"});
+};
 template<> struct EnumNames<core::QueueOverflowPolicy> {
     static constexpr auto values = std::to_array<std::string_view>({"wait", "reject", "drop_oldest"});
 };
@@ -324,16 +327,46 @@ ControlOutputMapping decode_control_mapping(const Reader& reader)
         read_optional<ControlOutputId>(reader.field("source_output"), read_id<ControlOutputId>)};
 }
 
+Json encode_loop_export(const LoopExport& item)
+{
+    return {{"output", write_id(item.output)}, {"mode", write_enum(item.mode)},
+        {"initial", write_optional(item.initial, encode_value)}};
+}
+
+LoopExport decode_loop_export(const Reader& reader)
+{
+    reader.object({"output", "mode", "initial"});
+    return {read_id<OutputId>(reader.field("output")), read_enum<LoopExportMode>(reader.field("mode")),
+        read_optional<ConfigValue>(reader.field("initial"), decode_value)};
+}
+
+Json encode_loop(const LoopConfiguration& loop)
+{
+    return {{"step", std::to_string(loop.step)}, {"inclusive_end", loop.inclusive_end},
+        {"interval_ms", std::to_string(loop.interval_ms)}, {"exports", write_array(loop.exports, encode_loop_export)},
+        {"break_source", write_optional(loop.break_source, write_id<NodeId>)}};
+}
+
+LoopConfiguration decode_loop(const Reader& reader)
+{
+    reader.object({"step", "inclusive_end", "interval_ms", "exports", "break_source"});
+    return {reader.field("step").i64(), reader.field("inclusive_end").boolean(), reader.field("interval_ms").i64(),
+        read_array<LoopExport>(reader.field("exports"), decode_loop_export),
+        read_optional<NodeId>(reader.field("break_source"), read_id<NodeId>)};
+}
+
 Json encode_configuration(const std::variant<ToolConfiguration, GroupConfiguration>& configuration)
 {
     if (const auto* tool = std::get_if<ToolConfiguration>(&configuration)) {
         return {{"kind", "tool"}, {"type", write_id(tool->type)}, {"config_version", tool->config_version}};
     }
     const auto& group = std::get<GroupConfiguration>(configuration);
-    return {{"kind", "group"}, {"interface", encode_interface(group.interface)},
+    Json result{{"kind", group.loop ? "loop" : "group"}, {"interface", encode_interface(group.interface)},
         {"entries", write_array(group.entries, write_id<NodeId>)},
         {"outputs", write_array(group.outputs, encode_output_mapping)},
         {"control_exports", write_array(group.control_exports, encode_control_mapping)}};
+    if (group.loop) { result["loop"] = encode_loop(*group.loop); }
+    return result;
 }
 
 std::variant<ToolConfiguration, GroupConfiguration> decode_configuration(const Reader& reader)
@@ -343,12 +376,18 @@ std::variant<ToolConfiguration, GroupConfiguration> decode_configuration(const R
         reader.object({"kind", "type", "config_version"});
         return ToolConfiguration{read_id<ToolTypeId>(reader.field("type")), reader.field("config_version").u32()};
     }
-    if (kind.text() == "group") {
-        reader.object({"kind", "interface", "entries", "outputs", "control_exports"});
+    if (kind.text() == "group" || kind.text() == "loop") {
+        std::optional<LoopConfiguration> loop;
+        if (kind.text() == "loop") {
+            reader.object({"kind", "interface", "entries", "outputs", "control_exports", "loop"});
+            loop = decode_loop(reader.field("loop"));
+        } else {
+            reader.object({"kind", "interface", "entries", "outputs", "control_exports"});
+        }
         return GroupConfiguration{decode_interface(reader.field("interface")),
             read_array<NodeId>(reader.field("entries"), read_id<NodeId>),
             read_array<OutputMapping>(reader.field("outputs"), decode_output_mapping),
-            read_array<ControlOutputMapping>(reader.field("control_exports"), decode_control_mapping)};
+            read_array<ControlOutputMapping>(reader.field("control_exports"), decode_control_mapping), std::move(loop)};
     }
     kind.fail(ErrorCode::UnsupportedSolutionContent, "Unknown node configuration kind.");
 }

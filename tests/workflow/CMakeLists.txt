@@ -95,7 +95,7 @@ endforeach()
 
 add_executable(visionpro_workflow_branch_tests workflow_branch_tests.cpp)
 target_link_libraries(visionpro_workflow_branch_tests PRIVATE visionpro_workflow visionpro_build_options)
-foreach(test_group IN ITEMS branch_selection branch_fail_fast)
+foreach(test_group IN ITEMS branch_selection branch_fail_fast group_exports_and_debug)
     add_test(NAME workflow.${test_group} COMMAND visionpro_workflow_branch_tests ${test_group})
     set_tests_properties(workflow.${test_group} PROPERTIES TIMEOUT 30)
 endforeach()
@@ -103,10 +103,14 @@ endforeach()
 add_executable(visionpro_workflow_state_tests workflow_state_tests.cpp)
 target_link_libraries(visionpro_workflow_state_tests PRIVATE visionpro_workflow visionpro_build_options Threads::Threads)
 add_test(NAME workflow.state_lifetimes COMMAND visionpro_workflow_state_tests lifetimes)
+add_test(NAME workflow.loop_state_and_plan_capability COMMAND visionpro_workflow_state_tests loop-state)
+add_test(NAME workflow.group_state_domains COMMAND visionpro_workflow_state_tests group-state)
+add_test(NAME workflow.enabled_workflow_requests COMMAND visionpro_workflow_state_tests enabled-set)
 add_test(NAME workflow.debug_state_isolation COMMAND visionpro_workflow_state_tests debug)
 add_test(NAME workflow.state_acceptance COMMAND visionpro_workflow_state_tests acceptance)
 add_test(NAME workflow.state_session_publication COMMAND visionpro_workflow_state_tests publication)
-set_tests_properties(workflow.state_lifetimes workflow.debug_state_isolation workflow.state_acceptance
+set_tests_properties(workflow.state_lifetimes workflow.loop_state_and_plan_capability workflow.group_state_domains
+    workflow.enabled_workflow_requests workflow.debug_state_isolation workflow.state_acceptance
     workflow.state_session_publication PROPERTIES TIMEOUT 30)
 
 add_executable(visionpro_workflow_independent_tests workflow_independent_tests.cpp)

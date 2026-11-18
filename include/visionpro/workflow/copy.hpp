@@ -54,7 +54,8 @@ struct SolutionCopy {
     std::span<const core::NodeId> selected, ExternalReferencePolicy external_policy);
 // Configuration-only copy: remaps owned identities/references and layout; does
 // not copy resource files, execute nodes or transfer runtime state/results.
+// A destination workflow rebases references in a single, detached scope for insertion.
 [[nodiscard]] core::Result<SolutionCopy> clone_solution(const Solution& solution,
-    ExternalReferencePolicy external_policy);
+    ExternalReferencePolicy external_policy, std::optional<core::WorkflowId> destination_workflow = {});
 
 } // namespace visionpro::workflow
