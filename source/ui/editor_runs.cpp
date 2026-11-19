@@ -42,6 +42,18 @@ void EditorWindow::create_run_actions()
         QKeySequence(Qt::CTRL | Qt::Key_F5));
     cancel_run_ = action(menu, QStringLiteral("Cancel Run"), "cancelRun", [this] { run_controller_->cancel(); },
         QKeySequence(Qt::SHIFT | Qt::Key_F5));
+    reset_state_ = action(menu, QStringLiteral("Reset Selected Node State"), "resetSelectedState", [this] {
+        const auto flow = model_->workflow_id();
+        const auto selected = scene_->selected_nodes();
+        if (!flow || selected.size() != 1) { return; }
+        auto result = run_controller_->reset_state({*flow, selected.front()});
+        if (const auto* failure = std::get_if<Diagnostic>(&result)) {
+            report_error(QString::fromStdString(failure->message));
+            return;
+        }
+        const auto& workflow = *find_workflow(draft(), *flow);
+        show_status(QStringLiteral("Reset session state for %1.").arg(QString::fromStdString(find_node(workflow, selected.front())->name)));
+    });
     menu.addSeparator();
     run_limits_ = action(menu, QStringLiteral("History and Notifications…"), "runDisplayLimits", [this] { choose_run_limits(); });
 }

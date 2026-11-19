@@ -94,8 +94,19 @@ public:
         const auto owner = node_owners.find(node);
         return owner != node_owners.end() && owner->second == workflow && identities.nodes.contains(node);
     }
+    void remap_selector(Selector& selector)
+    {
+        for (auto& step : selector) {
+            if (auto* dynamic = std::get_if<DynamicElementSelection>(&step)) {
+                // The input has a fixed path. Copying only remaps persistent identities.
+                auto mapped = source(index_binding_source(dynamic->source));
+                dynamic->source = std::get<IndexSource>(make_index_source(mapped));
+            }
+        }
+    }
     OutputReference output(OutputReference reference)
     {
+        remap_selector(reference.selector);
         if (internal(reference.workflow, reference.node)) {
             reference.node = identities.nodes.at(reference.node);
             if (const auto workflow = identities.workflows.find(reference.workflow); workflow != identities.workflows.end()) {
@@ -106,6 +117,7 @@ public:
     }
     ScopedInputReference scoped_input(ScopedInputReference reference)
     {
+        remap_selector(reference.selector);
         const bool owned = reference.group ? internal(reference.workflow, *reference.group)
             : identities.workflows.contains(reference.workflow);
         if (!owned) { external(reference); return reference; }
@@ -117,6 +129,7 @@ public:
     }
     GlobalReference global(GlobalReference reference)
     {
+        remap_selector(reference.selector);
         if (const auto mapped = identities.variables.find(reference.variable); mapped != identities.variables.end()) {
             reference.variable = mapped->second;
         } else { external(reference); }

@@ -1,0 +1,1898 @@
+{
+  "coordinates": [],
+  "format": "visionpro.solution",
+  "format_version": 1,
+  "id": "5ca4f87a-ea1e-4d62-89b0-000000006300",
+  "layouts": [
+    {
+      "nodes": [
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000063101",
+          "x": 50.0,
+          "y": 80.0
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000063102",
+          "x": 290.0,
+          "y": 80.0
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000063103",
+          "x": 530.0,
+          "y": 80.0
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000063104",
+          "x": 770.0,
+          "y": 80.0
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000063105",
+          "x": 1010.0,
+          "y": 80.0
+        }
+      ],
+      "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006310"
+    },
+    {
+      "nodes": [
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000063201",
+          "x": 50.0,
+          "y": 50.0
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000063202",
+          "x": 50.0,
+          "y": 205.0
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000063203",
+          "x": 50.0,
+          "y": 360.0
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000063204",
+          "x": 50.0,
+          "y": 515.0
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000063205",
+          "x": 50.0,
+          "y": 670.0
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000063206",
+          "x": 320.0,
+          "y": 360.0
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000063207",
+          "x": 555.0,
+          "y": 360.0
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000063208",
+          "x": 790.0,
+          "y": 260.0
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000063209",
+          "x": 790.0,
+          "y": 460.0
+        }
+      ],
+      "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006320"
+    },
+    {
+      "nodes": [
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000063301",
+          "x": 50.0,
+          "y": 80.0
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000063302",
+          "x": 310.0,
+          "y": 80.0
+        }
+      ],
+      "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006330"
+    }
+  ],
+  "name": "S6.3 计算、逻辑与格式化",
+  "queues": [],
+  "resources": [],
+  "revision": "1",
+  "variables": [],
+  "workflows": [
+    {
+      "containment": [],
+      "control_exports": [],
+      "control_links": [
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000063601",
+          "output": null,
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000063101",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000063102"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000063602",
+          "output": null,
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000063102",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000063103"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000063603",
+          "output": null,
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000063103",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000063104"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000063604",
+          "output": null,
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000063104",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000063105"
+        }
+      ],
+      "enabled": true,
+      "entries": [
+        "5ca4f87a-ea1e-4d62-89b0-000000063101"
+      ],
+      "id": "5ca4f87a-ea1e-4d62-89b0-000000006310",
+      "interface": {
+        "control_outputs": [],
+        "id": "s6.calculation.select",
+        "inputs": [
+          {
+            "binding": {
+              "allowed_conversions": [
+                "exact"
+              ],
+              "allowed_sources": [
+                "constant",
+                "run_output",
+                "public_input"
+              ],
+              "cardinality": "single_source",
+              "time": "before_invocation"
+            },
+            "constraints": {
+              "allowed_values": [],
+              "integer_range": null,
+              "max_length": null,
+              "real_range": null
+            },
+            "default_value": {
+              "type": {
+                "element": {
+                  "kind": "int64"
+                },
+                "kind": "list"
+              },
+              "value": [
+                {
+                  "type": {
+                    "kind": "int64"
+                  },
+                  "value": "6"
+                },
+                {
+                  "type": {
+                    "kind": "int64"
+                  },
+                  "value": "9"
+                }
+              ]
+            },
+            "display_name": "面积列表",
+            "id": "areas",
+            "required": false,
+            "semantics": {
+              "coordinate_system": null,
+              "unit": "unspecified"
+            },
+            "type": {
+              "element": {
+                "kind": "int64"
+              },
+              "kind": "list"
+            }
+          },
+          {
+            "binding": {
+              "allowed_conversions": [
+                "exact"
+              ],
+              "allowed_sources": [
+                "constant",
+                "run_output",
+                "public_input"
+              ],
+              "cardinality": "single_source",
+              "time": "before_invocation"
+            },
+            "constraints": {
+              "allowed_values": [],
+              "integer_range": null,
+              "max_length": null,
+              "real_range": null
+            },
+            "default_value": {
+              "type": {
+                "kind": "int64"
+              },
+              "value": "1"
+            },
+            "display_name": "下标",
+            "id": "index",
+            "required": false,
+            "semantics": {
+              "coordinate_system": null,
+              "unit": "unspecified"
+            },
+            "type": {
+              "kind": "int64"
+            }
+          }
+        ],
+        "outputs": [
+          {
+            "allowed_absence": [],
+            "display_name": "area",
+            "id": "area",
+            "required": true,
+            "semantics": {
+              "coordinate_system": null,
+              "unit": "unspecified"
+            },
+            "type": {
+              "kind": "int64"
+            }
+          },
+          {
+            "allowed_absence": [],
+            "display_name": "text",
+            "id": "text",
+            "required": true,
+            "semantics": {
+              "coordinate_system": null,
+              "unit": "unspecified"
+            },
+            "type": {
+              "kind": "string"
+            }
+          },
+          {
+            "allowed_absence": [],
+            "display_name": "used_indices",
+            "id": "used_indices",
+            "required": true,
+            "semantics": {
+              "coordinate_system": null,
+              "unit": "unspecified"
+            },
+            "type": {
+              "element": {
+                "kind": "int64"
+              },
+              "kind": "list"
+            }
+          },
+          {
+            "allowed_absence": [],
+            "display_name": "used_values",
+            "id": "used_values",
+            "required": true,
+            "semantics": {
+              "coordinate_system": null,
+              "unit": "unspecified"
+            },
+            "type": {
+              "element": {
+                "kind": "int64"
+              },
+              "kind": "list"
+            }
+          },
+          {
+            "allowed_absence": [],
+            "display_name": "run_total",
+            "id": "run_total",
+            "required": true,
+            "semantics": {
+              "coordinate_system": null,
+              "unit": "unspecified"
+            },
+            "type": {
+              "kind": "int64"
+            }
+          },
+          {
+            "allowed_absence": [],
+            "display_name": "session_total",
+            "id": "session_total",
+            "required": true,
+            "semantics": {
+              "coordinate_system": null,
+              "unit": "unspecified"
+            },
+            "type": {
+              "kind": "int64"
+            }
+          }
+        ],
+        "version": 1
+      },
+      "name": "面积取项、格式化与累加",
+      "nodes": [
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "public_input",
+                  "value": {
+                    "group": null,
+                    "input": "index",
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006310"
+                  }
+                }
+              ],
+              "target": {
+                "id": "left",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "0"
+                  }
+                }
+              ],
+              "target": {
+                "id": "right",
+                "kind": "input"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "type": "visionpro.calc.int64"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000063101",
+          "join": "all_activated",
+          "name": "计算下标",
+          "resources": []
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "public_input",
+                  "value": {
+                    "group": null,
+                    "input": "areas",
+                    "selector": [
+                      {
+                        "kind": "dynamic_element",
+                        "source": {
+                          "kind": "run_output",
+                          "value": {
+                            "node": "5ca4f87a-ea1e-4d62-89b0-000000063101",
+                            "output": {
+                              "id": "value",
+                              "kind": "port"
+                            },
+                            "selector": [],
+                            "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006310"
+                          }
+                        }
+                      }
+                    ],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006310"
+                  }
+                }
+              ],
+              "target": {
+                "id": "left",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "0"
+                  }
+                }
+              ],
+              "target": {
+                "id": "right",
+                "kind": "input"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "type": "visionpro.calc.int64"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000063102",
+          "join": "all_activated",
+          "name": "按下标读取面积",
+          "resources": []
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "public_input",
+                  "value": {
+                    "group": null,
+                    "input": "areas",
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006310"
+                  }
+                }
+              ],
+              "target": {
+                "id": "list",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "element": {
+                        "kind": "int64"
+                      },
+                      "kind": "list"
+                    },
+                    "value": [
+                      {
+                        "type": {
+                          "kind": "int64"
+                        },
+                        "value": "0"
+                      },
+                      {
+                        "type": {
+                          "kind": "int64"
+                        },
+                        "value": "2"
+                      },
+                      {
+                        "type": {
+                          "kind": "int64"
+                        },
+                        "value": "1"
+                      }
+                    ]
+                  }
+                }
+              ],
+              "target": {
+                "id": "indices",
+                "kind": "parameter"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "element": {
+                        "kind": "int64"
+                      },
+                      "kind": "list"
+                    },
+                    "value": [
+                      {
+                        "type": {
+                          "kind": "int64"
+                        },
+                        "value": "1"
+                      }
+                    ]
+                  }
+                }
+              ],
+              "target": {
+                "id": "skip_out_of_range",
+                "kind": "parameter"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "string"
+                    },
+                    "value": "A={value}"
+                  }
+                }
+              ],
+              "target": {
+                "id": "format",
+                "kind": "parameter"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "string"
+                    },
+                    "value": "|"
+                  }
+                }
+              ],
+              "target": {
+                "id": "separator",
+                "kind": "parameter"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "type": "visionpro.format.int64_list"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000063103",
+          "join": "all_activated",
+          "name": "格式化原始面积列表",
+          "resources": []
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "1"
+                  }
+                }
+              ],
+              "target": {
+                "id": "value",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "10"
+                  }
+                }
+              ],
+              "target": {
+                "id": "initial",
+                "kind": "parameter"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "type": "visionpro.calc.int64_accumulate"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000063104",
+          "join": "all_activated",
+          "name": "每轮累加",
+          "resources": []
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "1"
+                  }
+                }
+              ],
+              "target": {
+                "id": "value",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "20"
+                  }
+                }
+              ],
+              "target": {
+                "id": "initial",
+                "kind": "parameter"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "enum",
+                      "members": [
+                        {
+                          "display_name": "PerRun",
+                          "id": "PerRun"
+                        },
+                        {
+                          "display_name": "Session",
+                          "id": "Session"
+                        }
+                      ],
+                      "schema": "visionpro.calc.int64_accumulate.mode",
+                      "version": 1
+                    },
+                    "value": "Session"
+                  }
+                }
+              ],
+              "target": {
+                "id": "mode",
+                "kind": "parameter"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "type": "visionpro.calc.int64_accumulate"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000063105",
+          "join": "all_activated",
+          "name": "会话累加",
+          "resources": []
+        }
+      ],
+      "outputs": [
+        {
+          "output": "area",
+          "source": {
+            "node": "5ca4f87a-ea1e-4d62-89b0-000000063102",
+            "output": {
+              "id": "value",
+              "kind": "port"
+            },
+            "selector": [],
+            "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006310"
+          }
+        },
+        {
+          "output": "text",
+          "source": {
+            "node": "5ca4f87a-ea1e-4d62-89b0-000000063103",
+            "output": {
+              "id": "text",
+              "kind": "port"
+            },
+            "selector": [],
+            "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006310"
+          }
+        },
+        {
+          "output": "used_indices",
+          "source": {
+            "node": "5ca4f87a-ea1e-4d62-89b0-000000063103",
+            "output": {
+              "id": "used_indices",
+              "kind": "port"
+            },
+            "selector": [],
+            "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006310"
+          }
+        },
+        {
+          "output": "used_values",
+          "source": {
+            "node": "5ca4f87a-ea1e-4d62-89b0-000000063103",
+            "output": {
+              "id": "used_values",
+              "kind": "port"
+            },
+            "selector": [],
+            "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006310"
+          }
+        },
+        {
+          "output": "run_total",
+          "source": {
+            "node": "5ca4f87a-ea1e-4d62-89b0-000000063104",
+            "output": {
+              "id": "value",
+              "kind": "port"
+            },
+            "selector": [],
+            "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006310"
+          }
+        },
+        {
+          "output": "session_total",
+          "source": {
+            "node": "5ca4f87a-ea1e-4d62-89b0-000000063105",
+            "output": {
+              "id": "value",
+              "kind": "port"
+            },
+            "selector": [],
+            "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006310"
+          }
+        }
+      ]
+    },
+    {
+      "containment": [],
+      "control_exports": [],
+      "control_links": [
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000063605",
+          "output": null,
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000063201",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000063206"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000063606",
+          "output": null,
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000063202",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000063206"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000063607",
+          "output": null,
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000063203",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000063206"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000063608",
+          "output": null,
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000063204",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000063206"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000063609",
+          "output": null,
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000063205",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000063206"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000063610",
+          "output": null,
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000063206",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000063207"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000063611",
+          "output": "true",
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000063207",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000063208"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000063612",
+          "output": "false",
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000063207",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000063209"
+        }
+      ],
+      "enabled": true,
+      "entries": [
+        "5ca4f87a-ea1e-4d62-89b0-000000063201",
+        "5ca4f87a-ea1e-4d62-89b0-000000063202",
+        "5ca4f87a-ea1e-4d62-89b0-000000063203",
+        "5ca4f87a-ea1e-4d62-89b0-000000063204",
+        "5ca4f87a-ea1e-4d62-89b0-000000063205"
+      ],
+      "id": "5ca4f87a-ea1e-4d62-89b0-000000006320",
+      "interface": {
+        "control_outputs": [],
+        "id": "s6.calculation.judgement",
+        "inputs": [
+          {
+            "binding": {
+              "allowed_conversions": [
+                "exact"
+              ],
+              "allowed_sources": [
+                "constant",
+                "run_output",
+                "public_input"
+              ],
+              "cardinality": "single_source",
+              "time": "before_invocation"
+            },
+            "constraints": {
+              "allowed_values": [],
+              "integer_range": null,
+              "max_length": null,
+              "real_range": null
+            },
+            "default_value": {
+              "type": {
+                "kind": "int64"
+              },
+              "value": "9"
+            },
+            "display_name": "第五路测量值",
+            "id": "fifth",
+            "required": false,
+            "semantics": {
+              "coordinate_system": null,
+              "unit": "unspecified"
+            },
+            "type": {
+              "kind": "int64"
+            }
+          }
+        ],
+        "outputs": [
+          {
+            "allowed_absence": [],
+            "display_name": "passed",
+            "id": "passed",
+            "required": true,
+            "semantics": {
+              "coordinate_system": null,
+              "unit": "unspecified"
+            },
+            "type": {
+              "kind": "bool"
+            }
+          }
+        ],
+        "version": 1
+      },
+      "name": "五路判断与条件分流",
+      "nodes": [
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "1"
+                  }
+                }
+              ],
+              "target": {
+                "id": "value",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "0"
+                  }
+                }
+              ],
+              "target": {
+                "id": "minimum",
+                "kind": "parameter"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "8"
+                  }
+                }
+              ],
+              "target": {
+                "id": "maximum",
+                "kind": "parameter"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "type": "visionpro.judge.integer_range"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000063201",
+          "join": "all_activated",
+          "name": "范围判断 1",
+          "resources": []
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "2"
+                  }
+                }
+              ],
+              "target": {
+                "id": "value",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "0"
+                  }
+                }
+              ],
+              "target": {
+                "id": "minimum",
+                "kind": "parameter"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "8"
+                  }
+                }
+              ],
+              "target": {
+                "id": "maximum",
+                "kind": "parameter"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "type": "visionpro.judge.integer_range"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000063202",
+          "join": "all_activated",
+          "name": "范围判断 2",
+          "resources": []
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "3"
+                  }
+                }
+              ],
+              "target": {
+                "id": "value",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "0"
+                  }
+                }
+              ],
+              "target": {
+                "id": "minimum",
+                "kind": "parameter"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "8"
+                  }
+                }
+              ],
+              "target": {
+                "id": "maximum",
+                "kind": "parameter"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "type": "visionpro.judge.integer_range"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000063203",
+          "join": "all_activated",
+          "name": "范围判断 3",
+          "resources": []
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "4"
+                  }
+                }
+              ],
+              "target": {
+                "id": "value",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "0"
+                  }
+                }
+              ],
+              "target": {
+                "id": "minimum",
+                "kind": "parameter"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "8"
+                  }
+                }
+              ],
+              "target": {
+                "id": "maximum",
+                "kind": "parameter"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "type": "visionpro.judge.integer_range"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000063204",
+          "join": "all_activated",
+          "name": "范围判断 4",
+          "resources": []
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "public_input",
+                  "value": {
+                    "group": null,
+                    "input": "fifth",
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006320"
+                  }
+                }
+              ],
+              "target": {
+                "id": "value",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "0"
+                  }
+                }
+              ],
+              "target": {
+                "id": "minimum",
+                "kind": "parameter"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "8"
+                  }
+                }
+              ],
+              "target": {
+                "id": "maximum",
+                "kind": "parameter"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "type": "visionpro.judge.integer_range"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000063205",
+          "join": "all_activated",
+          "name": "范围判断 5",
+          "resources": []
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "multiple_sources",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000063201",
+                    "output": {
+                      "id": "passed",
+                      "kind": "port"
+                    },
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006320"
+                  }
+                },
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000063202",
+                    "output": {
+                      "id": "passed",
+                      "kind": "port"
+                    },
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006320"
+                  }
+                },
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000063203",
+                    "output": {
+                      "id": "passed",
+                      "kind": "port"
+                    },
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006320"
+                  }
+                },
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000063204",
+                    "output": {
+                      "id": "passed",
+                      "kind": "port"
+                    },
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006320"
+                  }
+                },
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000063205",
+                    "output": {
+                      "id": "passed",
+                      "kind": "port"
+                    },
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006320"
+                  }
+                }
+              ],
+              "target": {
+                "id": "values",
+                "kind": "input"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "type": "visionpro.logic.and"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000063206",
+          "join": "all_activated",
+          "name": "五路逻辑与",
+          "resources": []
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000063206",
+                    "output": {
+                      "id": "passed",
+                      "kind": "port"
+                    },
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006320"
+                  }
+                }
+              ],
+              "target": {
+                "id": "condition",
+                "kind": "input"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "type": "visionpro.logic.condition"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000063207",
+          "join": "all_activated",
+          "name": "按判断结果分流",
+          "resources": []
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "1"
+                  }
+                }
+              ],
+              "target": {
+                "id": "left",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "0"
+                  }
+                }
+              ],
+              "target": {
+                "id": "right",
+                "kind": "input"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "type": "visionpro.calc.int64"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000063208",
+          "join": "all_activated",
+          "name": "合格后继",
+          "resources": []
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "0"
+                  }
+                }
+              ],
+              "target": {
+                "id": "left",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "0"
+                  }
+                }
+              ],
+              "target": {
+                "id": "right",
+                "kind": "input"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "type": "visionpro.calc.int64"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000063209",
+          "join": "all_activated",
+          "name": "不合格后继",
+          "resources": []
+        }
+      ],
+      "outputs": [
+        {
+          "output": "passed",
+          "source": {
+            "node": "5ca4f87a-ea1e-4d62-89b0-000000063206",
+            "output": {
+              "id": "passed",
+              "kind": "port"
+            },
+            "selector": [],
+            "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006320"
+          }
+        }
+      ]
+    },
+    {
+      "containment": [],
+      "control_exports": [],
+      "control_links": [
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000063613",
+          "output": null,
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000063301",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000063302"
+        }
+      ],
+      "enabled": true,
+      "entries": [
+        "5ca4f87a-ea1e-4d62-89b0-000000063301"
+      ],
+      "id": "5ca4f87a-ea1e-4d62-89b0-000000006330",
+      "interface": {
+        "control_outputs": [],
+        "id": "s6.calculation.strict_item",
+        "inputs": [
+          {
+            "binding": {
+              "allowed_conversions": [
+                "exact"
+              ],
+              "allowed_sources": [
+                "constant",
+                "run_output",
+                "public_input"
+              ],
+              "cardinality": "single_source",
+              "time": "before_invocation"
+            },
+            "constraints": {
+              "allowed_values": [],
+              "integer_range": null,
+              "max_length": null,
+              "real_range": null
+            },
+            "default_value": {
+              "type": {
+                "element": {
+                  "kind": "int64"
+                },
+                "kind": "list"
+              },
+              "value": [
+                {
+                  "type": {
+                    "kind": "int64"
+                  },
+                  "value": "6"
+                },
+                {
+                  "type": {
+                    "kind": "int64"
+                  },
+                  "value": "9"
+                }
+              ]
+            },
+            "display_name": "面积列表",
+            "id": "areas",
+            "required": false,
+            "semantics": {
+              "coordinate_system": null,
+              "unit": "unspecified"
+            },
+            "type": {
+              "element": {
+                "kind": "int64"
+              },
+              "kind": "list"
+            }
+          },
+          {
+            "binding": {
+              "allowed_conversions": [
+                "exact"
+              ],
+              "allowed_sources": [
+                "constant",
+                "run_output",
+                "public_input"
+              ],
+              "cardinality": "single_source",
+              "time": "before_invocation"
+            },
+            "constraints": {
+              "allowed_values": [],
+              "integer_range": null,
+              "max_length": null,
+              "real_range": null
+            },
+            "default_value": {
+              "type": {
+                "kind": "int64"
+              },
+              "value": "1"
+            },
+            "display_name": "下标",
+            "id": "index",
+            "required": false,
+            "semantics": {
+              "coordinate_system": null,
+              "unit": "unspecified"
+            },
+            "type": {
+              "kind": "int64"
+            }
+          }
+        ],
+        "outputs": [
+          {
+            "allowed_absence": [],
+            "display_name": "text",
+            "id": "text",
+            "required": true,
+            "semantics": {
+              "coordinate_system": null,
+              "unit": "unspecified"
+            },
+            "type": {
+              "kind": "string"
+            }
+          }
+        ],
+        "version": 1
+      },
+      "name": "严格取项后格式化",
+      "nodes": [
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "public_input",
+                  "value": {
+                    "group": null,
+                    "input": "areas",
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006330"
+                  }
+                }
+              ],
+              "target": {
+                "id": "list",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "public_input",
+                  "value": {
+                    "group": null,
+                    "input": "index",
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006330"
+                  }
+                }
+              ],
+              "target": {
+                "id": "index",
+                "kind": "input"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "type": "visionpro.list.int64_at"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000063301",
+          "join": "all_activated",
+          "name": "普通面积取项",
+          "resources": []
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "multiple_sources",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000063301",
+                    "output": {
+                      "id": "item",
+                      "kind": "port"
+                    },
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006330"
+                  }
+                }
+              ],
+              "target": {
+                "id": "values",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "element": {
+                        "kind": "int64"
+                      },
+                      "kind": "list"
+                    },
+                    "value": [
+                      {
+                        "type": {
+                          "kind": "int64"
+                        },
+                        "value": "0"
+                      },
+                      {
+                        "type": {
+                          "kind": "int64"
+                        },
+                        "value": "4"
+                      }
+                    ]
+                  }
+                }
+              ],
+              "target": {
+                "id": "indices",
+                "kind": "parameter"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "element": {
+                        "kind": "int64"
+                      },
+                      "kind": "list"
+                    },
+                    "value": [
+                      {
+                        "type": {
+                          "kind": "int64"
+                        },
+                        "value": "1"
+                      }
+                    ]
+                  }
+                }
+              ],
+              "target": {
+                "id": "skip_out_of_range",
+                "kind": "parameter"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "string"
+                    },
+                    "value": "A={value}"
+                  }
+                }
+              ],
+              "target": {
+                "id": "format",
+                "kind": "parameter"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "string"
+                    },
+                    "value": "|"
+                  }
+                }
+              ],
+              "target": {
+                "id": "separator",
+                "kind": "parameter"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "type": "visionpro.format.int64_list"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000063302",
+          "join": "all_activated",
+          "name": "格式化取项结果",
+          "resources": []
+        }
+      ],
+      "outputs": [
+        {
+          "output": "text",
+          "source": {
+            "node": "5ca4f87a-ea1e-4d62-89b0-000000063302",
+            "output": {
+              "id": "text",
+              "kind": "port"
+            },
+            "selector": [],
+            "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006330"
+          }
+        }
+      ]
+    }
+  ]
+}

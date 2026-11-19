@@ -1,5 +1,6 @@
 add_executable(visionpro_cli_tests cli_tests.cpp)
-target_compile_definitions(visionpro_cli_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_definitions(visionpro_cli_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX
+    VISIONPRO_CALCULATION_SAMPLE="${PROJECT_SOURCE_DIR}/samples/s6-calculation/solution.json")
 target_include_directories(visionpro_cli_tests SYSTEM PRIVATE "${PROJECT_SOURCE_DIR}/third_party/nlohmann_json/include")
 target_link_libraries(visionpro_cli_tests PRIVATE visionpro_infrastructure visionpro_build_options)
 if(MINGW)
@@ -17,7 +18,8 @@ add_test(NAME app.cli_diagnostics COMMAND visionpro_cli_tests $<TARGET_FILE:visi
 add_test(NAME app.cli_external_roundtrip COMMAND visionpro_cli_tests $<TARGET_FILE:visionpro_cli> external-roundtrip)
 add_test(NAME app.cli_external_diagnostics COMMAND visionpro_cli_tests $<TARGET_FILE:visionpro_cli> external-diagnostics)
 add_test(NAME app.cli_output_failures COMMAND visionpro_cli_tests $<TARGET_FILE:visionpro_cli> output-failures)
-set_tests_properties(app.cli_roundtrip app.cli_diagnostics app.cli_external_roundtrip app.cli_external_diagnostics app.cli_output_failures
+add_test(NAME app.cli_calculations COMMAND visionpro_cli_tests $<TARGET_FILE:visionpro_cli> calculations)
+set_tests_properties(app.cli_roundtrip app.cli_diagnostics app.cli_external_roundtrip app.cli_external_diagnostics app.cli_output_failures app.cli_calculations
     PROPERTIES TIMEOUT 60)
 
 if(VISIONPRO_WITH_OPENCV)
@@ -33,7 +35,7 @@ if(VISIONPRO_WITH_OPENCV)
     target_link_libraries(visionpro_image_summary_tests PRIVATE visionpro_vision_tools visionpro_infrastructure visionpro_build_options)
     add_test(NAME app.vision_image_summary COMMAND visionpro_image_summary_tests)
     set_tests_properties(app.vision_image_summary PROPERTIES TIMEOUT 30)
-    set_tests_properties(app.cli_roundtrip app.cli_diagnostics app.cli_external_roundtrip app.cli_external_diagnostics app.cli_output_failures
+    set_tests_properties(app.cli_roundtrip app.cli_diagnostics app.cli_external_roundtrip app.cli_external_diagnostics app.cli_output_failures app.cli_calculations
         app.vision_image_summary app.structured_loops
         app.vision_roundtrip app.vision_diagnostics PROPERTIES
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:opencv_core>"

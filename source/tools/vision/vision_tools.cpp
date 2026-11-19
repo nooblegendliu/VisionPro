@@ -125,16 +125,6 @@ ToolDescriptor blob_descriptor()
     return tool;
 }
 
-ToolDescriptor integer_range_descriptor()
-{
-    auto tool = descriptor("visionpro.judge.integer_range", "Judge integer range");
-    const auto integer = DataType::integer();
-    tool.parameters = {fixed_parameter("minimum", integer), fixed_parameter("maximum", integer)};
-    tool.inputs = {input("value", integer, {BindingSourceKind::Constant, BindingSourceKind::RunOutput, BindingSourceKind::PublicInput})};
-    tool.outputs = {output("passed", DataType::boolean())};
-    return tool;
-}
-
 bool supports_transform(const std::optional<Transform2D>& transform)
 {
     return !transform || ((transform->model == TransformModel::Similarity || transform->model == TransformModel::Affine)

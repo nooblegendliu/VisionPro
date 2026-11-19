@@ -171,6 +171,17 @@ void tool_registry()
     take(registry.validate(sync));
     take(registry.validate(async));
 
+    auto subscribable = fixtures.registrations;
+    subscribable[0].descriptor.inputs.front().binding.allowed_sources.push_back(BindingSourceKind::RunOutput);
+    const auto fixed_index_registry = take(ToolRegistry::create(subscribable));
+    subscribable[0].descriptor.inputs.front().binding.allow_dynamic_index = true;
+    take(validate_descriptor(subscribable[0].descriptor));
+    rejects(fixed_index_registry.validate(subscribable[0].descriptor), ErrorCode::InvalidDescriptor,
+        "A snapshot cannot opt a registered fixed-index port into dynamic indexing.");
+    auto snapshot_only = sync;
+    snapshot_only.parameters.front().binding.allow_dynamic_index = true;
+    rejects(validate_descriptor(snapshot_only), ErrorCode::InvalidDescriptor, "Snapshot-time constants cannot depend on a runtime index.");
+
     registrations = fixtures.registrations;
     registrations[1].descriptor.id = sync.id;
     rejects(ToolRegistry::create(registrations), ErrorCode::DuplicateIdentity, "duplicate tool types are rejected");

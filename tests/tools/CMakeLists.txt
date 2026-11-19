@@ -1,3 +1,12 @@
+add_executable(visionpro_logic_tests logic_tests.cpp)
+target_link_libraries(visionpro_logic_tests PRIVATE visionpro_logic_tools visionpro_workflow visionpro_build_options)
+add_test(NAME tools.logic COMMAND visionpro_logic_tests)
+set_tests_properties(tools.logic PROPERTIES TIMEOUT 30)
+
+if(NOT VISIONPRO_WITH_OPENCV)
+    return()
+endif()
+
 add_executable(visionpro_opencv_smoke_tests opencv_smoke_tests.cpp)
 target_link_libraries(visionpro_opencv_smoke_tests PRIVATE opencv_core opencv_imgproc opencv_imgcodecs visionpro_build_options)
 add_test(NAME tools.opencv_release_smoke COMMAND visionpro_opencv_smoke_tests)

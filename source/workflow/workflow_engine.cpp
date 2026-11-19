@@ -3,6 +3,7 @@
 #include <visionpro/core/runtime_id_factory.hpp>
 #include <visionpro/workflow/execution_plan.hpp>
 #include "scoped_schedule.hpp"
+#include "runtime_values.hpp"
 #include "loop_execution.hpp"
 #include "node_state_service.hpp"
 #include "observation_hub.hpp"
@@ -769,6 +770,16 @@ void start_region(Work& work, std::size_t slot, const ResolutionContext& context
                 ? std::get<BindingFailure>(resolution).diagnostic : std::get<UnavailableBinding>(resolution).diagnostic;
             run.preparation_failed(slot, std::move(diagnostic), std::move(traces));
             return;
+        }
+    }
+    if (work.resources) {
+        for (std::size_t i = 0; i < inputs.size(); ++i) {
+            auto checked = detail::validate_selected_resources(*work.resources, run.request().snapshot().solution(),
+                inputs[i].id, inputs[i].value, traces[i].sources);
+            if (auto* failure = std::get_if<Diagnostic>(&checked)) {
+                run.preparation_failed(slot, std::move(*failure), std::move(traces));
+                return;
+            }
         }
     }
     if (!group.loop) {

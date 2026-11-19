@@ -30,6 +30,9 @@ public:
     // Read-only checks for the selected execution scope, before admission.
     [[nodiscard]] virtual core::Result<std::monostate> preflight(const ExecutionPlan&) const
     { return std::monostate{}; }
+    // Check resources inside the actual value when a binding uses a runtime index.
+    [[nodiscard]] virtual core::Result<std::monostate> validate_selected_value(const Solution&, const core::DataValue&) const
+    { return std::monostate{}; }
     // Called once per configured slot after all bindings resolve.
     [[nodiscard]] virtual core::Result<std::shared_ptr<const core::ResourceLease>> acquire(
         const core::ToolExecutionConfiguration& configuration, const core::ToolResourceBinding& binding) = 0;

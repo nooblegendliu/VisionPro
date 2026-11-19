@@ -32,7 +32,7 @@ bool same_constraints(const ValueConstraints& left, const ValueConstraints& righ
 
 bool same_binding(const BindingPolicy& left, const BindingPolicy& right)
 {
-    return left.cardinality == right.cardinality && left.time == right.time
+    return left.cardinality == right.cardinality && left.time == right.time && left.allow_dynamic_index == right.allow_dynamic_index
         && std::ranges::is_permutation(left.allowed_sources, right.allowed_sources)
         && std::ranges::is_permutation(left.allowed_conversions, right.allowed_conversions);
 }

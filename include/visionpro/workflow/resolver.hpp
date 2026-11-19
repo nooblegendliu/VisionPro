@@ -43,12 +43,20 @@ struct PublicInputTrace {
     InputOrigin origin;
 };
 struct IndependentInputTrace { core::InputId input; RunIdentity run; InputOrigin origin; };
-struct GlobalReadTrace { core::VariableId variable; std::uint64_t revision; core::UpdateOrigin update_origin; };
+struct GlobalReadTrace {
+    core::VariableId variable;
+    std::uint64_t revision;
+    core::UpdateOrigin update_origin;
+    Selector selector{};
+};
 struct SourceTrace {
     std::size_t source_index;
     std::variant<ConstantTrace, ResultTrace, PublicInputTrace, GlobalReadTrace, core::ResourceReference,
         IndependentInputTrace> origin;
     std::optional<MissingReason> accepted_absence;
+    // Set on the source used to resolve a dynamic element step, even while pending.
+    std::optional<std::size_t> selector_step{};
+    std::optional<std::int64_t> index_value{};
 };
 // Preserve the complete inherited region expression, including its corrections
 // and exclusions. Geometry evaluation remains an algorithm responsibility.

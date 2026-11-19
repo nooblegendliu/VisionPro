@@ -1,4 +1,5 @@
 #include <visionpro/workflow/tool_execution.hpp>
+#include "runtime_values.hpp"
 
 #include <algorithm>
 #include <set>
@@ -119,6 +120,25 @@ Result<std::vector<InvocationResourceLease>> acquire_leases(InvocationResourcePr
 }
 } // namespace
 
+core::Result<std::monostate> detail::validate_selected_resources(const InvocationResourceProvider& provider,
+    const Solution& solution, const BindingTarget& target, const core::DataValue& value, std::span<const SourceTrace> sources)
+{
+    if (std::ranges::none_of(sources, [](const auto& trace) { return trace.selector_step.has_value(); })) {
+        return std::monostate{};
+    }
+    core::Result<std::monostate> checked;
+    try { checked = provider.validate_selected_value(solution, value); }
+    catch (...) {
+        checked = core::Diagnostic{core::ErrorCode::ExecutionBoundaryFailure, core::Severity::Error, {},
+            "Resource provider threw while validating the selected value."};
+    }
+    if (auto* failure = std::get_if<core::Diagnostic>(&checked)) {
+        if (const auto* id = std::get_if<core::InputId>(&target)) { failure->location.input = *id; }
+        else { failure->location.parameter = std::get<core::ParameterId>(target); }
+    }
+    return checked;
+}
+
 core::Result<PreparedTool> PreparedTool::create(const ConfigSnapshot& snapshot, core::WorkflowId workflow,
     core::NodeId node)
 {
@@ -215,6 +235,14 @@ InvocationPreparation PreparedTool::prepare(const ResolutionContext& context, co
     };
     std::vector<core::InvocationResourceLease> resources;
     if (provider) {
+        for (const auto& target : bindings) {
+            const auto& resolved = std::get<ResolvedBinding>(target.resolution);
+            auto checked = detail::validate_selected_resources(*provider, snapshot_.solution(), target.target, resolved.value, resolved.sources);
+            if (auto* invalid = std::get_if<core::Diagnostic>(&checked)) {
+                invalid->location.tool = fixed.tool.id;
+                return resource_failure(std::move(*invalid));
+            }
+        }
         auto acquired = acquire_leases(*provider, configuration_);
         if (auto* invalid = std::get_if<core::Diagnostic>(&acquired)) { return resource_failure(std::move(*invalid)); }
         resources = std::get<std::vector<core::InvocationResourceLease>>(std::move(acquired));

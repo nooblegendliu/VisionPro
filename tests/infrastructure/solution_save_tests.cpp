@@ -196,7 +196,11 @@ ToolRegistry registry(const std::shared_ptr<Gate>& gate, bool with_state = false
     };
     if (with_state) {
         InputDescriptor input{key<InputId>("offset"), "Offset", DataType::integer(), false, ConfigValue::integer(0)};
-        input.binding.allowed_sources = {BindingSourceKind::Constant, BindingSourceKind::GlobalRead};
+        input.binding.allowed_sources = {BindingSourceKind::Constant, BindingSourceKind::PublicInput, BindingSourceKind::GlobalRead};
+        input.binding.allow_dynamic_index = true;
+        descriptor.inputs.push_back(input);
+        input.id = key<InputId>("second");
+        input.display_name = "Second value";
         descriptor.inputs.push_back(std::move(input));
         descriptor.state = NodeStateDefinition{DataType::integer(), ConfigValue::integer(0), StateScope::SolutionSession,
             StateResetPolicy::DomainStartAndExplicit, StateCompatibilityPolicy::PreserveCompatible,
@@ -709,7 +713,11 @@ void reusable_packages()
     const auto port = key<OutputId>("byte");
     const auto variable = id<VariableId>('6');
     draft.variables.push_back({variable, "Offset", DataType::integer(), ConfigValue::integer(2)});
-    reader.bindings = {{key<InputId>("offset"), {GlobalReference{variable, {}, {}}}}};
+    const auto numbers = key<InputId>("numbers");
+    const auto index = key<InputId>("index");
+    reader.bindings = {
+        {key<InputId>("offset"), {ScopedInputReference{flow.id, group, numbers, {DynamicElementSelection{IndexGlobalReference{variable, 0, {}}}}}}},
+        {key<InputId>("second"), {ScopedInputReference{flow.id, group, numbers, {DynamicElementSelection{IndexInputReference{flow.id, group, index, {}}}}}}}};
     const auto frame = key<CoordinateSystemId>("subgraph.pixels");
     draft.coordinates.push_back({frame, CoordinateKind::Image, MeasurementUnit::Pixel, {0, 0}, {1, 0}, {0, -1}, Handedness::LeftHanded});
     auto unused = draft.coordinates.front();
@@ -717,7 +725,10 @@ void reusable_packages()
     draft.coordinates.push_back(unused);
     const InputDescriptor position{key<InputId>("origin"), "Origin", DataType::point2d(), false,
         take(ConfigValue::point2d({frame, MeasurementUnit::Pixel, 0, 0}))};
-    const PublicInterface ports{key<SchemaId>("reusable.byte"), 3, {position}, {{port, "Byte", DataType::integer(), {}}}, {}};
+    const InputDescriptor list{numbers, "Numbers", DataType::list(DataType::integer()), false,
+        take(ConfigValue::list(DataType::integer(), {ConfigValue::integer(10), ConfigValue::integer(20)}))};
+    const InputDescriptor cursor{index, "Index", DataType::integer(), false, ConfigValue::integer(0)};
+    const PublicInterface ports{key<SchemaId>("reusable.byte"), 3, {position, list, cursor}, {{port, "Byte", DataType::integer(), {}}}, {}};
     flow.nodes.push_back({group, "Read group", GroupConfiguration{ports, {child}, {{port, {flow.id, child, port, {}}}}, {}}});
     flow.entries = {group};
     flow.containment = {{group, child}};
@@ -775,8 +786,16 @@ void reusable_packages()
         && instance.outputs.front().source.node == instance_child && instance.outputs.front().source.workflow == target
         && final.layouts.front().nodes.front().node == instance_child,
         "Public Schema/version, body, exported result and layout rebase on the new owning workflow.");
-    check(std::get<GlobalReference>(find_node(imported_flow, instance_child)->bindings.front().sources.front()).variable == variable,
-        "A declared host variable remains a reference to the exact host identity.");
+    const auto& bindings = find_node(imported_flow, instance_child)->bindings;
+    const auto& outer = std::get<ScopedInputReference>(bindings[0].sources.front());
+    const auto& nested = std::get<DynamicElementSelection>(outer.selector.front()).source;
+    check(outer.workflow == target && outer.group == first.group && std::get<IndexGlobalReference>(nested).variable == variable
+        && std::get<IndexGlobalReference>(nested).required_revision == 0,
+        "A variable used only by a dynamic index remains a versioned reference to the exact host identity.");
+    const auto& second_outer = std::get<ScopedInputReference>(bindings[1].sources.front());
+    const auto& nested_input = std::get<IndexInputReference>(std::get<DynamicElementSelection>(second_outer.selector.front()).source);
+    check(second_outer.group == first.group && nested_input.workflow == target && nested_input.group == first.group && nested_input.input == index,
+        "Group input and nested index input both rebase to the destination instance.");
     imported_flow.entries = {*first.group};
     const auto saved = take(save_solution(host, final));
     check(saved.solution.resources.size() == 2 && std::get<ManagedResource>(saved.solution.resources.front().location).revision == 7,
@@ -818,7 +837,7 @@ void reusable_packages()
         [&](const auto& diagnostic) { return diagnostic.code == ErrorCode::GlobalUnavailable && diagnostic.location.variable == variable; }),
         "The definition alone does not provide a runtime global value; the failure identifies the exact missing variable.");
     const auto origin = key<SchemaId>("subgraph.test.host");
-    const std::array globals{GlobalVariableEntry{variable, DataValue::integer(19), 0,
+    const std::array globals{GlobalVariableEntry{variable, DataValue::integer(1), 0,
         ExternalUpdateOrigin{execution.engine->session(), origin}}};
     const auto request = take(RunRequest::create(execution.snapshot, WorkflowTarget{target}, {},
         {TriggerKind::Manual, origin}, {}, {}, globals));

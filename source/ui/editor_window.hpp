@@ -144,6 +144,7 @@ private:
     QAction* run_group_{};
     QAction* debug_node_{};
     QAction* cancel_run_{};
+    QAction* reset_state_{};
     QAction* run_limits_{};
     QAction* rename_{};
     QAction* new_workflow_{};

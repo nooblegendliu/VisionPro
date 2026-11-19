@@ -29,6 +29,8 @@ S6.1 已跑通双 Blob 循环。桌面可编辑循环边界、逐次查看取项
 
 S6.2 已将双 Blob 检测封装为可调用的 Group。可在桌面独立调试、以活动状态运行、导出带图像资源的子图包，并在另一份方案中作为新实例导入。[Group 样例](samples/s6-group/solution.json) · [桌面操作与 CLI 命令](docs/development.md#102-s62-group-调用与跨方案复用)
 
+S6.3 已实现整数计算与累加、动态下标绑定、五路判断分流和格式化。样例可在桌面保存后用独立 CLI 复现，也可在关闭 Qt 和 OpenCV 的配置中运行。[计算与判断样例](samples/s6-calculation/solution.json) · [复现与验收](docs/development.md#103-s63-计算与逻辑)
+
 - 已建立初始目录、开发规则及基础设计文档。
 - 已确定 C++20、Qt、OpenCV、CMake 技术栈。
 - 已建立 `visionpro_core` 静态库，包含身份、配置/运行值、工具元数据、只读图像与裁剪、几何/ROI/掩膜、资源与状态定义及局部校验、结构化诊断和 CTest。
@@ -127,7 +129,7 @@ S3.9 在 Windows x64、MSVC 19.51、CMake/CTest 4.4.0 环境完成 Release 验�
 3. 无 GUI 执行与配置往返验证。S3.1–S3.9 完成，26 项必验子范围全部通过。
 4. 无 GUI 视觉闭环。S4.1–S4.7 已完成，本轮 Release 回归 ON 97 项、OFF 81 项通过。见 [S4 验收范围](docs/s4-acceptance.md#release-回归范围)。
 5. 基础可视化界面。S5.1–S5.6 已完成，GUI/CLI 一致性、生命周期及负载测量见 [S5 验收与交接](docs/s5-acceptance.md)。
-6. S6.1 已完成循环与点集，S6.2 已实现 Group 调用、独立调试和跨方案复用。S6.3 接续计算、逻辑与格式化。[S6 实施与验收计划](docs/s6-plan.md)
+6. S6.1 已完成循环与点集，S6.2 已实现 Group 调用、独立调试和跨方案复用。S6.3 已完成计算、逻辑与格式化。下一阶段 S6.4 实现全局值、队列和按工件汇合。[S6 实施与验收计划](docs/s6-plan.md)
 
 各阶段范围与验收标准见 [requirements.md](docs/requirements.md)。
 先用内存配置、模拟工具和测试图像验证核心，再完成保存加载及真实视觉处理。

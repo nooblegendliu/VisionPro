@@ -20,7 +20,7 @@ add_test(NAME workflow.result_store COMMAND visionpro_result_store_tests result_
 
 add_executable(visionpro_resolver_tests resolver_tests.cpp)
 target_link_libraries(visionpro_resolver_tests PRIVATE visionpro_workflow visionpro_build_options)
-foreach(test_group IN ITEMS resolver_values resolver_availability resolver_isolation resolver_domains)
+foreach(test_group IN ITEMS resolver_values resolver_dynamic_indices resolver_availability resolver_isolation resolver_domains)
     add_test(NAME workflow.${test_group} COMMAND visionpro_resolver_tests ${test_group})
 endforeach()
 

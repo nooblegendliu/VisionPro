@@ -7,6 +7,8 @@
 
 #include <algorithm>
 #include <ranges>
+#include <unordered_set>
+#include <utility>
 
 namespace visionpro::ui {
 namespace {
@@ -35,7 +37,7 @@ Result<DataValue> available_output(const OutputSlot* slot)
     return issue(ErrorCode::InputUnavailable, "The selected output was not produced by this invocation.");
 }
 
-Result<ImageHandle> selected_image(const DataValue& input, const Selector& selector)
+Result<ImageHandle> selected_image(const DataValue& input, const FixedSelector& selector)
 {
     // The resolver applies these steps without implicitly unwrapping Optional values.
     const auto* selected = &input;
@@ -53,7 +55,7 @@ Result<ImageHandle> selected_image(const DataValue& input, const Selector& selec
     return frame->image;
 }
 
-Result<ImageHandle> produced_image(const RunHandle& run, const ResultTrace& trace, Selector path)
+Result<ImageHandle> produced_image(const RunHandle& run, const ResultTrace& trace, const FixedSelector& path)
 {
     if (trace.run != run.identity() || trace.reference.workflow != run.identity().workflow) {
         return issue(ErrorCode::ResultIdentityMismatch, "The recorded image comes from another run.");
@@ -73,11 +75,10 @@ Result<ImageHandle> produced_image(const RunHandle& run, const ResultTrace& trac
     }
     const auto value = available_output(source->output(*output));
     if (const auto* failure = std::get_if<Diagnostic>(&value)) { return *failure; }
-    path.insert(path.begin(), trace.reference.selector.begin(), trace.reference.selector.end());
     return selected_image(std::get<DataValue>(value), path);
 }
 
-Result<ImageHandle> fixed_image(const RunHandle& run, const InputId& input, InputOrigin origin, const Selector& selector)
+Result<ImageHandle> fixed_image(const RunHandle& run, const InputId& input, InputOrigin origin, const FixedSelector& selector)
 {
     const auto* fixed = run.request().input(input);
     if (!fixed || fixed->origin != origin) {
@@ -86,7 +87,27 @@ Result<ImageHandle> fixed_image(const RunHandle& run, const InputId& input, Inpu
     return selected_image(fixed->value, selector);
 }
 
-Result<const SourceTrace*> input_source(const RunNodeProgress& node, const Workflow& flow, const InputId& input, Selector& path)
+Result<FixedSelector> traced_selector(const Selector& selector, const RunBindingTrace& binding, std::size_t source_index)
+{
+    FixedSelector result;
+    for (std::size_t i = 0; i < selector.size(); ++i) {
+        const auto& step = selector[i];
+        if (const auto* field = std::get_if<FieldSelection>(&step)) { result.emplace_back(*field); }
+        else if (const auto* fixed = std::get_if<ElementSelection>(&step)) { result.emplace_back(*fixed); }
+        else {
+            const auto trace = std::ranges::find_if(binding.sources, [&](const SourceTrace& entry) {
+                return entry.source_index == source_index && entry.selector_step == i;
+            });
+            if (trace == binding.sources.end() || !trace->index_value || !std::in_range<std::size_t>(*trace->index_value)) {
+                return issue(ErrorCode::InvalidSelector, "The input has no recorded index for this image selector.");
+            }
+            result.emplace_back(ElementSelection{static_cast<std::size_t>(*trace->index_value)});
+        }
+    }
+    return result;
+}
+
+Result<const SourceTrace*> input_source(const RunNodeProgress& node, const Workflow& flow, const InputId& input, FixedSelector& path)
 {
     const auto binding = std::ranges::find(node.bindings, BindingTarget{input}, &RunBindingTrace::target);
     if (binding == node.bindings.end() || binding->sources.empty()) {
@@ -103,9 +124,25 @@ Result<const SourceTrace*> input_source(const RunNodeProgress& node, const Workf
         position = index->index;
         path.erase(path.begin());
     }
+    std::unordered_set<std::size_t> omitted;
     for (const auto& source : binding->sources) {
-        if (!source.accepted_absence) {
-            if (position == 0) { return &source; }
+        if (source.accepted_absence) { omitted.insert(source.source_index); }
+    }
+    for (const auto& source : binding->sources) {
+        if (!source.selector_step && !omitted.contains(source.source_index)) {
+            if (position == 0) {
+                const Selector* selector = nullptr;
+                if (const auto* result = std::get_if<ResultTrace>(&source.origin)) { selector = &result->reference.selector; }
+                if (const auto* capture = std::get_if<PublicInputTrace>(&source.origin)) { selector = &capture->reference.selector; }
+                if (const auto* global = std::get_if<GlobalReadTrace>(&source.origin)) { selector = &global->selector; }
+                if (selector) {
+                    auto fixed = traced_selector(*selector, *binding, source.source_index);
+                    if (const auto* failure = std::get_if<Diagnostic>(&fixed)) { return *failure; }
+                    const auto& steps = std::get<FixedSelector>(fixed);
+                    path.insert(path.begin(), steps.begin(), steps.end());
+                }
+                return &source;
+            }
             --position;
         }
     }
@@ -120,14 +157,22 @@ Result<ImageHandle> blob_image(const RunHandle& run, InvocationKey call)
     const auto* flow = find_workflow(run.request().snapshot().solution(), run.identity().workflow);
     if (!flow) { return issue(ErrorCode::UnknownTarget, "The image workflow is absent from the snapshot."); }
     auto input = std::get<InputId>(SchemaIdFactory::parse<InputId>("binary"));
-    Selector path;
+    FixedSelector path;
     for (std::size_t depth = 0; depth <= progress.groups.size() + progress.iterations.size(); ++depth) {
         const auto node = std::ranges::find(progress.nodes, std::optional{call}, &RunNodeProgress::invocation);
         if (node == progress.nodes.end()) { return issue(ErrorCode::InputUnavailable, "The image invocation has no recorded inputs."); }
         const auto source = input_source(*node, *flow, input, path);
         if (const auto* failure = std::get_if<Diagnostic>(&source)) { return *failure; }
         const auto& origin = std::get<const SourceTrace*>(source)->origin;
-        if (const auto* result = std::get_if<ResultTrace>(&origin)) { return produced_image(run, *result, std::move(path)); }
+        if (const auto* result = std::get_if<ResultTrace>(&origin)) { return produced_image(run, *result, path); }
+        if (const auto* global = std::get_if<GlobalReadTrace>(&origin)) {
+            const auto values = run.request().globals();
+            const auto entry = std::ranges::find(values, global->variable, &GlobalVariableEntry::variable);
+            if (entry == values.end() || entry->revision != global->revision) {
+                return issue(ErrorCode::ResultIdentityMismatch, "The recorded global image does not match the run's global snapshot.");
+            }
+            return selected_image(entry->current_value, path);
+        }
         if (const auto* fixed = std::get_if<IndependentInputTrace>(&origin)) {
             const auto* target = std::get_if<NodeTarget>(&run.request().target());
             if (!target || target->node != call.node || fixed->run != run.identity() || fixed->input != input) {
@@ -141,7 +186,6 @@ Result<ImageHandle> blob_image(const RunHandle& run, InvocationKey call)
             return issue(ErrorCode::ResultIdentityMismatch, "The recorded public image is outside this invocation's scope.");
         }
         input = capture->reference.input;
-        path.insert(path.begin(), capture->reference.selector.begin(), capture->reference.selector.end());
         if (!capture->reference.group && std::holds_alternative<WorkflowTarget>(run.request().target())) {
             return fixed_image(run, input, capture->origin, path);
         }

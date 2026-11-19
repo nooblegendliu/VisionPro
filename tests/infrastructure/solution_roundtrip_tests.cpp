@@ -361,7 +361,8 @@ void loop_roundtrip(Solution draft, const ToolRegistry& registry, const PackageD
 
 void roundtrip()
 {
-    const auto tool = counter_tool();
+    auto tool = counter_tool();
+    tool.inputs.front().binding.allow_dynamic_index = true;
     const auto factory = std::make_shared<UnusedFactory>();
     const std::array registrations{ToolRegistration{tool, {tool.schema.id, 4, 4, {}}, factory}};
     const auto registry = take(ToolRegistry::create(registrations));
@@ -387,6 +388,28 @@ void roundtrip()
         && reopened.solution().variables.at(1).initial_value == ConfigValue::integer(highest) && factory->calls == 0,
         "Both Int64 boundaries reopen exactly and configuration handling leaves the tool factory unused.");
     loop_roundtrip(original, registry, directories);
+    auto dynamic = original;
+    auto& flow = dynamic.workflows.front();
+    flow.interface.inputs.front().binding.allow_dynamic_index = true;
+    const auto group = flow.nodes.front().id;
+    const auto index = IndexOutputReference{flow.id, group, key<OutputId>("total"), {}};
+    const GlobalReference selected{uuid<VariableId>('3'), 0, {DynamicElementSelection{index}}};
+    flow.nodes.back().bindings.front().sources = {selected};
+    const auto with_index = directories.package(u8"索引选择");
+    take(write_new_solution(with_index, dynamic));
+    const auto reloaded = take(load_solution(with_index, registry));
+    const auto& reopened_flow = reloaded.solution().workflows.front();
+    check(reloaded.can_save() && reopened_flow.interface.inputs.front().binding.allow_dynamic_index
+        && !reopened.solution().workflows.front().interface.inputs.front().binding.allow_dynamic_index
+        && std::get<GlobalReference>(reopened_flow.nodes.back().bindings.front().sources.front()) == selected,
+        "Dynamic index opt-in and the index producer round-trip. An older v1 declaration retains the default policy.");
+    const auto correct = read_manifest(with_index);
+    auto newer = correct;
+    newer.insert(newer.find("\"dynamic_element\"") + std::string("\"dynamic_element\"").size(), ",\"new_index_rule\":true");
+    { std::ofstream out(with_index / "solution.json", std::ios::binary | std::ios::trunc); out << newer; }
+    const auto unknown = take(load_solution(with_index, registry));
+    check(!unknown.can_save() && std::holds_alternative<Diagnostic>(save_solution(unknown, unknown.solution()))
+        && read_manifest(with_index) == newer, "An unrecognized dynamic index policy is retained and protected from overwrite.");
 }
 
 } // namespace

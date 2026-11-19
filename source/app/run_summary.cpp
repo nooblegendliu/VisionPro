@@ -300,12 +300,37 @@ void add_run_identity(json& object, const RunIdentity& run)
     object["run"] = id_text(run.run);
 }
 
+json selection_json(const FieldSelection& field) { return {{"field", id_text(field.field)}}; }
+json selection_json(ElementSelection element) { return {{"index", element.index}}; }
+
+json selection_json(const DynamicElementSelection& element)
+{
+    auto source = std::visit(Overload{
+        [](const IndexOutputReference& ref) {
+            const auto* port = std::get_if<OutputId>(&ref.output);
+            return json{{"kind", "result"}, {"workflow", id_text(ref.workflow)}, {"node", id_text(ref.node)},
+                {"output_kind", port ? "port" : "system"},
+                {"output", port ? id_text(*port) : std::string(name(std::get<SystemField>(ref.output)))}};
+        },
+        [](const IndexInputReference& ref) {
+            return json{{"kind", "public_input"}, {"workflow", id_text(ref.workflow)}, {"group", optional_id(ref.group)},
+                {"input", id_text(ref.input)}};
+        },
+        [](const IndexGlobalReference& ref) {
+            return json{{"kind", "global"}, {"variable", id_text(ref.variable)},
+                {"required_revision", ref.required_revision ? json(std::to_string(*ref.required_revision)) : json(nullptr)}};
+        }}, element.source);
+    const auto& path = std::visit([](const auto& ref) -> const FixedSelector& { return ref.selector; }, element.source);
+    source["selector"] = array_json(path, [](const FixedSelectionStep& step) {
+        return std::visit([](const auto& part) { return selection_json(part); }, step);
+    });
+    return {{"index_source", std::move(source)}};
+}
+
 json selector_json(const Selector& selector)
 {
     return array_json(selector, [](const SelectionStep& step) {
-        return std::visit(Overload{
-            [](const FieldSelection& field) { return json{{"field", id_text(field.field)}}; },
-            [](ElementSelection element) { return json{{"index", element.index}}; }}, step);
+        return std::visit([](const auto& part) { return selection_json(part); }, step);
     });
 }
 
@@ -429,7 +454,8 @@ json source_json(const SourceTrace& source)
         },
         [](const GlobalReadTrace& trace) {
             return json{{"kind", "global"}, {"variable", id_text(trace.variable)},
-                {"revision", std::to_string(trace.revision)}, {"update_origin", update_origin_json(trace.update_origin)}};
+                {"revision", std::to_string(trace.revision)}, {"selector", selector_json(trace.selector)},
+                {"update_origin", update_origin_json(trace.update_origin)}};
         },
         [](const ResourceReference& resource) {
             auto result = resource_json(resource);
@@ -438,6 +464,8 @@ json source_json(const SourceTrace& source)
             return result;
         }}, source.origin);
     value["index"] = source.source_index;
+    if (source.selector_step) { value["selector_step"] = *source.selector_step; }
+    if (source.index_value) { value["index_value"] = std::to_string(*source.index_value); }
     value["accepted_absence"] = optional_name(source.accepted_absence);
     return value;
 }

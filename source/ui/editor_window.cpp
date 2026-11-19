@@ -390,6 +390,8 @@ void EditorWindow::refresh_actions()
     debug_node_->setEnabled(editable && selected_node && !(group && group->loop) && run_controller_->can_start());
     debug_node_->setText(group ? QStringLiteral("Debug Selected Group…") : QStringLiteral("Debug Selected Node…"));
     cancel_run_->setEnabled(!close_confirmed_ && run_controller_->can_cancel());
+    reset_state_->setEnabled(editable && selected_node && std::holds_alternative<ToolConfiguration>(selected_node->configuration)
+        && run_controller_->can_reset_state({*model_->workflow_id(), selected_node->id}));
     run_limits_->setEnabled(!close_confirmed_);
 #ifdef VISIONPRO_WITH_OPENCV
     preview_image_->setEnabled(available);

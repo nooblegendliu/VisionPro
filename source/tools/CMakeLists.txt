@@ -2,6 +2,10 @@ add_library(visionpro_list_tools STATIC list_item.cpp list_item.hpp)
 target_include_directories(visionpro_list_tools PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>")
 target_link_libraries(visionpro_list_tools PUBLIC visionpro_core PRIVATE visionpro_build_options)
 
+add_library(visionpro_logic_tools STATIC logic_tools.cpp logic_tools.hpp vision/integer_range.cpp vision/integer_range.hpp)
+target_include_directories(visionpro_logic_tools PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>")
+target_link_libraries(visionpro_logic_tools PUBLIC visionpro_core PRIVATE visionpro_build_options)
+
 add_library(visionpro_simulation_tools STATIC simulation.cpp simulation.hpp)
 target_include_directories(visionpro_simulation_tools PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>")
 target_link_libraries(visionpro_simulation_tools
@@ -18,11 +22,10 @@ if(VISIONPRO_WITH_OPENCV)
         vision/roi_mask.cpp vision/roi_mask.hpp
         vision/threshold.cpp vision/threshold.hpp
         vision/blob.cpp vision/blob.hpp
-        vision/integer_range.cpp vision/integer_range.hpp
     )
     target_include_directories(visionpro_vision_tools PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>")
     target_link_libraries(visionpro_vision_tools
         PUBLIC visionpro_core
-        PRIVATE opencv_core opencv_imgproc opencv_imgcodecs visionpro_infrastructure visionpro_build_options
+        PRIVATE visionpro_logic_tools opencv_core opencv_imgproc opencv_imgcodecs visionpro_infrastructure visionpro_build_options
     )
 endif()

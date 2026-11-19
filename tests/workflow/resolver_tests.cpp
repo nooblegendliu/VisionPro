@@ -1,4 +1,5 @@
 #include <visionpro/workflow/resolver.hpp>
+#include <visionpro/workflow/copy.hpp>
 #include <visionpro/core/id_factory.hpp>
 #include <visionpro/core/runtime_id_factory.hpp>
 #include <visionpro/core/schema_id_factory.hpp>
@@ -129,6 +130,117 @@ void failure(const BindingResolution& value, std::string_view description)
     if (result) {
         check(result->diagnostic.severity == Severity::Error && !result->diagnostic.message.empty(), "binding failure contains an explained diagnostic");
     }
+}
+
+void resolver_dynamic_indices()
+{
+    const auto integer_type = DataType::integer();
+    const auto list = DataType::list(integer_type);
+    auto f = fixture(list);
+    const auto list_producer = uuid<NodeId>(1), index_producer = uuid<NodeId>(3);
+    const auto index = IndexOutputReference{f.flow().id, index_producer, output_id(), {ElementSelection{0}}};
+    auto& source = std::get<OutputReference>(f.consumer().bindings.front().sources.front());
+    source.selector = {DynamicElementSelection{index}};
+    const auto diagnostic = [&](ErrorCode code) {
+        const auto checked = validate_solution(f.solution, f.tools);
+        const auto* failure = std::get_if<Diagnostic>(&checked);
+        check(failure && failure->code == code && failure->location.input == input_id(), "Index errors identify the consuming input.");
+    };
+    diagnostic(ErrorCode::DisallowedBindingSource);
+    f.input().binding.allow_dynamic_index = true;
+    const auto validated = take(validate_solution(f.solution, f.tools));
+    const auto& dependencies = validated.scopes.front().data;
+    check(dependencies.size() == 2 && dependencies[0].producer == list_producer && !dependencies[0].selector_step
+        && dependencies[1].producer == index_producer && dependencies[1].selector_step == 0,
+        "List and index producers are dependencies of the same binding.");
+    auto& edge = f.flow().control_links.back();
+    std::swap(edge.source, edge.target);
+    f.flow().entries = {list_producer};
+    diagnostic(ErrorCode::ControlOrderConflict);
+    std::swap(edge.source, edge.target);
+    f.flow().entries.push_back(index_producer);
+    auto& selected = std::get<DynamicElementSelection>(source.selector.front());
+    selected.source = IndexOutputReference{f.flow().id, index_producer, output_id(), {}};
+    diagnostic(ErrorCode::TypeMismatch);
+    selected.source = IndexInputReference{f.flow().id, index_producer, input_id(), {}};
+    diagnostic(ErrorCode::ScopeViolation);
+    selected.source = index;
+
+    const auto numbers = [&](std::initializer_list<std::int64_t> values) {
+        std::vector<DataValue> elements;
+        for (auto value : values) { elements.push_back(DataValue::integer(value)); }
+        return take(DataValue::list(integer_type, elements));
+    };
+    Harness run(f);
+    run.put(numbers({6, 9}));
+    const auto pending = run.resolve();
+    const auto* waiting = std::get_if<PendingBinding>(&pending);
+    check(waiting && waiting->sources.size() == 2 && waiting->sources[1].selector_step == 0
+        && !waiting->sources[1].index_value, "A pending index retains both sources and no fabricated index.");
+    run.put(numbers({1}), 3);
+    const auto ready = run.resolve();
+    integer(ready, 9, "Index 1 selects 9 from [6,9].");
+    if (const auto* values = std::get_if<ResolvedBinding>(&ready)) {
+        const auto& traces = values->sources;
+        check(traces.size() == 2 && !traces[0].selector_step && traces[1].selector_step == 0 && traces[1].index_value == 1
+            && std::get<ResultTrace>(traces[0].origin).invocation == number<InvocationId>(1)
+            && std::get<ResultTrace>(traces[1].origin).invocation == number<InvocationId>(3),
+            "List and selected index trace their own exact producer invocations.");
+    }
+    for (const auto value : {2, -1}) {
+        Harness bounds(f);
+        bounds.put(numbers({6, 9})); bounds.put(numbers({value}), 3);
+        const auto failed = bounds.resolve();
+        const auto* error = std::get_if<BindingFailure>(&failed);
+        check(error && error->diagnostic.code == ErrorCode::IndexOutOfRange && error->sources.back().index_value == value,
+            "Positive and negative out-of-range dynamic indices fail with the actual index recorded.");
+    }
+    Harness failed_index(f);
+    failed_index.put(NotProduced{OutputAbsenceReason::Failed}, 3, ExecutionStatus::Failed);
+    const auto failed = failed_index.resolve();
+    const auto* error = std::get_if<BindingFailure>(&failed);
+    check(error && error->diagnostic.code == ErrorCode::SourceFailed && error->causes.front().location.node == index_producer,
+        "An index producer failure propagates with its cause even if the list is pending.");
+
+    const auto copied = take(clone_solution(f.solution, ExternalReferencePolicy::Reject));
+    const auto& flow = copied.solution.workflows.front();
+    const auto& bound = find_node(flow, copied.identities.nodes.at(f.consumer().id))->bindings.front().sources.front();
+    const auto& remapped = std::get<OutputReference>(bound);
+    const auto& nested = std::get<IndexOutputReference>(std::get<DynamicElementSelection>(remapped.selector.front()).source);
+    check(remapped.workflow == flow.id && remapped.node == copied.identities.nodes.at(list_producer)
+        && nested.workflow == flow.id && nested.node == copied.identities.nodes.at(index_producer) && nested.selector == index.selector,
+        "Solution copy remaps both producer identities and preserves the index subpath.");
+    check(std::holds_alternative<Diagnostic>(clone_subgraph(f.flow(), std::array{list_producer, f.consumer().id},
+        ExternalReferencePolicy::Reject)), "A subgraph cannot silently retain an external index producer.");
+
+    const auto position = key<InputId>("position");
+    f.flow().interface.inputs = {{position, "Position", integer_type}};
+    selected.source = IndexInputReference{f.flow().id, {}, position, {}};
+    Harness inputs(f);
+    inputs.context.scopes.front().inputs.push_back({position, DataValue::integer(0)});
+    inputs.put(numbers({6, 9}));
+    const auto from_input = inputs.resolve();
+    integer(from_input, 6, "A public input may supply a current index.");
+    if (const auto* values = std::get_if<ResolvedBinding>(&from_input)) {
+        check(std::holds_alternative<PublicInputTrace>(values->sources.back().origin), "The index records its public input.");
+    }
+    f.flow().interface.inputs.clear();
+    const auto variable = uuid<VariableId>(1);
+    f.solution.variables.push_back({variable, "Position", integer_type, ConfigValue::integer(0)});
+    selected.source = IndexGlobalReference{variable, 5, {}};
+    Harness globals(f);
+    globals.put(numbers({6, 9}));
+    globals.context.globals.push_back({variable, DataValue::integer(1), 5,
+        ExternalUpdateOrigin{globals.context.run.snapshot.session, key<SchemaId>("resolver.test")}});
+    const auto from_global = globals.resolve();
+    integer(from_global, 9, "A versioned global may supply the index.");
+    if (const auto* values = std::get_if<ResolvedBinding>(&from_global)) {
+        check(std::get<GlobalReadTrace>(values->sources.back().origin).revision == 5, "The index records its exact read revision.");
+    }
+    globals.context.globals.front().revision = 6;
+    const auto stale = globals.resolve();
+    check(std::get<BindingFailure>(stale).diagnostic.code == ErrorCode::GlobalRevisionMismatch,
+        "A stale index cannot fall back to the configured initial value.");
 }
 
 void resolver_values()
@@ -624,6 +736,7 @@ int main(int argc, char** argv)
     const std::string_view group = argv[1];
     try {
         if (group == "resolver_values") { resolver_values(); }
+        else if (group == "resolver_dynamic_indices") { resolver_dynamic_indices(); }
         else if (group == "resolver_availability") { resolver_availability(); }
         else if (group == "resolver_isolation") { resolver_isolation(); }
         else if (group == "resolver_domains") { resolver_domains(); }

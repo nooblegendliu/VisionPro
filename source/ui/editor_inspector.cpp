@@ -29,6 +29,7 @@
 
 #include <algorithm>
 #include <charconv>
+#include <functional>
 #include <exception>
 #include <limits>
 #include <memory>
@@ -209,6 +210,11 @@ QString constant_text(const ConfigValue& value)
     if (const auto* real = value.as_float64()) { return QString::number(*real, 'g', 17); }
     if (const auto* string = value.as_string()) { return qtext(*string); }
     if (const auto* member = value.as_enum()) { return id_text(*member); }
+    if (const auto* list = value.elements(); list && value.type().element_type()->kind() == TypeKind::Int64) {
+        QStringList numbers;
+        for (const auto& item : *list) { numbers.append(QString::number(*item.as_int64())); }
+        return QStringLiteral("[") + numbers.join(QStringLiteral(", ")) + QStringLiteral("]");
+    }
     if (const auto* point = value.as_point2d()) {
         return QStringLiteral("%1, %2 (%3)").arg(QString::number(point->x, 'g', 17),
             QString::number(point->y, 'g', 17), id_text(point->coordinate_frame));
@@ -220,12 +226,23 @@ QString constant_text(const ConfigValue& value)
     return type_text(value.type());
 }
 
-QString selector_text(const Selector& selector)
+QString source_text(const Solution& solution, const BindingSource& source);
+
+QString selector_text(const Selector& selector, const Solution* solution = nullptr, std::vector<IndexSource>* indices = nullptr)
 {
     QStringList parts;
     for (const auto& step : selector) {
         if (const auto* field = std::get_if<FieldSelection>(&step)) { parts.append(id_text(field->field)); }
-        else { parts.append(QString::number(std::get<ElementSelection>(step).index)); }
+        else if (const auto* fixed = std::get_if<ElementSelection>(&step)) { parts.append(QString::number(fixed->index)); }
+        else {
+            const auto& index = std::get<DynamicElementSelection>(step).source;
+            if (indices) {
+                indices->push_back(index);
+                parts.append(QStringLiteral("@%1").arg(indices->size()));
+            } else if (solution) {
+                parts.append(QStringLiteral("[%1]").arg(source_text(*solution, index_binding_source(index))));
+            }
+        }
     }
     return parts.join(u'/');
 }
@@ -235,7 +252,7 @@ struct Selection {
     Selector path;
 };
 
-Result<Selection> parse_selector(DataType type, const QString& path)
+Result<Selection> parse_selector(DataType type, const QString& path, std::span<const IndexSource> indices = {})
 {
     Selector selected;
     if (path.isEmpty()) { return Selection{std::move(type), std::move(selected)}; }
@@ -250,13 +267,17 @@ Result<Selection> parse_selector(DataType type, const QString& path)
             selected.emplace_back(FieldSelection{field->id});
             type = DataType{field->type};
         } else if (type.kind() == TypeKind::List) {
-            const auto bytes = utf8(part);
+            const bool dynamic = part.startsWith(u'@');
+            const auto bytes = utf8(dynamic ? part.mid(1) : part);
             std::size_t index = 0;
             const auto [end, status] = std::from_chars(bytes.data(), bytes.data() + bytes.size(), index);
             if (status != std::errc{} || end != bytes.data() + bytes.size()) {
                 return error(ErrorCode::InvalidSelector, "A List step requires a zero-based unsigned index.");
             }
-            selected.emplace_back(ElementSelection{index});
+            if (dynamic) {
+                if (index == 0 || index > indices.size()) { return error(ErrorCode::InvalidSelector, "Choose a source for this index."); }
+                selected.emplace_back(DynamicElementSelection{indices[index - 1]});
+            } else { selected.emplace_back(ElementSelection{index}); }
             type = DataType{*type.element_type()};
         } else {
             return error(ErrorCode::InvalidSelector, "A selector can continue only through a Record or List.");
@@ -282,9 +303,9 @@ QString output_text(const std::variant<OutputId, SystemField>& output)
     return system_text(std::get<SystemField>(output));
 }
 
-QString reference_text(const QString& prefix, const Selector& selector)
+QString reference_text(const Solution& solution, const QString& prefix, const Selector& selector)
 {
-    return selector.empty() ? prefix : QStringLiteral("%1 / %2").arg(prefix, selector_text(selector));
+    return selector.empty() ? prefix : QStringLiteral("%1 / %2").arg(prefix, selector_text(selector, &solution));
 }
 
 QString source_text(const Solution& solution, const BindingSource& source)
@@ -297,10 +318,10 @@ QString source_text(const Solution& solution, const BindingSource& source)
             const auto* flow = find_workflow(solution, value.workflow);
             const auto* producer = flow ? find_node(*flow, value.node) : nullptr;
             const auto name = producer ? qtext(producer->name) : QStringLiteral("Missing node");
-            return reference_text(QStringLiteral("%1 [%2] → %3").arg(name, short_id(value.node), output_text(value.output)),
+            return reference_text(solution, QStringLiteral("%1 [%2] → %3").arg(name, short_id(value.node), output_text(value.output)),
                 value.selector);
         } else if constexpr (std::is_same_v<Value, ScopedInputReference>) {
-            return reference_text(QStringLiteral("Public input %1").arg(id_text(value.input)), value.selector);
+            return reference_text(solution, QStringLiteral("Public input %1").arg(id_text(value.input)), value.selector);
         } else if constexpr (std::is_same_v<Value, ResourceReference>) {
             const auto found = std::ranges::find(solution.resources, value.id, &ResourceDefinition::id);
             const auto name = found == solution.resources.end() ? QStringLiteral("Missing resource") : qtext(found->name);
@@ -308,7 +329,7 @@ QString source_text(const Solution& solution, const BindingSource& source)
         } else {
             const auto found = std::ranges::find(solution.variables, value.variable, &GlobalVariableDefinition::id);
             const auto name = found == solution.variables.end() ? QStringLiteral("Missing variable") : qtext(found->name);
-            return reference_text(QStringLiteral("%1 [%2]").arg(name, short_id(value.variable)), value.selector);
+            return reference_text(solution, QStringLiteral("%1 [%2]").arg(name, short_id(value.variable)), value.selector);
         }
     }, source);
 }
@@ -374,9 +395,11 @@ bool reachable_type(const DataType& type, const Match& match)
     });
 }
 
+using PickIndex = std::function<std::optional<IndexSource>(QWidget*, const IndexSource*)>;
+
 template<class Validate>
 std::optional<TypedSource> choose_reference(QWidget* parent, Choices<TypedSource> choices,
-    const BindingSource* current, const Validate& validate)
+    const BindingSource* current, const Validate& validate, const PickIndex& pick_index = {}, const Solution* solution = nullptr)
 {
     std::erase_if(choices, [&](const auto& choice) {
         return !reachable_type(choice.second.type, [&](const DataType& type) {
@@ -400,11 +423,54 @@ std::optional<TypedSource> choose_reference(QWidget* parent, Choices<TypedSource
     auto* selector = new QLineEdit(&dialog);
     selector->setObjectName(QStringLiteral("bindingSelector"));
     selector->setPlaceholderText(QStringLiteral("Example: 0/area_pixels"));
-    selector->setToolTip(QStringLiteral("Separate exact Record field IDs and zero-based List indices with /."));
+    selector->setToolTip(pick_index
+        ? QStringLiteral("Separate field IDs and zero-based indices with /. Place the cursor on an index to choose its source.")
+        : QStringLiteral("Separate exact Record field IDs and zero-based List indices with /."));
     auto* details = new QLabel(&dialog);
     details->setWordWrap(true);
     form->addRow(QStringLiteral("Source"), source);
     form->addRow(QStringLiteral("Selector"), selector);
+    std::vector<IndexSource> indices;
+    auto* index_labels = new QLabel(&dialog);
+    index_labels->setWordWrap(true);
+    index_labels->setVisible(false);
+    const auto show_indices = [&] {
+        QStringList labels;
+        if (solution) {
+            for (std::size_t i = 0; i < indices.size(); ++i) {
+                labels.append(QStringLiteral("@%1 = %2").arg(i + 1).arg(source_text(*solution, index_binding_source(indices[i]))));
+            }
+        }
+        index_labels->setText(labels.join(u'\n'));
+        index_labels->setVisible(!labels.empty());
+    };
+    QPushButton* index_button = nullptr;
+    if (pick_index) {
+        index_button = action(&dialog, QStringLiteral("Choose index source…"), "chooseIndexSource", [&] {
+            auto parts = selector->text().split(u'/');
+            const auto position = selector->text().left(selector->cursorPosition()).count(u'/');
+            auto& part = parts[position];
+            bool ok = false;
+            const auto prior = part.startsWith(u'@') ? part.mid(1).toULongLong(&ok) : 0;
+            const auto* existing = ok && prior > 0 && prior <= indices.size() ? &indices[prior - 1] : nullptr;
+            auto selected = pick_index(&dialog, existing);
+            if (!selected) { return; }
+            if (existing) {
+                indices[prior - 1] = std::move(*selected);
+                show_indices();
+                return;
+            }
+            indices.push_back(std::move(*selected));
+            const auto token = QStringLiteral("@%1").arg(indices.size());
+            (void)part.toULongLong(&ok);
+            if (part.isEmpty() || ok || part.startsWith(u'@')) { part = token; }
+            else { parts.insert(position + 1, token); }
+            selector->setText(parts.join(u'/'));
+            show_indices();
+        });
+        form->addRow(index_button);
+    }
+    form->addRow(index_labels);
     form->addRow(details);
     layout->addLayout(form);
 
@@ -413,6 +479,11 @@ std::optional<TypedSource> choose_reference(QWidget* parent, Choices<TypedSource
         const bool composite = type.kind() == TypeKind::List || type.kind() == TypeKind::Record;
         selector->setEnabled(composite);
         selector->clear();
+        indices.clear();
+        show_indices();
+        if (index_button) {
+            index_button->setEnabled(reachable_type(type, [](const DataType& value) { return value.kind() == TypeKind::List; }));
+        }
         if (!composite) { details->clear(); return; }
         const auto& listed = type.kind() == TypeKind::List ? *type.element_type() : type;
         QStringList fields;
@@ -429,7 +500,8 @@ std::optional<TypedSource> choose_reference(QWidget* parent, Choices<TypedSource
         if (found != choices.end()) {
             source->setCurrentIndex(static_cast<int>(found - choices.begin()));
             show_schema();
-            selector->setText(selector_text(source_selector(*current)));
+            selector->setText(selector_text(source_selector(*current), nullptr, &indices));
+            show_indices();
         } else { show_schema(); }
     } else { show_schema(); }
 
@@ -439,7 +511,7 @@ std::optional<TypedSource> choose_reference(QWidget* parent, Choices<TypedSource
     QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, [&] {
         guarded(&dialog, [&] {
             auto selected = choices[static_cast<std::size_t>(source->currentIndex())].second;
-            auto parsed = parse_selector(selected.type, selector->text());
+            auto parsed = parse_selector(selected.type, selector->text(), pick_index ? std::span<const IndexSource>(indices) : std::span<const IndexSource>{});
             if (const auto* failure = std::get_if<Diagnostic>(&parsed)) { warn(&dialog, qtext(failure->message)); return; }
             auto path = std::get<Selection>(std::move(parsed));
             if (const auto checked = validate(source_kind(selected.source), path.type, selected.semantics);
@@ -531,6 +603,33 @@ std::optional<ConfigValue> edit_constant(QWidget* owner, const RoiEditContext& c
     if (prior && prior->type() != type) { prior = nullptr; }
     const auto initial = prior ? constant_text(*prior) : QString{};
     switch (type.kind()) {
+    case TypeKind::List: {
+        if (type.element_type()->kind() != TypeKind::Int64) {
+            warn(owner, QStringLiteral("Choose a typed source for this list."));
+            return std::nullopt;
+        }
+        QInputDialog dialog(owner);
+        dialog.setObjectName(QStringLiteral("integerListEditor"));
+        dialog.setWindowTitle(QStringLiteral("Integer list"));
+        dialog.setLabelText(QStringLiteral("Comma-separated Int64 values in order (empty list: [])"));
+        dialog.setTextValue(prior ? constant_text(*prior) : QStringLiteral("[]"));
+        while (dialog.exec() == QDialog::Accepted) {
+            auto text = dialog.textValue().trimmed();
+            if (text.startsWith(u'[') && text.endsWith(u']')) { text = text.mid(1, text.size() - 2).trimmed(); }
+            std::vector<ConfigValue> elements;
+            bool valid = true;
+            if (!text.isEmpty()) {
+                for (const auto& token : text.split(u',')) {
+                    const auto value = token.trimmed().toLongLong(&valid);
+                    if (!valid) { break; }
+                    elements.push_back(ConfigValue::integer(value));
+                }
+            }
+            if (valid) { return constant_result(owner, ConfigValue::list(DataType::integer(), elements)); }
+            warn(&dialog, QStringLiteral("Each comma-separated item must be a signed 64-bit integer."));
+        }
+        return std::nullopt;
+    }
     case TypeKind::Bool: {
         const Choices<bool> values{{QStringLiteral("False"), false}, {QStringLiteral("True"), true}};
         const auto value = choose(owner, QStringLiteral("Constant"), QStringLiteral("Value"), values,
@@ -662,13 +761,39 @@ std::optional<BindingSource> edit_source(QWidget* owner, const RoiEditContext& c
         : choose(owner, QStringLiteral("Binding source"), QStringLiteral("Source kind"), kinds, previous_kind);
     if (!kind) { return std::nullopt; }
     if (*kind != BindingSourceKind::Constant) {
+        PickIndex pick_index;
+        if (target.binding.allow_dynamic_index && target.binding.time == BindingTime::BeforeInvocation) {
+            pick_index = [&](QWidget* picker, const IndexSource* prior) -> std::optional<IndexSource> {
+                const auto current_index = prior ? std::optional{index_binding_source(*prior)} : std::nullopt;
+                Choices<TypedSource> choices;
+                for (const auto allowed : target.binding.allowed_sources) {
+                    if (allowed != BindingSourceKind::PublicInput && allowed != BindingSourceKind::RunOutput
+                        && allowed != BindingSourceKind::GlobalRead) { continue; }
+                    auto candidates = binding_choices(context.solution, *context.workflow, context.node->id,
+                        context.registry, allowed, current_index ? &*current_index : nullptr);
+                    for (auto& candidate : candidates) {
+                        candidate.first = kind_text(allowed) + QStringLiteral(" • ") + candidate.first;
+                        choices.push_back(std::move(candidate));
+                    }
+                }
+                auto chosen = choose_reference(picker, std::move(choices), current_index ? &*current_index : nullptr,
+                    [](BindingSourceKind, const DataType& type, const ValueSemantics&) -> Check {
+                        if (type.kind() != TypeKind::Int64) { return error(ErrorCode::TypeMismatch, "An index source must select an Int64 value."); }
+                        return std::monostate{};
+                    });
+                if (!chosen) { return std::nullopt; }
+                auto result = make_index_source(chosen->source);
+                if (const auto* issue = std::get_if<Diagnostic>(&result)) { warn(picker, qtext(issue->message)); return std::nullopt; }
+                return std::get<IndexSource>(std::move(result));
+            };
+        }
         auto source = choose_reference(owner, binding_choices(context.solution, *context.workflow, context.node->id,
             context.registry, *kind, current), current,
             [&](BindingSourceKind selected, const DataType& type, const ValueSemantics& semantics) -> Check {
                 const auto checked = validate_binding(target, selected, type, conversion);
                 if (const auto* failure = std::get_if<Diagnostic>(&checked)) { return *failure; }
                 return check_semantics(semantics, target.semantics);
-            });
+            }, pick_index, &context.solution);
         return source ? std::optional<BindingSource>{std::move(source->source)} : std::nullopt;
     }
 

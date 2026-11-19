@@ -457,10 +457,11 @@ private Q_SLOTS:
     void compares_saved_s4_workflows();
     void compares_saved_blob_loop();
     void imports_and_runs_blob_groups();
+    void reproduces_saved_calculations();
 };
 
 namespace {
-json complete_editor_run(EditorWindow& window, const char* command, std::optional<int> threshold = {})
+json complete_editor_run(EditorWindow& window, const char* command, std::optional<int> threshold = {}, bool accept_defaults = false)
 {
     auto* controller = window.findChild<RunController*>();
     require(controller && QTest::qWaitFor([&] { return controller->can_start(); }, 5000), "Editor still busy.");
@@ -468,15 +469,18 @@ json complete_editor_run(EditorWindow& window, const char* command, std::optiona
     bool accepted = false;
     QTimer fill_dialog;
     fill_dialog.setSingleShot(true);
-    if (threshold) {
+    if (threshold || accept_defaults) {
         QObject::connect(&fill_dialog, &QTimer::timeout, [&] {
             auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
             if (!dialog) { return; }
-            auto* mode = dialog->findChild<QComboBox*>(QStringLiteral("runInputMode.threshold"));
-            auto* value = dialog->findChild<QLineEdit*>(QStringLiteral("runInputValue.threshold"));
-            if (!mode || !value || !ok_button(*dialog)) { dialog->reject(); return; }
-            mode->setCurrentIndex(1);
-            value->setText(QString::number(*threshold));
+            if (!ok_button(*dialog)) { dialog->reject(); return; }
+            if (threshold) {
+                auto* mode = dialog->findChild<QComboBox*>(QStringLiteral("runInputMode.threshold"));
+                auto* value = dialog->findChild<QLineEdit*>(QStringLiteral("runInputValue.threshold"));
+                if (!mode || !value) { dialog->reject(); return; }
+                mode->setCurrentIndex(1);
+                value->setText(QString::number(*threshold));
+            }
             ok_button(*dialog)->click();
             accepted = dialog->result() == QDialog::Accepted;
             if (!accepted) { dialog->reject(); }
@@ -484,7 +488,7 @@ json complete_editor_run(EditorWindow& window, const char* command, std::optiona
         fill_dialog.start(0);
     }
     action(window, command).trigger();
-    require(!threshold || accepted, "The Group did not accept its public threshold.");
+    require(!(threshold || accept_defaults) || accepted, "The editor did not accept the public inputs.");
     require(QTest::qWaitFor([&] { return controller->can_start() && controller->runs().size() == previous + 1; }, 8000),
         "The editor did not finish a new run: " + window.statusBar()->currentMessage().toStdString());
     const auto run = controller->runs().back();
@@ -609,6 +613,41 @@ void AcceptanceParityTests::imports_and_runs_blob_groups()
         const auto subsequent = complete_editor_run(window, "runWorkflow");
         check_blob_group(subsequent, a, 3);
         check_blob_group(subsequent, b, 2);
+    } catch (const std::exception& failure) { QFAIL(failure.what()); }
+}
+
+void AcceptanceParityTests::reproduces_saved_calculations()
+{
+    try {
+        QTemporaryDir scratch;
+        require(scratch.isValid(), "Temporary directory unavailable.");
+        const fs::path sample(QString::fromUtf8(VISIONPRO_S63_DIRECTORY).toStdU16String());
+        const auto package = fs::path(scratch.path().toStdU16String()) / "saved calculations";
+        const auto registry = take(app::make_tool_registry());
+        const auto original = take(load_solution(sample, registry));
+        EditorWindow window(original.solution(), registry);
+        window.show();
+        window.open_document(sample);
+        wait_for_file(window);
+        window.transfer_document(package, SolutionTransfer::SaveAs);
+        wait_for_file(window);
+        window.open_document(package);
+        wait_for_file(window);
+        for (const auto& flow : original.solution().workflows) {
+            require(scene(window).select_workflow(flow.id), "Could not select the reloaded workflow.");
+            const auto desktop = complete_editor_run(window, "runWorkflow", {}, true);
+            const auto cli = run_cli(package, flow.id);
+            require(cli.at("status") == "Succeeded" && desktop.at("status") == cli.at("status")
+                && desktop.at("revision") == cli.at("revision") && desktop.at("session") != cli.at("session"),
+                "Both processes must complete the same saved workflow revision.");
+            for (const auto& node : flow.nodes) {
+                const auto& a = named(desktop.at("nodes"), "id", node.id.to_string());
+                const auto& b = named(cli.at("nodes"), "id", node.id.to_string());
+                require(a.at("status") == b.at("status") && a.at("judgement") == b.at("judgement")
+                    && a.at("outputs") == b.at("outputs") && a.at("selected_outputs") == b.at("selected_outputs"),
+                    "Desktop and CLI disagree at " + node.name);
+            }
+        }
     } catch (const std::exception& failure) { QFAIL(failure.what()); }
 }
 

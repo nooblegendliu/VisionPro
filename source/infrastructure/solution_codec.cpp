@@ -60,15 +60,21 @@ using namespace workflow;
 constexpr std::string_view solution_format = "visionpro.solution";
 constexpr std::uint32_t supported_format_version = 1;
 
+Json encode_binding_source(const BindingSource& source);
+IndexSource decode_index_source(const Reader& reader);
+
 Json encode_selection(const SelectionStep& step)
 {
     if (const auto* field = std::get_if<FieldSelection>(&step)) {
         return {{"kind", "field"}, {"field", write_id(field->field)}};
     }
-    return {{"kind", "element"}, {"index", std::to_string(std::get<ElementSelection>(step).index)}};
+    if (const auto* element = std::get_if<ElementSelection>(&step)) {
+        return {{"kind", "element"}, {"index", std::to_string(element->index)}};
+    }
+    return {{"kind", "dynamic_element"}, {"source", encode_binding_source(index_binding_source(std::get<DynamicElementSelection>(step).source))}};
 }
 
-SelectionStep decode_selection(const Reader& reader)
+template<class Step> Step decode_selection(const Reader& reader)
 {
     const auto kind = reader.field("kind");
     if (kind.text() == "field") {
@@ -78,6 +84,12 @@ SelectionStep decode_selection(const Reader& reader)
     if (kind.text() == "element") {
         reader.object({"kind", "index"});
         return ElementSelection{reader.field("index").size_value()};
+    }
+    if constexpr (std::is_same_v<Step, SelectionStep>) {
+        if (kind.text() == "dynamic_element") {
+            reader.object({"kind", "source"});
+            return DynamicElementSelection{decode_index_source(reader.field("source"))};
+        }
     }
     kind.fail(ErrorCode::UnsupportedSolutionContent, "Unknown selector kind.");
 }
@@ -105,11 +117,11 @@ std::variant<OutputId, SystemField> decode_output_slot(const Reader& reader)
     kind.fail(ErrorCode::UnsupportedSolutionContent, "Unknown output reference kind.");
 }
 
-OutputReference decode_output_reference(const Reader& reader)
+template<class Step = SelectionStep> OutputReferenceWith<std::vector<Step>> decode_output_reference(const Reader& reader)
 {
     reader.object({"workflow", "node", "output", "selector"});
     return {read_id<WorkflowId>(reader.field("workflow")), read_id<NodeId>(reader.field("node")),
-        decode_output_slot(reader.field("output")), read_array<SelectionStep>(reader.field("selector"), decode_selection)};
+        decode_output_slot(reader.field("output")), read_array<Step>(reader.field("selector"), decode_selection<Step>)};
 }
 
 Json encode_scoped_input(const ScopedInputReference& reference)
@@ -118,11 +130,11 @@ Json encode_scoped_input(const ScopedInputReference& reference)
         {"input", write_id(reference.input)}, {"selector", write_array(reference.selector, encode_selection)}};
 }
 
-ScopedInputReference decode_scoped_input(const Reader& reader)
+template<class Step = SelectionStep> ScopedInputReferenceWith<std::vector<Step>> decode_scoped_input(const Reader& reader)
 {
     reader.object({"workflow", "group", "input", "selector"});
     return {read_id<WorkflowId>(reader.field("workflow")), read_optional<NodeId>(reader.field("group"), read_id<NodeId>),
-        read_id<InputId>(reader.field("input")), read_array<SelectionStep>(reader.field("selector"), decode_selection)};
+        read_id<InputId>(reader.field("input")), read_array<Step>(reader.field("selector"), decode_selection<Step>)};
 }
 
 Json encode_global_reference(const GlobalReference& reference)
@@ -132,12 +144,25 @@ Json encode_global_reference(const GlobalReference& reference)
         {"selector", write_array(reference.selector, encode_selection)}};
 }
 
-GlobalReference decode_global_reference(const Reader& reader)
+template<class Step = SelectionStep> GlobalReferenceWith<std::vector<Step>> decode_global_reference(const Reader& reader)
 {
     reader.object({"variable", "required_revision", "selector"});
     return {read_id<VariableId>(reader.field("variable")),
         read_optional<std::uint64_t>(reader.field("required_revision"), [](const Reader& revision) { return revision.u64(); }),
-        read_array<SelectionStep>(reader.field("selector"), decode_selection)};
+        read_array<Step>(reader.field("selector"), decode_selection<Step>)};
+}
+
+IndexSource decode_index_source(const Reader& reader)
+{
+    reader.object({"kind", "value"});
+    const auto kind = reader.field("kind");
+    const auto value = reader.field("value");
+    switch (read_enum<BindingSourceKind>(kind)) {
+    case BindingSourceKind::RunOutput: return decode_output_reference<FixedSelectionStep>(value);
+    case BindingSourceKind::PublicInput: return decode_scoped_input<FixedSelectionStep>(value);
+    case BindingSourceKind::GlobalRead: return decode_global_reference<FixedSelectionStep>(value);
+    default: kind.fail(ErrorCode::InvalidBinding, "Dynamic index requires an output, public input or global reference.");
+    }
 }
 
 Json encode_binding_source(const BindingSource& source)
@@ -202,17 +227,20 @@ Binding decode_binding(const Reader& reader)
 
 Json encode_binding_policy(const BindingPolicy& policy)
 {
-    return {{"allowed_sources", write_array(policy.allowed_sources, write_enum<BindingSourceKind>)},
+    Json result{{"allowed_sources", write_array(policy.allowed_sources, write_enum<BindingSourceKind>)},
         {"cardinality", write_enum(policy.cardinality)}, {"time", write_enum(policy.time)},
         {"allowed_conversions", write_array(policy.allowed_conversions, write_enum<ConversionKind>)}};
+    if (policy.allow_dynamic_index) { result["allow_dynamic_index"] = true; }
+    return result;
 }
 
 BindingPolicy decode_binding_policy(const Reader& reader)
 {
-    reader.object({"allowed_sources", "cardinality", "time", "allowed_conversions"});
+    reader.object({"allowed_sources", "cardinality", "time", "allowed_conversions", "allow_dynamic_index"});
     return {read_array<BindingSourceKind>(reader.field("allowed_sources"), read_enum<BindingSourceKind>),
         read_enum<BindingCardinality>(reader.field("cardinality")), read_enum<BindingTime>(reader.field("time")),
-        read_array<ConversionKind>(reader.field("allowed_conversions"), read_enum<ConversionKind>)};
+        read_array<ConversionKind>(reader.field("allowed_conversions"), read_enum<ConversionKind>),
+        reader.contains("allow_dynamic_index") && reader.field("allow_dynamic_index").boolean()};
 }
 
 Json encode_constraints(const ValueConstraints& constraints)

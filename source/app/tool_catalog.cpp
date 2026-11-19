@@ -2,6 +2,8 @@
 
 #include "simulation.hpp"
 #include "list_item.hpp"
+#include "logic_tools.hpp"
+#include "vision/integer_range.hpp"
 #ifdef VISIONPRO_WITH_OPENCV
 #include "vision/vision_tools.hpp"
 #endif
@@ -13,6 +15,7 @@ namespace visionpro::app {
 core::Result<core::ToolRegistry> make_tool_registry()
 {
     auto registrations = tools::simulation_registrations();
+    for (auto& registration : tools::logic_registrations()) { registrations.push_back(std::move(registration)); }
     registrations.push_back(tools::list_item_registration("visionpro.list.int64_at", "Integer list item",
         core::DataType::integer()));
 #ifdef VISIONPRO_WITH_OPENCV
@@ -21,6 +24,8 @@ core::Result<core::ToolRegistry> make_tool_registry()
     for (auto& registration : tools::vision::registrations()) {
         registrations.push_back(std::move(registration));
     }
+#else
+    registrations.push_back(tools::vision::integer_range_registration(tools::vision::integer_range_descriptor()));
 #endif
     return core::ToolRegistry::create(registrations);
 }

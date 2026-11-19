@@ -98,7 +98,7 @@ Result<SourceType> select(SourceType source, const Selector& selector)
             if (!member) { return error(ErrorCode::UnknownField, "Selected field is not declared in the source Schema.", where); }
             source.type = member->type;
         } else {
-            where.path.emplace_back(DiagnosticElementIndex{std::get<ElementSelection>(step).index});
+            if (const auto* fixed = std::get_if<ElementSelection>(&step)) { where.path.emplace_back(DiagnosticElementIndex{fixed->index}); }
             if (source.type.kind() != TypeKind::List) {
                 return error(ErrorCode::InvalidSelector, "Element selection requires a List.", where);
             }
@@ -137,8 +137,12 @@ private:
     Check control_outlet(const Node& source, const std::optional<ControlOutputId>& outlet);
     Result<SourceType> output(const OutputReference& ref, Scope scope);
     Result<SourceType> source_type(const BindingSource& source, Scope scope);
+    Check binding_dependency(const BindingSource& source, const Node& node, const Binding& binding,
+        std::size_t source_index, std::optional<std::size_t> step = {});
+    Check index_sources(const Selector& path, const Node& node, const Binding& binding,
+        const BindingPolicy& policy, std::size_t source_index);
     Check dependency(NodeId producer, const Node& consumer, const BindingTarget& target,
-        std::size_t source_index, bool inherited);
+        std::size_t source_index, bool inherited, std::optional<std::size_t> step = {});
     template<class Target> Check target(const Node& node, const Target& descriptor);
     Check config(const ConfigValue& value, const Node* consumer, const BindingTarget* target,
         std::size_t source_index, const RegionCapabilities* capabilities, bool snapshot_build,
@@ -671,8 +675,39 @@ Result<SourceType> Validator::source_type(const BindingSource& source, Scope sco
     }, source);
 }
 
+Check Validator::binding_dependency(const BindingSource& source, const Node& node, const Binding& binding,
+    std::size_t source_index, std::optional<std::size_t> step)
+{
+    const auto* reference = std::get_if<OutputReference>(&source);
+    if (!reference) { return std::monostate{}; }
+    if (!find_node(*flow_, reference->node)->enabled && !contains(binding.availability.accepted_absence, MissingReason::Disabled)) {
+        return error(ErrorCode::InvalidBinding, "Disabled producer needs an explicit accepted absence policy.");
+    }
+    return dependency(reference->node, node, binding.target, source_index, false, step);
+}
+
+Check Validator::index_sources(const Selector& path, const Node& node, const Binding& binding,
+    const BindingPolicy& policy, std::size_t source_index)
+{
+    for (std::size_t i = 0; i < path.size(); ++i) {
+        const auto* dynamic = std::get_if<DynamicElementSelection>(&path[i]);
+        if (!dynamic) { continue; }
+        const auto source = index_binding_source(dynamic->source);
+        if (!policy.allow_dynamic_index || !contains(policy.allowed_sources, source_kind(source))) {
+            return error(ErrorCode::DisallowedBindingSource, "The target does not accept this dynamic index source.");
+        }
+        const auto typed = source_type(source, parent(node.id));
+        if (const auto* failure = std::get_if<Diagnostic>(&typed)) { return *failure; }
+        if (std::get<SourceType>(typed).type != DataType::integer()) {
+            return error(ErrorCode::TypeMismatch, "A dynamic index source must produce an exact Int64.");
+        }
+        if (auto checked = binding_dependency(source, node, binding, source_index, i); failed(checked)) { return checked; }
+    }
+    return std::monostate{};
+}
+
 Check Validator::dependency(NodeId producer, const Node& consumer, const BindingTarget& target,
-    std::size_t source_index, bool inherited)
+    std::size_t source_index, bool inherited, std::optional<std::size_t> step)
 {
     auto& scope = scope_index(parent(consumer.id));
     if (contains(scope.reachable, consumer.id) && !contains(scope.reachable, producer)) {
@@ -685,7 +720,7 @@ Check Validator::dependency(NodeId producer, const Node& consumer, const Binding
         return error(ErrorCode::DependencyCycle, "Control and data dependencies form a wait cycle.");
     }
     combined_[producer].push_back(consumer.id);
-    scope.data.push_back({producer, consumer.id, target, source_index, inherited});
+    scope.data.push_back({producer, consumer.id, target, source_index, inherited, step});
     return std::monostate{};
 }
 Check Validator::config(const ConfigValue& value, const Node* consumer, const BindingTarget* target,
@@ -760,12 +795,9 @@ template<class Target> Check Validator::target(const Node& node, const Target& d
             compatible_semantics(typed.semantics, descriptor.semantics)}) {
             if (failed(checked)) { return check(checked); }
         }
-        if (const auto* reference = std::get_if<OutputReference>(&source)) {
-            const auto* producer = find_node(*flow_, reference->node);
-            if (!producer->enabled && !contains(binding.availability.accepted_absence, MissingReason::Disabled)) {
-                return check(error(ErrorCode::InvalidBinding, "Disabled producer needs an explicit accepted absence policy."));
-            }
-            if (auto checked = dependency(reference->node, node, target_id, index, false); failed(checked)) { return check(checked); }
+        if (auto checked = binding_dependency(source, node, binding, index); failed(checked)) { return check(checked); }
+        if (const auto* path = binding_selector(source)) {
+            if (auto checked = index_sources(*path, node, binding, descriptor.binding, index); failed(checked)) { return check(checked); }
         }
         if (const auto* value = std::get_if<ConfigValue>(&source)) {
             if (auto checked = config(*value, &node, &target_id, index, capabilities, snapshot_build,

@@ -190,6 +190,37 @@ void RunController::cancel()
     emit changed();
 }
 
+bool RunController::can_reset_state(const NodeTarget& target) const
+{
+    if (!session_ || !can_start()) { return false; }
+    const auto active = session_->inspect().active;
+    const auto* flow = active ? find_workflow(active->solution(), target.workflow) : nullptr;
+    const auto* node = flow ? find_node(*flow, target.node) : nullptr;
+    const auto* configuration = node ? std::get_if<ToolConfiguration>(&node->configuration) : nullptr;
+    const auto* tool = configuration ? active->find_tool(configuration->type) : nullptr;
+    if (!tool || !tool->state) { return false; }
+    const auto resettable = [](StateScope scope, StateResetPolicy reset) {
+        return scope == StateScope::SolutionSession && reset == StateResetPolicy::DomainStartAndExplicit;
+    };
+    const auto& policy = tool->state_parameters.policy;
+    if (!policy) { return resettable(tool->state->scope, tool->state->reset); }
+    const auto parameter = std::ranges::find(tool->parameters, policy->id, &ParameterDescriptor::id);
+    const auto binding = std::ranges::find(node->bindings, BindingTarget{policy->id}, &Binding::target);
+    const ConfigValue* value = nullptr;
+    if (binding == node->bindings.end()) {
+        if (parameter != tool->parameters.end() && parameter->default_value) { value = &*parameter->default_value; }
+    } else if (binding->sources.size() == 1) { value = std::get_if<ConfigValue>(&binding->sources.front()); }
+    if (!value || !value->as_enum()) { return false; }
+    const auto choice = std::ranges::find(policy->choices, *value->as_enum(), &StatePolicyChoice::choice);
+    return choice != policy->choices.end() && resettable(choice->scope, choice->reset);
+}
+
+Result<std::monostate> RunController::reset_state(const NodeTarget& target)
+{
+    if (!session_ || !can_start()) { return issue(ErrorCode::InvalidState, "State reset requires an idle active session."); }
+    return session_->reset_node_state(target);
+}
+
 void RunController::reset_document()
 {
     if (retiring_) { return; }

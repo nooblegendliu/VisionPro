@@ -40,13 +40,11 @@ constexpr auto usage =
     "visionpro_cli run --solution <solution.json> --workflow <uuid> [--group <uuid>] [--input <id>=<value>]... [--root <id>=<directory>]...\n"
     "visionpro_cli save --solution <solution.json> [--root <id>=<directory>]...\n"
     "Use --group to debug one composite Group in isolation. Inputs follow the selected public interface.\n"
-    "Explicit inputs support Bool, Int64, Float64 and String.\n"
+    "Built-in tools include simulation, list selection, integer range judgement, calculation, logic and formatting.\n"
 #ifdef VISIONPRO_WITH_OPENCV
-    "The installed catalog contains the VisionPro simulation tools, visionpro.image.read_file, "
-    "visionpro.image.threshold, visionpro.image.blob and visionpro.judge.integer_range.\n";
-#else
-    "The installed catalog contains the VisionPro simulation tools.\n";
+    "Image tools include visionpro.image.read_file, visionpro.image.threshold and visionpro.image.blob.\n"
 #endif
+    "Explicit inputs support Bool, Int64, Float64 and String.\n";
 
 std::string utf8(std::wstring_view text)
 {

@@ -1,6 +1,7 @@
 #include "control_scene.hpp"
 #include "editor_window.hpp"
 #include "image_panel.hpp"
+#include "run_image.hpp"
 #include "run_panel.hpp"
 #include "tool_catalog.hpp"
 #include "visual_preview.hpp"
@@ -8,6 +9,7 @@
 #include <visionpro/core/id_factory.hpp>
 #include <visionpro/core/runtime_id_factory.hpp>
 #include <visionpro/core/schema_id_factory.hpp>
+#include <visionpro/workflow/workflow_session.hpp>
 
 #include <QAction>
 #include <QApplication>
@@ -28,6 +30,7 @@
 #include <QUndoStack>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <stdexcept>
 
@@ -132,9 +135,74 @@ private slots:
     void mask_resources_and_boundary_policy();
     void window_previews_and_edits_symbolic_roi();
     void window_displays_images_from_the_selected_run();
+    void displays_the_actual_dynamically_selected_group_image_data();
+    void displays_the_actual_dynamically_selected_group_image();
     void window_displays_blob_from_one_time_debug_image_data();
     void window_displays_blob_from_one_time_debug_image();
 };
+
+void VisualTests::displays_the_actual_dynamically_selected_group_image_data()
+{
+    QTest::addColumn<bool>("global_frames");
+    QTest::newRow("public frame list") << false;
+    QTest::newRow("revision-pinned global frame list") << true;
+}
+
+void VisualTests::displays_the_actual_dynamically_selected_group_image()
+{
+    QFETCH(bool, global_frames);
+    const auto group = id<NodeId>("000000001306");
+    const auto global = id<VariableId>("000000001307");
+    const auto frames = key<InputId>("frames");
+    const auto choice = key<InputId>("choice");
+    const auto binary = key<InputId>("binary");
+    InputDescriptor capture{binary, "Selected image", DataType::image()};
+    capture.binding.allowed_sources = {BindingSourceKind::PublicInput, BindingSourceKind::GlobalRead};
+    capture.binding.allow_dynamic_index = true;
+    const Selector path{DynamicElementSelection{IndexInputReference{workflow_id, {}, choice, {}}}};
+    const BindingSource selected_frame = global_frames ? BindingSource{GlobalReference{global, 4, path}}
+        : BindingSource{ScopedInputReference{workflow_id, {}, frames, path}};
+    Workflow flow{workflow_id, "Selected frame", {key<SchemaId>("test.ui.dynamic_frame"), 1,
+        {{frames, "Frames", DataType::list(DataType::image())}, {choice, "Choice", DataType::integer()}}},
+        {{group, "Choose image", GroupConfiguration{{key<SchemaId>("test.ui.capture_frame"), 1, {capture}}, {blob_id}},
+            {{binary, {selected_frame}}}},
+         {blob_id, "Blob", ToolConfiguration{key<ToolTypeId>("visionpro.image.blob"), 1},
+            {{binary, {ScopedInputReference{workflow_id, group, binary, {}}}},
+             {key<ParameterId>("connectivity"), {ConfigValue::integer(4)}}}}},
+        {}, {{group, blob_id}}, {group}};
+    const auto registry = take(app::make_tool_registry());
+    const auto doc = take(load_solution(fixture, registry));
+    Solution solution{doc.solution().id, "Dynamic frame", solution_format_version, 1, {std::move(flow)},
+        {}, {}, {}, doc.solution().coordinates};
+    if (global_frames) {
+        solution.variables.push_back({global, "Image history", DataType::list(DataType::image()), take(ConfigValue::list(DataType::image(), {}))});
+    }
+    const auto session = take(WorkflowSession::create(registry));
+    const auto snapshot = take(session->activate(solution));
+    const ImageLayout layout{2, 2, 2, {PixelDepth::UInt8, ChannelOrder::Mono}};
+    const std::array first_pixels{std::byte{255}, std::byte{0}, std::byte{0}, std::byte{0}};
+    const std::array second_pixels{std::byte{0}, std::byte{0}, std::byte{0}, std::byte{255}};
+    const std::array images{take(ImageHandle::copy(layout, first_pixels, frame_id)),
+        take(ImageHandle::copy(layout, second_pixels, frame_id))};
+    const auto values = take(DataValue::list(DataType::image(), {take(DataValue::image({images[0]})), take(DataValue::image({images[1]}))}));
+    ImagePanel panel;
+    for (const auto pick : {1, 0}) {
+        const std::vector inputs{RunInput{frames, values}, RunInput{choice, DataValue::integer(pick)}};
+        std::vector<GlobalVariableEntry> globals;
+        if (global_frames) { globals.push_back({global, values, 4, ExternalUpdateOrigin{snapshot.identity().session, key<SchemaId>("test.capture")}}); }
+        const auto request = take(RunRequest::create(snapshot, WorkflowTarget{workflow_id}, inputs,
+            {TriggerKind::Manual, key<SchemaId>("test.ui.show_frame")}, {}, {}, globals));
+        const auto submission = session->submit(request);
+        const auto* run = std::get_if<RunHandle>(&submission);
+        QVERIFY2(run, run ? "" : std::get<RunRejected>(submission).diagnostic.message.c_str());
+        const auto waited = take(run->wait(RunWaitTarget::Quiescence, std::chrono::steady_clock::now() + 10s));
+        QVERIFY2(waited.progress.status == ExecutionStatus::Succeeded,
+            waited.progress.diagnostics.empty() ? "" : waited.progress.diagnostics.front().message.c_str());
+        const auto blob = run_result(*run, waited.progress, blob_id);
+        take(show_run_image(panel, *run, blob.data().identity.invocation, key<OutputId>("components")));
+        QVERIFY(panel.frame() && *panel.frame() == images[pick]);
+    }
+}
 
 void VisualTests::fixed_geometry_matches_s4_outputs()
 {

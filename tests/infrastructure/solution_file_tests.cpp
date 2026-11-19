@@ -161,7 +161,12 @@ ToolRegistry catalog(const std::shared_ptr<std::atomic<int>>& calls, const std::
         return ToolRegistration{std::move(descriptor), {schema, 1, 1, {}},
             std::make_shared<ByteFactory>(calls, use_file, use_file ? nullptr : probe)};
     };
-    const auto definitions = std::array{registration("s37.probe", false), registration("s37.read", true)};
+    auto selected = registration("s63.selected_file", false);
+    InputDescriptor file{key<InputId>("file"), "Selected file", DataType::resource_reference(), true, {}, {}, {}, {}};
+    file.binding.allowed_sources = {BindingSourceKind::PublicInput, BindingSourceKind::RunOutput};
+    file.binding.allow_dynamic_index = true;
+    selected.descriptor.inputs = {file};
+    const auto definitions = std::array{registration("s37.probe", false), registration("s37.read", true), std::move(selected)};
     return take(ToolRegistry::create(definitions));
 }
 
@@ -333,6 +338,72 @@ void external_execution()
     output_is(session->submit(request(active, '2')), 'n');
 }
 
+void dynamic_resources()
+{
+    Fixture fixture;
+    auto model = fixture.model(ResourceFixtures::ExternalFiles);
+    const auto index = key<InputId>("index");
+    const auto assets = key<InputId>("assets");
+    const auto selected = key<InputId>("file");
+    const auto asset_type = DataType::resource_reference();
+    for (auto& flow : model.workflows) {
+        const auto producer = flow.nodes.front().id;
+        auto& consumer = flow.nodes.back();
+        consumer.configuration = ToolConfiguration{key<ToolTypeId>("s63.selected_file"), 1};
+        consumer.resources.clear();
+        flow.interface.inputs = {{assets, "Assets", DataType::list(asset_type)}, {index, "Index", DataType::integer()}};
+        std::optional<NodeId> group;
+        if (flow.id == model.workflows.back().id) { group = id<NodeId>('7'); }
+        const IndexSource source = flow.id == id<WorkflowId>('2')
+            ? IndexSource{IndexOutputReference{flow.id, producer, key<OutputId>("byte"), {}}}
+            : IndexSource{IndexInputReference{flow.id, group, index, {}}};
+        consumer.bindings = {{selected, {ScopedInputReference{flow.id, group, assets, {DynamicElementSelection{source}}}}}};
+        if (group) {
+            const auto consumer_id = consumer.id;
+            auto ports = flow.interface;
+            ports.id = key<SchemaId>("s63.pick_file");
+            for (auto& port : ports.inputs) { port.binding.allowed_sources = {BindingSourceKind::PublicInput}; }
+            flow.nodes.push_back({*group, "Pick a file", GroupConfiguration{ports, {producer}},
+                {{assets, {ScopedInputReference{flow.id, {}, assets, {}}}}, {index, {ScopedInputReference{flow.id, {}, index, {}}}}}});
+            flow.containment = {{*group, producer}, {*group, consumer_id}};
+            flow.entries = {*group};
+        }
+    }
+    take(write_new_solution(fixture.package, model));
+    const auto document = take(load_solution(fixture.package, fixture.registry, fixture.roots));
+    const auto execution = take(open_solution_execution(document, fixture.registry));
+    fs::remove(fixture.dynamic);
+    const auto present = take(DataValue::resource_reference({id<ResourceId>('1'), ResourceKind::Binary, {}}));
+    const auto missing = take(DataValue::resource_reference({id<ResourceId>('3'), ResourceKind::Binary, {}}));
+    const auto run = [&](char workflow, std::int64_t position, const std::vector<DataValue>& files, bool debug_group = false) {
+        auto args = arguments(workflow);
+        if (debug_group) { args.target = NodeTarget{id<WorkflowId>(workflow), id<NodeId>('7')}; }
+        args.inputs = {{index, DataValue::integer(position)}, {assets, take(DataValue::list(asset_type, files))}};
+        return execution.engine->submit(take(RunRequest::create(execution.snapshot, args.target, args.inputs, args.trigger)));
+    };
+    output_is(run('1', 0, {present, missing}), 0);
+    const auto before = fixture.calls->load();
+    const auto refused = run('1', 1, {present, missing});
+    rejected_run(refused, ErrorCode::ResourceNotFound, "A request-fixed index validates exactly the selected resource before admission.");
+    check(*fixture.calls == before && std::get<RunRejected>(refused).diagnostic.location.resource == id<ResourceId>('3'),
+        "Preflight identifies the chosen missing asset without creating tools.");
+    output_is(run('2', 1, {present, missing}), 0);
+    const auto late = accepted(run('2', 1, {missing, present}));
+    const auto done = take(late.wait(RunWaitTarget::Quiescence, std::chrono::steady_clock::now() + 5s));
+    const auto failure = std::ranges::find(done.progress.diagnostics, ErrorCode::ResourceNotFound, &Diagnostic::code);
+    check(done.progress.status == ExecutionStatus::Failed && failure != done.progress.diagnostics.end()
+        && failure->location.resource == id<ResourceId>('3') && failure->location.input == selected,
+        "An upstream-produced index selects only its actual file and reports missing bytes at the consuming binding.");
+    for (auto independent : {false, true}) {
+        const auto group = accepted(run('3', 0, {present, missing}, independent));
+        const auto status = take(group.wait(RunWaitTarget::Quiescence, std::chrono::steady_clock::now() + 5s));
+        check(status.progress.status == ExecutionStatus::Succeeded,
+            "A Group can pass the resource candidates to a child without probing unused files, including in independent debugging.");
+        rejected_run(run('3', 1, {present, missing}, independent), ErrorCode::ResourceNotFound,
+            "A Group child still preflights the actual missing item when its list and index are fixed by this request.");
+    }
+}
+
 void publication()
 {
     const auto gate = std::make_shared<ProbeGate>();
@@ -476,9 +547,10 @@ int main(int argc, char** argv)
         if (test == "execution") { execution(); }
         else if (test == "diagnostics") { diagnostics(ResourceFixtures::ProtectedFiles); }
         else if (test == "external-execution") { external_execution(); }
+        else if (test == "dynamic-resources") { dynamic_resources(); }
         else if (test == "external-diagnostics") { diagnostics(ResourceFixtures::ExternalFiles); }
         else if (test == "publication") { publication(); }
-        else { throw std::runtime_error("Expected execution, diagnostics, external-execution, external-diagnostics or publication."); }
+        else { throw std::runtime_error("Unknown solution file test case."); }
         std::cout << test << ": " << checks << " checks passed\n";
         return 0;
     } catch (const std::exception& failure) {

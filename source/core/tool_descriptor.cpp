@@ -216,7 +216,7 @@ Check policy_check(const DataType& type, const BindingPolicy& policy)
     }
     switch (policy.time) {
     case BindingTime::SnapshotBuild:
-        if (policy.allowed_sources != std::vector{BindingSourceKind::Constant}) {
+        if (policy.allow_dynamic_index || policy.allowed_sources != std::vector{BindingSourceKind::Constant}) {
             return error(ErrorCode::InvalidDescriptor, "Snapshot-time values must be constant.");
         }
         break;

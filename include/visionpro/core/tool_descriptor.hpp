@@ -24,6 +24,7 @@ struct BindingPolicy {
     BindingCardinality cardinality{BindingCardinality::SingleSource};
     BindingTime time{BindingTime::BeforeInvocation};
     std::vector<ConversionKind> allowed_conversions{ConversionKind::Exact, ConversionKind::WrapOptional};
+    bool allow_dynamic_index{false};
 };
 
 struct IntegerRange { std::int64_t minimum; std::int64_t maximum; };

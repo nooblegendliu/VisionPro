@@ -710,12 +710,15 @@ Binding 统一表达输入和可订阅参数：
 
 调用前固定本次输入与参数。全局读取可通过显式工具，或元数据允许的版本化 GlobalReference；
 后者的批量一致性必须声明，不能声称多值属于同一工件。参数预览不消费消息或修改状态。
-表达式、格式化、多来源组合及动态索引属于目标能力，先由显式工具提供，
-不要求每个参数内嵌通用表达式引擎。
+S6.3 通过显式工具实现整数运算、状态累加、多源逻辑与和格式化。支持动态下标的绑定在调用前分别解析列表与下标。
 
 S2.4 的 [binding.hpp](../include/visionpro/workflow/binding.hpp) 已实现上述配置表示：
 `BindingTarget` 区分 InputId/ParameterId，来源区分常量、OutputReference、ScopedInputReference、ResourceReference 和 GlobalReference。
-结果引用区分 OutputId 与 SystemField，选择器当前实现 FieldSelection 与固定 ElementSelection，运行身份不进入配置。
+结果引用区分 `OutputId` 与 `SystemField`。原有 `FieldSelection` 和固定 `ElementSelection` 保持原格式。S6.3 增加 `DynamicElementSelection`，仅在目标的 `BindingPolicy.allow_dynamic_index` 启用时可用。
+
+方案 v1 中 `kind: "dynamic_element"` 的 `source` 可引用本作用域的节点输出、公开输入或版本化全局值。下标来源自身可含字段与固定下标，最终类型须为 `Int64`。列表与下标使用同一轮运行和作用域解析，复制节点与导入子图时按稳定 ID 重映射。负数或超过实际长度时报 `IndexOutOfRange`。Group 和流程的公开输出映射使用固定选择器。
+
+CLI 的 `bindings[].sources[]` 用同一个 `index` 关联列表和下标来源。下标记录附带从零起算的 `selector_step` 和十进制字符串 `index_value`。从节点输出取下标时，同时记录实际的 `node`、`scope`、`invocation` 与 `attempt`。
 源列表保留顺序，基数与显式转换策略独立。`AvailabilityPolicy` 可声明接受 NotSelected、Disabled 及合法的工具不产出原因。
 Pending 保持等待，来源错误进入失败路径。
 `validate_binding_shape` 只检查源数量、已知枚举及引用本身的基本形式，不访问结果、加载资源或消费消息。
@@ -880,7 +883,7 @@ ROI source/exclusions 中的 `InheritedRegion` 需要目标允许 `RunOutput`，
 
 通过时 `ValidationIndex.scopes` 按 Workflow 和可选 GroupId 保存独立 `ScopeDependencies`：
 `reachable` 是显式入口可达节点，`control_links` 是该直接作用域的控制线，`data` 是绑定派生依赖。
-每个 `DataDependency` 保留生产者、消费者、绑定目标、来源索引及是否来自 ROI 继承。
+每个 `DataDependency` 保留生产者、消费者、绑定目标、来源索引及是否来自 ROI 继承。动态下标由节点输出提供时，另记一条依赖并标明 `selector_step`。
 索引只持有身份与值，不借用可变模型指针；它不是持久化配置、调度顺序或运行就绪证明。
 编辑模型变更后须重新校验，动态分支选择、Pending、失败和实际资源等待仍归运行阶段处理。
 

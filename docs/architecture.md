@@ -234,6 +234,8 @@ app 的图像摘要读取类型化 `ImageFrame`。构建和测试见 [developmen
 Blob 通过 OpenCV 桥接复制输入，有 ROI 时应用实际成员掩膜，再将连通域统计发布为类型化结果。普通绑定可按列表索引和 Record 字段读取结果。
 整数范围工具的工厂校验固定上下界，执行器按现有工具契约接受技术完成状态、OK/NG 判定和 Bool 输出。NG 的常规后继按控制边继续调度。
 
+S6.3 将整数范围判断与计算、累加、逻辑和格式化工具装入 `visionpro_logic_tools`，桌面与 CLI 共用同一注册表。该库只依赖核心工具契约，无 Qt、无 OpenCV 构建也可运行相同方案。绑定解析、调用状态和条件出口调度仍由 workflow 提供。
+
 ### 2.15 S4.6 真实流程与命令行往返
 
 启用 OpenCV 时，CLI 在同一注册表装配四个视觉工具和模拟工具。文件方案通过 `open_solution_execution` 创建快照和执行器，独立调用通过 `RunRequest` 注入只读 Image。

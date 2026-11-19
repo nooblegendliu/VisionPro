@@ -7,6 +7,7 @@
 #include <map>
 #include <set>
 #include <type_traits>
+#include <utility>
 
 namespace visionpro::workflow {
 namespace {
@@ -47,11 +48,13 @@ Result<DataValue> selected(DataValue value, const Selector& selector)
             if (!member) { auto failure = error(ErrorCode::UnknownField, "Runtime value has no selected field."); failure.location = where; return failure; }
             value = *member;
         } else {
-            const auto index = std::get<ElementSelection>(step).index;
+            const auto* element = std::get_if<ElementSelection>(&step);
+            if (!element) { return error(ErrorCode::InvalidSelector, "A dynamic index requires a binding context."); }
+            const auto index = element->index;
             where.path.emplace_back(DiagnosticElementIndex{index});
             const auto* elements = value.elements();
             if (!elements) { auto failure = error(ErrorCode::InvalidSelector, "Element selection requires a List."); failure.location = where; return failure; }
-            if (index >= elements->size()) { auto failure = error(ErrorCode::IndexOutOfRange, "Fixed index exceeds the actual current List length."); failure.location = where; return failure; }
+            if (index >= elements->size()) { auto failure = error(ErrorCode::IndexOutOfRange, "Index exceeds the actual current List length."); failure.location = where; return failure; }
             value = (*elements)[index];
         }
     }
@@ -160,6 +163,7 @@ private:
     bool independent() const { return debug_target() && debug_target()->node == context_.consumer.node; }
     template<class Target> BindingResolution resolve(const Target& descriptor);
     Evaluation source(const BindingSource& value, std::size_t index);
+    Evaluation read_source(const BindingSource& value, std::size_t index);
     Evaluation output(const OutputReference& reference, std::size_t index);
     Evaluation configured(const ConfigValue& value, std::size_t index, bool defaulted);
     Evaluation inherited(const DataValue& value, std::size_t index);
@@ -388,7 +392,6 @@ Evaluation Resolution::output(const OutputReference& reference, std::size_t inde
             return {{}, false, {{absence->reason, trace_index}}, {}, {}};
         } else { return invalid(std::get<InvalidOutput>(slot->content).diagnostic); }
     }
-    if (evaluated.value) { evaluated = available(selected(*evaluated.value, reference.selector)); }
     evaluated.identity = data.identity;
     return evaluated;
 }
@@ -469,7 +472,42 @@ Evaluation Resolution::configured(const ConfigValue& value, std::size_t index, b
     if (result.value) { merge(result, inherited(*result.value, index)); }
     return result;
 }
-Evaluation Resolution::source(const BindingSource& source, std::size_t index)
+Evaluation Resolution::source(const BindingSource& reference, std::size_t index)
+{
+    auto read = read_source(reference, index);
+    const auto* path = binding_selector(reference);
+    if (!path || path->empty()) { return read; }
+    Selector resolved;
+    resolved.reserve(path->size());
+    for (std::size_t i = 0; i < path->size(); ++i) {
+        const auto* dynamic = std::get_if<DynamicElementSelection>(&(*path)[i]);
+        if (!dynamic) { resolved.push_back((*path)[i]); continue; }
+        const auto first = traces_.size();
+        // Evaluate each declared index even while the list is pending. A failed
+        // producer must stay visible and can never be treated as an empty list.
+        auto item = source(index_binding_source(dynamic->source), index);
+        const auto number = item.value ? item.value->as_int64() : nullptr;
+        for (auto& trace : std::span{traces_}.subspan(first)) {
+            trace.selector_step = i;
+            if (number) { trace.index_value = *number; }
+        }
+        if (item.value && !number) { item = invalid(error(ErrorCode::TypeMismatch, "A dynamic index requires Int64.")); }
+        else if (number && !std::in_range<std::size_t>(*number)) {
+            item = invalid(error(ErrorCode::IndexOutOfRange, "Dynamic index " + std::to_string(*number) + " is outside the supported range."));
+        } else if (number) {
+            resolved.emplace_back(ElementSelection{static_cast<std::size_t>(*number)});
+        }
+        merge(read, std::move(item));
+    }
+    if (read.value && !read.failure && !read.pending && read.absences.empty()) {
+        auto selection = selected(*read.value, resolved);
+        if (const auto* bad = std::get_if<Diagnostic>(&selection)) { return invalid(*bad); }
+        read.value = std::get<DataValue>(std::move(selection));
+    }
+    return read;
+}
+
+Evaluation Resolution::read_source(const BindingSource& source, std::size_t index)
 {
     return std::visit([&](const auto& value) -> Evaluation {
         using T = std::decay_t<decltype(value)>;
@@ -481,7 +519,7 @@ Evaluation Resolution::source(const BindingSource& source, std::size_t index)
                 const auto* fixed = independent() ? nullptr : request_->input(value.input);
                 if (!fixed) { return invalid(error(ErrorCode::InputUnavailable, "No fixed public input exists for this invocation.")); }
                 traces_.push_back({index, PublicInputTrace{value, context_.run, scope_->id, fixed->origin}, {}});
-                return available(selected(fixed->value, value.selector));
+                return available(fixed->value);
             }
             const auto* declared = find(interface(*scope_).inputs, value.input);
             if (!declared) { return invalid(error(ErrorCode::UnknownTarget, "Public input is not declared.")); }
@@ -490,7 +528,6 @@ Evaluation Resolution::source(const BindingSource& source, std::size_t index)
             auto read = provided ? available(provided->value)
                 : declared->default_value ? available(detail::materialize_config_value(*declared->default_value))
                 : invalid(error(ErrorCode::MissingRequiredValue, "Current scope public input has no value."));
-            if (read.value) { return available(selected(*read.value, value.selector)); }
             return read;
         } else if constexpr (std::is_same_v<T, ResourceReference>) {
             auto checked = validate_resource_reference(value, snapshot_.solution().resources);
@@ -504,13 +541,13 @@ Evaluation Resolution::source(const BindingSource& source, std::size_t index)
         } else {
             const auto entry = std::ranges::find(context_.globals, value.variable, &GlobalVariableEntry::variable);
             if (entry == context_.globals.end()) { auto diagnostic = error(ErrorCode::GlobalUnavailable, "No current global read snapshot was supplied; definition initial value is not a fallback."); diagnostic.location.variable = value.variable; return invalid(diagnostic); }
-            traces_.push_back({index, GlobalReadTrace{value.variable, entry->revision, entry->update_origin}, {}});
+            traces_.push_back({index, GlobalReadTrace{value.variable, entry->revision, entry->update_origin, value.selector}, {}});
             if (value.required_revision && *value.required_revision != entry->revision) {
                 auto diagnostic = error(ErrorCode::GlobalRevisionMismatch, "Global snapshot revision differs from the requested revision."); diagnostic.location.variable = value.variable; return invalid(diagnostic);
             }
             if (auto checked = detail::validate_runtime_domain(entry->current_value, snapshot_.solution(), {});
                 const auto* diagnostic = std::get_if<Diagnostic>(&checked)) { return invalid(*diagnostic); }
-            return available(selected(entry->current_value, value.selector));
+            return available(entry->current_value);
         }
     }, source);
 }

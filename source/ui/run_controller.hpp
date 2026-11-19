@@ -24,6 +24,8 @@ public:
     void start(workflow::Solution draft, RunDocument document, workflow::RunArguments arguments,
         std::vector<RunImageInput> images);
     void cancel();
+    bool can_reset_state(const workflow::NodeTarget& target) const;
+    core::Result<std::monostate> reset_state(const workflow::NodeTarget& target);
     void reset_document();
     void set_observing(bool visible);
     void set_limits(std::size_t history, std::size_t notifications);

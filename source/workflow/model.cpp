@@ -75,6 +75,11 @@ Check mappings(const PublicInterface& interface, const std::vector<OutputMapping
             result.location.output = mapping.output;
             return result;
         }
+        if (std::ranges::any_of(mapping.source.selector, [](const auto& step) { return std::holds_alternative<DynamicElementSelection>(step); })) {
+            auto result = error(core::ErrorCode::InvalidSelector, "A public export mapping requires a fixed selector.");
+            result.location.output = mapping.output;
+            return result;
+        }
         if (const auto* field = std::get_if<SystemField>(&mapping.source.output)) {
             switch (*field) {
             case SystemField::ExecutionStatus: case SystemField::Judgement:

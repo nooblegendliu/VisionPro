@@ -10,6 +10,7 @@ struct DataDependency {
     BindingTarget target;
     std::size_t source_index;
     bool inherited_region{false};
+    std::optional<std::size_t> selector_step{};
 };
 struct ScopeDependencies {
     core::WorkflowId workflow;

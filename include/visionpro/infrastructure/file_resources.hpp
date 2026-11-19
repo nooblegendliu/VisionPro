@@ -47,6 +47,8 @@ public:
     [[nodiscard]] std::span<const core::Diagnostic> diagnostics() const noexcept;
     [[nodiscard]] std::span<const core::ResourceKind> kinds() const noexcept override;
     [[nodiscard]] core::Result<std::monostate> preflight(const workflow::ExecutionPlan& plan) const override;
+    [[nodiscard]] core::Result<std::monostate> validate_selected_value(
+        const workflow::Solution& snapshot, const core::DataValue& value) const override;
     [[nodiscard]] core::Result<std::shared_ptr<const core::ResourceLease>> acquire(
         const core::ToolExecutionConfiguration& configuration, const core::ToolResourceBinding& binding) override;
 private:

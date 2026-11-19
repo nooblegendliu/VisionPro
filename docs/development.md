@@ -2315,3 +2315,34 @@ $group = '5ca4f87a-ea1e-4d62-89b0-000000006211'
 ctest --test-dir $guiBuild -C Release -R '^visionpro_group_parity_tests$' --output-on-failure
 ctest --test-dir $coreBuild -C Release -R 'infrastructure.subgraph_package|workflow.group_state_domains|workflow.group_exports_and_debug|workflow.enabled_workflow_requests' --output-on-failure
 ```
+
+### 10.3 S6.3 计算与逻辑
+
+2026-11-19 在 Windows x64 完成两组 Release 构建和全量 CTest。启用 Qt 与 OpenCV 的配置通过 **130/130** 项，关闭二者的配置通过 **103/103** 项。Qt offscreen 桌面测试将方案另存、重载，再让独立 CLI 在另一个工作目录运行三个流程，逐节点比较状态、输出、OK/NG 和所选控制出口。[固定验收方案](../samples/s6-calculation/solution.json)
+
+| 样例流程 | 输入或操作 | 预期结果 |
+|---|---|---|
+| 面积取项、格式化与累加 | 使用公开输入默认值 `areas=[6,9]`、`index=1` | 计算节点读出 9。格式化在原列表上依次请求下标 `[0,2,1]`，允许跳过第 2 个请求，输出 `A=6\|A=9`，`used_indices=[0,1]`、`used_values=[6,9]`。 |
+| 五路判断与条件分流 | 第五路输入默认 9，上限 8。再将输入改为 7 | 第一轮四个 OK、一个 NG，逻辑与为 false，实际执行「不合格后继」。第二轮五个 OK，执行「合格后继」。两轮流程均成功。 |
+| 严格取项后格式化 | 将公开输入改为 `index=2` | 普通取项报 `IndexOutOfRange`，流程失败，格式化节点跳过且无输出。面积计算流程的动态绑定越界也报同一诊断。 |
+
+`visionpro.calc.int64` 提供加、减、乘、整除。除零和超出 Int64 可表示范围的运算以技术失败结束。`visionpro.calc.int64_accumulate` 保存初值 `initial` 和模式 `mode`。在同一个桌面会话连续运行第一个流程两次，每轮累加器和会话累加器依次得到 `(11,21)`、`(11,22)`。改显示名后，会话累加器继续计数。空闲时选中会话累加器，使用 **Run → Reset Selected Node State**，下一次从该节点配置的初值加 1。每次独立启动 CLI 都建立新会话。
+
+`visionpro.logic.and` 按配置顺序接收布尔来源，`visionpro.logic.condition` 根据结果激活 `true` 或 `false` 出口。`visionpro.format.int64_list` 先取 `list`，再按 `values` 的绑定顺序追加标量。参数 `indices` 给出读取顺序，留空时使用全部元素。`skip_out_of_range` 填写允许跳过的 **请求位置**，从 0 起算。`format` 中恰有一个 `{value}`，`separator` 分隔各实际采用项。桌面检查器可调整多源顺序、选择下标来源并修改这些参数。
+
+以下命令在仓库根目录执行，使用无 Qt、无 OpenCV 的 Release 构建。配置方法见 [§3.28](#328-s55-release-构建与测试)，构建目录使用 `out/build/s63-gui` 和 `out/build/s63-headless`。两个指定越界的调用预期退出码为 1。全量日志分别位于 `out/build/s63-gui/ctest.log` 和 `out/build/s63-headless/ctest.log`。
+
+```powershell
+$cli = 'out/build/s63-headless/source/app/visionpro_cli.exe'
+$solution = (Resolve-Path 'samples/s6-calculation/solution.json').Path
+$area = '5ca4f87a-ea1e-4d62-89b0-000000006310'
+$judge = '5ca4f87a-ea1e-4d62-89b0-000000006320'
+$strict = '5ca4f87a-ea1e-4d62-89b0-000000006330'
+& $cli run --solution $solution --workflow $area
+& $cli run --solution $solution --workflow $area --input index=2
+& $cli run --solution $solution --workflow $judge
+& $cli run --solution $solution --workflow $judge --input fifth=7
+& $cli run --solution $solution --workflow $strict --input index=2
+ctest --test-dir out/build/s63-headless -C Release -R 'workflow.resolver_dynamic_indices|infrastructure.dynamic_file_resources|tools.logic|app.cli_calculations' --output-on-failure
+ctest --test-dir out/build/s63-gui -C Release -R 'visionpro_(calculation_parity|inspector|visual)_tests' --output-on-failure
+```

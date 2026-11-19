@@ -2,7 +2,15 @@
 
 #include <visionpro/workflow/model.hpp>
 
+namespace visionpro::workflow {
+class InvocationResourceProvider;
+struct SourceTrace;
+}
+
 namespace visionpro::workflow::detail {
+
+[[nodiscard]] core::Result<std::monostate> validate_selected_resources(const InvocationResourceProvider& provider,
+    const Solution& solution, const BindingTarget& target, const core::DataValue& value, std::span<const SourceTrace> sources);
 
 // Pure exact materialization: no lookup, conversion, resource loading or execution.
 [[nodiscard]] core::Result<core::DataValue> materialize_config_value(const core::ConfigValue& value);

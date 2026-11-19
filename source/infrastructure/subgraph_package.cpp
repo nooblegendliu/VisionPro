@@ -50,13 +50,29 @@ void check_document(const Solution& draft, const SolutionDocument* document)
 // to its immediate public inputs change owners when detaching/reinserting it.
 void rebase_inputs(Workflow& flow, std::optional<NodeId> from, std::optional<NodeId> to)
 {
+    const auto rebase = [&](auto& input) {
+        if (input.workflow != flow.id) { return; }
+        if (from && !input.group) { fail(ErrorCode::ScopeViolation, "A Group body cannot capture its enclosing workflow's public inputs."); }
+        if (input.group == from) { input.group = to; }
+    };
+    const auto rebase_selector = [&](Selector& selector) {
+        for (auto& step : selector) {
+            if (auto* dynamic = std::get_if<DynamicElementSelection>(&step)) {
+                if (auto* index = std::get_if<IndexInputReference>(&dynamic->source)) { rebase(*index); }
+            }
+        }
+    };
+    for (auto& mapping : flow.outputs) { rebase_selector(mapping.source.selector); }
     for (auto& node : flow.nodes) {
+        if (auto* group = std::get_if<GroupConfiguration>(&node.configuration)) {
+            for (auto& mapping : group->outputs) { rebase_selector(mapping.source.selector); }
+        }
         for (auto& binding : node.bindings) {
             for (auto& source : binding.sources) {
-                if (auto* ref = std::get_if<ScopedInputReference>(&source); ref && ref->workflow == flow.id) {
-                    if (from && !ref->group) { fail(ErrorCode::ScopeViolation, "A Group body cannot capture its enclosing workflow's public inputs."); }
-                    if (ref->group == from) { ref->group = to; }
-                }
+                if (auto* ref = std::get_if<ScopedInputReference>(&source)) { rebase(*ref); }
+                std::visit([&](auto& ref) {
+                    if constexpr (requires { ref.selector; }) { rebase_selector(ref.selector); }
+                }, source);
             }
         }
     }

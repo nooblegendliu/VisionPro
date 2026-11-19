@@ -49,6 +49,24 @@ class IntegerRangeFactory final : public ToolInstanceFactory {
 };
 } // namespace
 
+core::ToolDescriptor integer_range_descriptor()
+{
+    const auto integer = DataType::integer();
+    const auto id = "visionpro.judge.integer_range";
+    ToolDescriptor tool{key<ToolTypeId>(id), "Judge integer range", 1, {key<SchemaId>(id), 1, {}},
+        {}, {}, {}, {}, {}, {}, {}, {}, {}, {}};
+    for (auto name : {"minimum", "maximum"}) {
+        ParameterDescriptor parameter{key<ParameterId>(name), name, integer, true, {}, {}, {}, {}};
+        parameter.binding.time = BindingTime::SnapshotBuild;
+        tool.parameters.push_back(std::move(parameter));
+    }
+    InputDescriptor value{key<InputId>("value"), "value", integer, true, {}, {}, {}, {}};
+    value.binding.allowed_sources = {BindingSourceKind::Constant, BindingSourceKind::RunOutput, BindingSourceKind::PublicInput};
+    tool.inputs.push_back(std::move(value));
+    tool.outputs = {{key<OutputId>("passed"), "passed", DataType::boolean(), {}}};
+    return tool;
+}
+
 core::ToolRegistration integer_range_registration(core::ToolDescriptor descriptor)
 {
     const auto schema = descriptor.schema.id;

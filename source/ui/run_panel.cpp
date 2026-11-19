@@ -76,7 +76,8 @@ QString selector_text(const Selector& selector)
     QString result;
     for (const auto& step : selector) {
         if (const auto* field = std::get_if<FieldSelection>(&step)) { result += QStringLiteral(".") + id_text(field->field); }
-        else { result += QStringLiteral("[%1]").arg(std::get<ElementSelection>(step).index); }
+        else if (const auto* item = std::get_if<ElementSelection>(&step)) { result += QStringLiteral("[%1]").arg(item->index); }
+        else { result += QStringLiteral("[index source]"); }
     }
     return result;
 }
@@ -117,14 +118,17 @@ QString source_text(const SourceTrace& source)
                     return QStringLiteral("Session %1 · External source %2").arg(id_text(external.session), id_text(external.source));
                 }
             }, trace.update_origin);
-            return QStringLiteral("Global %1 · Revision %2\n    %3").arg(id_text(trace.variable)).arg(trace.revision).arg(update);
+            return QStringLiteral("Global %1%2 · Revision %3\n    %4")
+                .arg(id_text(trace.variable), selector_text(trace.selector)).arg(trace.revision).arg(update);
         },
         [](const ResourceReference& ref) { return resource_text(ref); }
     }, source.origin);
     const auto accepted = source.accepted_absence
         ? QStringLiteral(" · Accepted absence %1").arg(enum_text(*source.accepted_absence,
             std::array{"Not selected", "Disabled", "Tool omitted output", "Condition unmet"})) : QString{};
-    return QStringLiteral("  [%1] %2%3").arg(source.source_index).arg(origin, accepted);
+    const auto role = source.selector_step ? QStringLiteral(" · Index at selector step %1 = %2").arg(*source.selector_step + 1)
+        .arg(source.index_value ? QString::number(*source.index_value) : QStringLiteral("Unavailable")) : QString{};
+    return QStringLiteral("  [%1]%2 %3%4").arg(source.source_index).arg(role, origin, accepted);
 }
 
 QString diagnostic_text(const Diagnostic& item)

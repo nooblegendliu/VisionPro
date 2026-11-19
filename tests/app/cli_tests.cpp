@@ -488,6 +488,75 @@ void rejected(const CommandResult& result, DWORD exit_code, std::string_view cod
         "Errors preserve the diagnostic code.");
 }
 
+void calculations(const fs::path& executable)
+{
+    ScratchDirectory scratch;
+    const auto manifest = scratch.path / "calculation" / "solution.json";
+    write_file(manifest, read_file(VISIONPRO_CALCULATION_SAMPLE));
+    const auto solution = Json::parse(read_file(manifest));
+    const auto& workflows = solution.at("workflows");
+    const auto run = [&](std::size_t workflow, std::wstring input = {}) {
+        const auto id = workflows.at(workflow).at("id").get<std::string>();
+        const std::wstring flow(id.begin(), id.end());
+        if (input.empty()) {
+            return invoke(executable, scratch.path, {L"run", L"--solution", manifest.native(), L"--workflow", flow});
+        }
+        return invoke(executable, scratch.path, {L"run", L"--solution", manifest.native(), L"--workflow", flow, L"--input", input});
+    };
+    const auto call = [&](const Json& report, std::size_t flow, std::size_t index) -> const Json& {
+        const auto id = workflows.at(flow).at("nodes").at(index).at("id").get<std::string>();
+        return find_by(report.at("nodes"), "id", id);
+    };
+
+    success(invoke(executable, scratch.path, {L"save", L"--solution", manifest.native()}));
+    const auto selected = success(run(0));
+    check(selected.at("status") == "Succeeded" && produced(call(selected, 0, 1)) == "9", "Area at dynamic index 1 must be 9.");
+    const auto& selector = sources(call(selected, 0, 1), "left");
+    const auto& list = find_by(selector, "kind", "public_input");
+    const auto& index = find_by(selector, "kind", "result");
+    const auto& producer = call(selected, 0, 0);
+    check(selector.size() == 2 && list.at("input") == "areas" && list.at("index") == index.at("index")
+        && list.at("selector").at(0).at("index_source").at("node") == producer.at("id")
+        && index.at("node") == producer.at("id") && index.at("invocation") == producer.at("invocation")
+        && index.at("attempt") == producer.at("attempt") && index.at("run") == selected.at("run")
+        && index.at("selector_step") == 0 && index.at("index_value") == "1", "Index must trace the exact calculation used on this list.");
+    const auto& formatter = call(selected, 0, 2);
+    check(produced(formatter, "text") == "A=6|A=9" && produced(formatter, "used_indices") == Json::array({"0", "1"})
+        && produced(formatter, "used_values") == Json::array({"6", "9"}), "Formatting records exactly the non-skipped selections.");
+    check(produced(call(selected, 0, 3)) == "11" && produced(call(selected, 0, 4)) == "21", "The two counters start at their saved seeds.");
+    const auto invalid = run(0, L"index=2");
+    rejected(invalid, 1, "IndexOutOfRange");
+    const auto failed = Json::parse(invalid.output);
+    check(failed.at("status") == "Failed" && call(failed, 0, 2).at("status") == "Skipped", "A dynamic selection failure stops the control chain.");
+
+    for (const bool passed : {false, true}) {
+        const auto result = success(run(1, passed ? L"fifth=7" : L"fifth=9"));
+        const auto& combined = call(result, 1, 5);
+        const auto& lanes = sources(combined, "values");
+        check(result.at("status") == "Succeeded" && produced(combined, "passed") == passed && lanes.size() == 5,
+            "Five completed judgements produce one business decision.");
+        for (std::size_t i = 0; i < lanes.size(); ++i) {
+            const auto& judge = call(result, 1, i);
+            check(judge.at("status") == "Succeeded" && judge.at("judgement") == (i == 4 && !passed ? "NG" : "OK")
+                && lanes.at(i).at("node") == judge.at("id") && lanes.at(i).at("index") == i,
+                "The combined decision preserves lane order and treats NG as a valid result.");
+        }
+        check(call(result, 1, 6).at("selected_outputs") == Json::array({passed ? "true" : "false"})
+            && produced(call(result, 1, passed ? 7 : 8)) == (passed ? "1" : "0"), "Only the selected successor executes.");
+        skipped(call(result, 1, passed ? 8 : 7));
+    }
+
+    const auto strict = success(run(2));
+    check(produced(call(strict, 2, 1), "text") == "A=9", "The formatter accepts a value produced by ordinary list selection.");
+    const auto upstream_failure = run(2, L"index=2");
+    rejected(upstream_failure, 1, "IndexOutOfRange");
+    const auto stopped = Json::parse(upstream_failure.output);
+    const auto& downstream = call(stopped, 2, 1);
+    check(stopped.at("status") == "Failed" && call(stopped, 2, 0).at("status") == "Failed"
+        && downstream.at("status") == "Skipped" && downstream.at("invocation").is_null() && downstream.at("outputs").empty(),
+        "Formatter tolerance never consumes an upstream technical failure.");
+}
+
 void output_failures(const fs::path& executable)
 {
     const Fixture fixture(executable, PayloadStorage::External);
@@ -867,6 +936,7 @@ int wmain(int argc, wchar_t** argv)
         else if (group == L"external-roundtrip") { roundtrip(cli, PayloadStorage::External); }
         else if (group == L"external-diagnostics") { diagnostics(cli, PayloadStorage::External); }
         else if (group == L"output-failures") { output_failures(cli); }
+        else if (group == L"calculations") { calculations(cli); }
 #ifdef VISIONPRO_WITH_OPENCV
         else if (group == L"vision-roundtrip") { vision_roundtrip(cli); }
         else if (group == L"vision-diagnostics") { vision_diagnostics(cli); }

@@ -29,6 +29,7 @@ public:
     Reader(const Json& value, std::vector<core::Diagnostic>& unknown) : value_(value), unknown_(unknown) {}
     void object(std::initializer_list<std::string_view> keys) const;
     [[nodiscard]] Reader field(std::string_view key) const;
+    [[nodiscard]] bool contains(std::string_view key) const { return value_.contains(key); }
     [[nodiscard]] Reader at(std::size_t index) const;
     [[nodiscard]] std::size_t size() const;
     [[nodiscard]] std::string_view text() const;

@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <array>
+#include <limits>
 #include <map>
 #include <set>
 #include <tuple>
@@ -494,6 +495,27 @@ Result<const Entry*> find_entry(const ResourceEntries& entries, const ResourceRe
     return &entry->second;
 }
 
+Check verify_selected_resource(const ResourceReference& ref, const Solution& snapshot, const ResourceEntries& entries,
+    const ResourcePaths& paths)
+{
+    const auto found = find_entry(entries, ref);
+    if (const auto* invalid = std::get_if<Diagnostic>(&found)) { return *invalid; }
+    const auto& entry = *std::get<const Entry*>(found);
+    const auto current = std::ranges::find(snapshot.resources, ref.id, &ResourceDefinition::id);
+    if (current == snapshot.resources.end()) {
+        return error(ErrorCode::ResourceNotFound, "Referenced resource is absent from the run snapshot.");
+    }
+    const auto captured_file = file_declaration(entry.definition);
+    const auto current_file = file_declaration(*current);
+    if (current->kind != ref.kind || captured_file.has_value() != current_file.has_value()
+        || (captured_file && !same_file(*captured_file, *current_file))) {
+        return error(ErrorCode::ResourceVersionMismatch, "Run snapshot resource declaration differs from the captured file resources.");
+    }
+    if (!entry.locked) { return probe(*current, paths); }
+    if (const auto* invalid = std::get_if<Diagnostic>(&*entry.locked)) { return *invalid; }
+    return std::monostate{};
+}
+
 template<class Inspect> Check inspect_transform(const std::optional<Transform2D>& transform, const Inspect& inspect)
 {
     return transform && transform->calibration ? inspect(*transform->calibration) : Check{std::monostate{}};
@@ -551,7 +573,9 @@ template<ValueDomain Domain, class Inspect> Check inspect_value(const BasicValue
     return std::monostate{};
 }
 
-const DataValue* selected_value(const DataValue& source, const Selector& selector)
+const DataValue* fixed_reference(const BindingSource& source, const RunRequest& request);
+
+const DataValue* selected_value(const DataValue& source, const Selector& selector, const RunRequest& request)
 {
     const auto* value = &source;
     for (const auto& step : selector) {
@@ -559,7 +583,17 @@ const DataValue* selected_value(const DataValue& source, const Selector& selecto
             value = value->field(field->field);
         } else {
             const auto* elements = value->elements();
-            const auto index = std::get<ElementSelection>(step).index;
+            std::size_t index;
+            if (const auto* fixed = std::get_if<ElementSelection>(&step)) { index = fixed->index; }
+            else {
+                const auto& dynamic = std::get<DynamicElementSelection>(step);
+                const auto* index_value = fixed_reference(index_binding_source(dynamic.source), request);
+                const auto* integer = index_value ? index_value->as_int64() : nullptr;
+                if (!integer || *integer < 0 || static_cast<std::uint64_t>(*integer) > std::numeric_limits<std::size_t>::max()) {
+                    return nullptr;
+                }
+                index = static_cast<std::size_t>(*integer);
+            }
             value = elements && index < elements->size() ? &(*elements)[index] : nullptr;
         }
         if (!value) { return nullptr; }
@@ -567,22 +601,42 @@ const DataValue* selected_value(const DataValue& source, const Selector& selecto
     return value;
 }
 
-template<class Inspect> Check inspect_source(const BindingSource& source, const RunRequest& request, const Inspect& inspect)
+const DataValue* fixed_reference(const BindingSource& source, const RunRequest& request)
 {
-    if (const auto* ref = std::get_if<ResourceReference>(&source)) { return inspect(*ref); }
-    if (const auto* value = std::get_if<ConfigValue>(&source)) { return inspect_value(*value, inspect); }
-    const DataValue* fixed = nullptr;
     if (const auto* input = std::get_if<ScopedInputReference>(&source)) {
-        if (!input->group) {
-            if (const auto* value = request.input(input->input)) { fixed = selected_value(value->value, input->selector); }
+        const auto* independent = std::get_if<NodeTarget>(&request.target());
+        const std::optional<NodeId> request_scope = independent ? std::optional{independent->node} : std::nullopt;
+        const auto* flow = input->group ? find_workflow(request.snapshot().solution(), input->workflow) : nullptr;
+        const auto* owner = flow ? find_node(*flow, *input->group) : nullptr;
+        const auto* group = owner ? std::get_if<GroupConfiguration>(&owner->configuration) : nullptr;
+        if (group && group->loop && input->input.text() == "index") { return nullptr; }
+        if (input->group == request_scope) {
+            if (const auto* value = request.input(input->input)) { return selected_value(value->value, input->selector, request); }
+        } else if (group) {
+            // Forwarded Group inputs can still name a fixed root input or global.
+            const auto binding = std::ranges::find(owner->bindings, BindingTarget{input->input}, &Binding::target);
+            if (binding != owner->bindings.end() && binding->cardinality != BindingCardinality::MultipleSources
+                && binding->conversion == ConversionKind::Exact && binding->sources.size() == 1) {
+                if (const auto* forwarded = fixed_reference(binding->sources.front(), request)) {
+                    return selected_value(*forwarded, input->selector, request);
+                }
+            }
         }
     } else if (const auto* global = std::get_if<GlobalReference>(&source)) {
         const auto globals = request.globals();
         const auto entry = std::ranges::find(globals, global->variable, &GlobalVariableEntry::variable);
         if (entry != globals.end() && (!global->required_revision || entry->revision == *global->required_revision)) {
-            fixed = selected_value(entry->current_value, global->selector);
+            return selected_value(entry->current_value, global->selector, request);
         }
     }
+    return nullptr;
+}
+
+template<class Inspect> Check inspect_source(const BindingSource& source, const RunRequest& request, const Inspect& inspect)
+{
+    if (const auto* ref = std::get_if<ResourceReference>(&source)) { return inspect(*ref); }
+    if (const auto* value = std::get_if<ConfigValue>(&source)) { return inspect_value(*value, inspect); }
+    const auto* fixed = fixed_reference(source, request);
     return fixed ? inspect_value(*fixed, inspect) : Check{std::monostate{}};
 }
 
@@ -602,12 +656,46 @@ void set_target(DiagnosticLocation& location, const BindingTarget& target)
     else { location.parameter = std::get<ParameterId>(target); }
 }
 
+// A Group transports its public values. Keep its original whole-value probe
+// unless every reachable use of the input selects an item dynamically.
+using GroupInputUses = std::map<std::pair<NodeId, InputId>, bool>;
+
+GroupInputUses dynamically_selected_inputs(const ExecutionPlan& plan)
+{
+    GroupInputUses uses;
+    const auto& solution = plan.request().snapshot().solution();
+    for (const auto& scope : plan.dependencies().scopes) {
+        if (!scope.group) { continue; }
+        const auto& flow = *find_workflow(solution, scope.workflow);
+        for (auto id : scope.reachable) {
+            const auto& node = *find_node(flow, id);
+            if (!node.enabled) { continue; }
+            for (const auto& binding : node.bindings) {
+                for (const auto& source : binding.sources) {
+                    const auto* input = std::get_if<ScopedInputReference>(&source);
+                    if (!input || input->group != scope.group) { continue; }
+                    const auto selected = std::ranges::any_of(input->selector, [](const auto& step) {
+                        return std::holds_alternative<DynamicElementSelection>(step);
+                    });
+                    auto entry = uses.try_emplace({*scope.group, input->input}, true).first;
+                    entry->second = entry->second && selected;
+                }
+            }
+        }
+    }
+    return uses;
+}
+
 template<class Inspect> Check inspect_node(const Node& node, const PreparedTool* prepared, WorkflowId workflow,
-    const RunRequest& request, const Inspect& inspect)
+    const RunRequest& request, const GroupInputUses& uses, const Inspect& inspect)
 {
     const auto* tool = prepared ? &prepared->configuration().data().tool : nullptr;
     const auto* target = std::get_if<NodeTarget>(&request.target());
     const bool independent = target && target->node == node.id;
+    const auto selected_by_child = [&](InputId input) {
+        const auto found = uses.find({node.id, input});
+        return found != uses.end() && found->second;
+    };
     DiagnosticLocation node_location;
     node_location.workflow = workflow;
     node_location.node = node.id;
@@ -618,7 +706,8 @@ template<class Inspect> Check inspect_node(const Node& node, const PreparedTool*
         }
     }
     for (const auto& binding : node.bindings) {
-        if (independent && std::holds_alternative<InputId>(binding.target)) { continue; }
+        const auto* bound_input = std::get_if<InputId>(&binding.target);
+        if (bound_input && (independent || selected_by_child(*bound_input))) { continue; }
         auto location = node_location;
         set_target(location, binding.target);
         for (const auto& source : binding.sources) {
@@ -640,6 +729,7 @@ template<class Inspect> Check inspect_node(const Node& node, const PreparedTool*
     };
     if (independent) {
         for (const auto& input : request.inputs()) {
+            if (selected_by_child(input.id)) { continue; }
             auto location = node_location;
             location.input = input.id;
             if (auto checked = inspect_value(input.value, [&](const auto& ref) { return inspect(ref, location); });
@@ -648,6 +738,7 @@ template<class Inspect> Check inspect_node(const Node& node, const PreparedTool*
     } else {
         const auto& inputs = tool ? tool->inputs : std::get<GroupConfiguration>(node.configuration).interface.inputs;
         for (const auto& input : inputs) {
+            if (selected_by_child(input.id)) { continue; }
             if (auto checked = check_default(input); std::holds_alternative<Diagnostic>(checked)) { return checked; }
         }
     }
@@ -786,39 +877,22 @@ Check FileResourceProvider::preflight(const ExecutionPlan& plan) const
         std::set<std::tuple<ResourceId, ResourceKind, std::optional<std::uint64_t>>> checked_refs;
         const auto inspect = [&](const ResourceReference& ref, const DiagnosticLocation& location) -> Check {
             if (!checked_refs.emplace(ref.id, ref.kind, ref.revision).second) { return std::monostate{}; }
-            const auto contextualize = [&](Diagnostic failure) {
-                failure.location = location;
-                failure.location.solution = solution.id;
-                failure.location.resource = ref.id;
-                return failure;
-            };
-            const auto found = find_entry(storage_->entries, ref);
-            if (const auto* invalid = std::get_if<Diagnostic>(&found)) { return contextualize(*invalid); }
-            const auto& entry = *std::get<const Entry*>(found);
-            const auto current = std::ranges::find(solution.resources, ref.id, &ResourceDefinition::id);
-            if (current == solution.resources.end()) {
-                return contextualize(error(ErrorCode::ResourceNotFound, "Referenced resource is absent from the run snapshot."));
+            auto result = verify_selected_resource(ref, solution, storage_->entries, storage_->paths);
+            if (auto* failure = std::get_if<Diagnostic>(&result)) {
+                failure->location = location;
+                failure->location.solution = solution.id;
+                failure->location.resource = ref.id;
             }
-            const auto captured_file = file_declaration(entry.definition);
-            const auto current_file = file_declaration(*current);
-            if (current->kind != ref.kind || captured_file.has_value() != current_file.has_value()
-                || (captured_file && !same_file(*captured_file, *current_file))) {
-                return contextualize(error(ErrorCode::ResourceVersionMismatch,
-                    "Run snapshot resource declaration differs from the captured file resources."));
-            }
-            if (entry.locked) {
-                if (const auto* invalid = std::get_if<Diagnostic>(&*entry.locked)) { return contextualize(*invalid); }
-            } else if (auto checked = probe(*current, storage_->paths);
-                const auto* invalid = std::get_if<Diagnostic>(&checked)) { return contextualize(*invalid); }
-            return std::monostate{};
+            return result;
         };
+        const auto group_inputs = dynamically_selected_inputs(plan);
         for (const auto& scope : plan.dependencies().scopes) {
             const auto& flow = *find_workflow(solution, scope.workflow);
             if (!scope_enabled(flow, scope.group)) { continue; }
             for (const auto& id : scope.reachable) {
                 const auto& node = *find_node(flow, id);
                 if (!node.enabled) { continue; }
-                if (auto checked = inspect_node(node, plan.tool(id), flow.id, request, inspect);
+                if (auto checked = inspect_node(node, plan.tool(id), flow.id, request, group_inputs, inspect);
                     std::holds_alternative<Diagnostic>(checked)) { return checked; }
             }
         }
@@ -828,6 +902,21 @@ Check FileResourceProvider::preflight(const ExecutionPlan& plan) const
         failure.location.solution = solution.id;
         return failure;
     }
+}
+
+Check FileResourceProvider::validate_selected_value(const Solution& snapshot, const DataValue& value) const
+{
+    if (snapshot.id != storage_->solution) {
+        return error(ErrorCode::InvalidResource, "File resource provider belongs to another solution.");
+    }
+    return inspect_value(value, [&](const ResourceReference& ref) {
+        auto checked = verify_selected_resource(ref, snapshot, storage_->entries, storage_->paths);
+        if (auto* failure = std::get_if<Diagnostic>(&checked)) {
+            failure->location.solution = snapshot.id;
+            failure->location.resource = ref.id;
+        }
+        return checked;
+    });
 }
 
 Result<std::shared_ptr<const ResourceLease>> FileResourceProvider::acquire(
