@@ -1,4 +1,5 @@
 #include "run_panel.hpp"
+#include "coordinate_text.hpp"
 
 #include <QComboBox>
 #include <QHeaderView>
@@ -69,6 +70,11 @@ QString resource_text(const ResourceReference& resource)
         "Image", "Mask", "Template", "Calibration", "Device", "Directory sequence", "Output path", "Binary"});
     return QStringLiteral("%1 %2 · Revision %3")
         .arg(kind, id_text(resource.id), resource.revision ? QString::number(*resource.revision) : QStringLiteral("—"));
+}
+
+QString coordinate_text(const CoordinateSystemId& id, MeasurementUnit unit)
+{
+    return QStringLiteral("%1 (%2)").arg(id_text(id), unit_symbol(unit));
 }
 
 QString selector_text(const Selector& selector)
@@ -175,7 +181,13 @@ QString value_text(const BasicValue<Domain>& value, bool preview_list = true)
     if (const auto* content = value.as_resource_reference()) { return resource_text(*content); }
     if (const auto* content = value.as_point2d()) {
         return QStringLiteral("Point (%1, %2) · %3")
-            .arg(QString::number(content->x, 'g', 17), QString::number(content->y, 'g', 17), id_text(content->coordinate_frame));
+            .arg(QString::number(content->x, 'g', 17), QString::number(content->y, 'g', 17),
+                coordinate_text(content->coordinate_frame, content->unit));
+    }
+    if (const auto* transform = value.as_transform2d()) {
+        return QStringLiteral("%1 · %2 → %3").arg(enum_text(transform->model,
+            std::array{"Similarity", "Affine", "Projective", "Calibrated"}),
+            coordinate_text(transform->from, transform->from_unit), coordinate_text(transform->to, transform->to_unit));
     }
     if (const auto* list = value.elements()) {
         auto summary = QStringLiteral("List (%1 items)").arg(list->size());

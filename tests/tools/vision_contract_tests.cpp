@@ -42,7 +42,9 @@ const auto& by_id(const Range& items, std::string_view id)
 void schemas()
 {
     const auto tools = vision::tool_descriptors();
-    check(tools.size() == 4, "S4 has four tool contracts.");
+    for (const auto name : {"visionpro.calibration.fit", "visionpro.geometry.map_point", "visionpro.measure.distance"}) {
+        by_id(tools, name);
+    }
     const auto registry = take(ToolRegistry::create(vision::registrations()));
     for (const auto& tool : tools) {
         take(validate_descriptor(tool));
@@ -137,7 +139,7 @@ void adapter_limits()
     unsupported(changed);
     source.transform = correction;
     source.geometry = CircleRegion{2, 2, 1};
-    unsupported(changed);
+    take(vision::validate_region_support(changed));
 
     changed = rectangle;
     changed.boundary_policy = RegionBoundaryPolicy::Fill;

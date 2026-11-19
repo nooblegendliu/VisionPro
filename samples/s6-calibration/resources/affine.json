@@ -1,0 +1,15 @@
+{
+  "format_version": 1,
+  "model": "Affine",
+  "from": "camera",
+  "to": "world",
+  "from_unit": "Pixel",
+  "to_unit": "Millimetre",
+  "domain": [0, 0, 8, 8],
+  "pairs": [
+    [[0, 0], [10, -4]],
+    [[8, 0], [26, -4]],
+    [[8, 8], [26, 20]],
+    [[0, 8], [10, 20]]
+  ]
+}

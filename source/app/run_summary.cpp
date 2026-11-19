@@ -385,13 +385,29 @@ json shape_json(const RegionShape& shape)
             return json{{"kind", "RotatedRect"}, {"center_x", rectangle.center_x}, {"center_y", rectangle.center_y},
                 {"width", rectangle.width}, {"height", rectangle.height}, {"angle_radians", rectangle.angle_radians}};
         },
+        [](const CircleRegion& circle) {
+            return json{{"kind", "Circle"}, {"center_x", circle.center_x}, {"center_y", circle.center_y}, {"radius", circle.radius}};
+        },
+        [](const RingRegion& ring) {
+            return json{{"kind", "Ring"}, {"center_x", ring.center_x}, {"center_y", ring.center_y},
+                {"inner_radius", ring.inner_radius}, {"outer_radius", ring.outer_radius}};
+        },
+        [](const SectorRingRegion& sector) {
+            return json{{"kind", "SectorRing"}, {"center_x", sector.center_x}, {"center_y", sector.center_y},
+                {"inner_radius", sector.inner_radius}, {"outer_radius", sector.outer_radius},
+                {"start_radians", sector.start_radians}, {"sweep_radians", sector.sweep_radians}};
+        },
+        [](const PolygonRegion& polygon) {
+            return json{{"kind", "Polygon"}, {"vertices", array_json(polygon.vertices, [](const Vector2D& point) {
+                return json{{"x", point.x}, {"y", point.y}};
+            })}};
+        },
         [](const MaskConfig& mask) {
             return json{{"kind", "RasterMask"}, {"resource", resource_json(mask.resource)}, {"mask_frame", id_text(mask.mask_frame)},
                 {"width", mask.width}, {"height", mask.height}, {"depth", name(mask.format.depth)},
                 {"channel_order", name(mask.format.order)}, {"mapping", mask_mapping_json(mask.mapping)},
                 {"valid_pixels", mask_rule_json(mask.valid_pixels)}};
-        },
-        [](const auto&) -> json { throw std::logic_error("The catalog emitted an ROI shape without a CLI summary."); }}, shape);
+        }}, shape);
 }
 
 json region_source_json(const RegionSource& source)
@@ -584,6 +600,8 @@ json data_json(const DataValue& data)
     if (const auto* point = data.as_point2d()) {
         return {{"coordinate_frame", id_text(point->coordinate_frame)}, {"unit", name(point->unit)}, {"x", point->x}, {"y", point->y}};
     }
+    if (const auto* transform = data.as_transform2d()) { return transform_json(*transform); }
+    if (const auto* resource = data.as_resource_reference()) { return resource_json(*resource); }
     if (const auto* region = data.as_region2d()) { return region_json(*region); }
     if (const auto* mask = data.as_raster_mask()) { return raster_mask_json(*mask); }
     throw std::logic_error("The catalog emitted an output type without a CLI summary.");

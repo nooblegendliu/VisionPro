@@ -20,6 +20,7 @@ target_link_libraries(visionpro_simulation_tools
 if(VISIONPRO_WITH_OPENCV)
     add_library(visionpro_vision_tools STATIC
         vision/vision_tools.cpp vision/vision_tools.hpp
+        vision/calibration.cpp vision/calibration.hpp vision/calibration_tools.cpp
         vision/opencv_image.cpp vision/opencv_image.hpp
         vision/read_file.cpp vision/read_file.hpp
         vision/roi.cpp vision/roi.hpp
@@ -28,6 +29,7 @@ if(VISIONPRO_WITH_OPENCV)
         vision/blob.cpp vision/blob.hpp
     )
     target_include_directories(visionpro_vision_tools PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>")
+    target_include_directories(visionpro_vision_tools SYSTEM PRIVATE "${PROJECT_SOURCE_DIR}/third_party/nlohmann_json/include")
     target_link_libraries(visionpro_vision_tools
         PUBLIC visionpro_core
         PRIVATE visionpro_logic_tools opencv_core opencv_imgproc opencv_imgcodecs visionpro_infrastructure visionpro_build_options

@@ -17,12 +17,16 @@
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDockWidget>
+#include <QFileDialog>
 #include <QGraphicsPathItem>
 #include <QGraphicsPixmapItem>
 #include <QLabel>
 #include <QLineEdit>
+#include <QListWidget>
+#include <QPlainTextEdit>
 #include <QPushButton>
 #include <QStatusBar>
+#include <QScopeGuard>
 #include <QTemporaryDir>
 #include <QTest>
 #include <QTimer>
@@ -133,6 +137,9 @@ class VisualTests final : public QObject {
 private slots:
     void fixed_geometry_matches_s4_outputs();
     void mask_resources_and_boundary_policy();
+    void edits_and_reloads_shape_members_data();
+    void edits_and_reloads_shape_members();
+    void fits_newly_bound_calibration_file();
     void window_previews_and_edits_symbolic_roi();
     void window_displays_images_from_the_selected_run();
     void displays_the_actual_dynamically_selected_group_image_data();
@@ -322,6 +329,162 @@ void VisualTests::mask_resources_and_boundary_policy()
     QVERIFY(slot() == mask);
     scene->undoStack().undo();
     QVERIFY(!slot() && scene->undoStack().isClean());
+}
+
+void VisualTests::edits_and_reloads_shape_members_data()
+{
+    QTest::addColumn<QString>("shape");
+    QTest::addColumn<QList<QPoint>>("expected");
+    QTest::newRow("circle") << QStringLiteral("Circle")
+        << QList<QPoint>{{4,3},{3,4},{4,4},{5,4},{4,5}};
+    QTest::newRow("ring") << QStringLiteral("Ring")
+        << QList<QPoint>{{4,2},{3,3},{4,3},{5,3},{2,4},{3,4},{5,4},{6,4},{3,5},{4,5},{5,5},{4,6}};
+    QTest::newRow("sector-across-zero") << QStringLiteral("Annular sector")
+        << QList<QPoint>{{5,3},{5,4},{6,4},{5,5}};
+    QTest::newRow("polygon") << QStringLiteral("Polygon")
+        << QList<QPoint>{{3,3},{4,3},{5,3},{3,4},{4,4},{3,5}};
+}
+
+void VisualTests::edits_and_reloads_shape_members()
+{
+    QFETCH(QString, shape);
+    QFETCH(QList<QPoint>, expected);
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const fs::path package = fs::path(temporary.path().toStdWString()) / "shape";
+    const auto registry = take(app::make_tool_registry());
+    EditorWindow window(take(load_solution(fixture, registry)).solution(), registry);
+    window.show();
+    window.open_document(fixture);
+    QTRY_VERIFY(!window.file_busy());
+    window.transfer_document(package, SolutionTransfer::SaveAs);
+    QTRY_VERIFY(!window.file_busy());
+    const auto select_threshold = [&] {
+        auto* canvas = qobject_cast<QGraphicsView*>(window.centralWidget());
+        auto* scene = qobject_cast<ControlScene*>(canvas->scene());
+        return scene && scene->select_workflow(workflow_id) && scene->reveal_node(threshold_id);
+    };
+    QVERIFY(select_threshold());
+    QTRY_VERIFY(window.findChild<QPushButton*>(QStringLiteral("editRegion")));
+    auto* edit = window.findChild<QPushButton*>(QStringLiteral("editRegion"));
+    QVERIFY(apply_roi_edit(*edit, [&shape](QDialog& dialog) {
+        auto* selector = dialog.findChild<QComboBox*>(QStringLiteral("roiSource"));
+        if (selector->findText(shape) < 0) { return false; }
+        selector->setCurrentText(shape);
+        dialog.findChild<QLineEdit*>(QStringLiteral("roiX"))->setText(QStringLiteral("4"));
+        dialog.findChild<QLineEdit*>(QStringLiteral("roiY"))->setText(QStringLiteral("4"));
+        dialog.findChild<QLineEdit*>(QStringLiteral("roiInnerRadius"))->setText(QStringLiteral("1"));
+        dialog.findChild<QLineEdit*>(QStringLiteral("roiRadius"))->setText(
+            shape == QStringLiteral("Circle") ? QStringLiteral("1") : QStringLiteral("2"));
+        dialog.findChild<QLineEdit*>(QStringLiteral("roiStart"))->setText(QStringLiteral("315"));
+        dialog.findChild<QLineEdit*>(QStringLiteral("roiSweep"))->setText(QStringLiteral("90"));
+        dialog.findChild<QPlainTextEdit*>(QStringLiteral("roiVertices"))->setPlainText(QStringLiteral("3,3\n5,3\n3,5"));
+        return true;
+    }));
+    const auto edited = region(window.draft(), threshold_id);
+    window.save_document();
+    QTRY_VERIFY(!window.file_busy());
+    window.open_document(package);
+    QTRY_VERIFY(!window.file_busy());
+    QVERIFY(region(window.draft(), threshold_id) == edited);
+    window.open_preview_resource(image_resource, frame_id, true);
+    QTRY_VERIFY(!window.file_busy());
+    QVERIFY(select_threshold());
+    window.preview_selected_roi();
+    QTRY_VERIFY(!window.file_busy());
+    QCOMPARE(window.statusBar()->currentMessage(), QStringLiteral("ROI contains %1 pixels.").arg(expected.size()));
+    const auto* view = window.findChild<ImagePanel*>()->findChild<ImageView*>();
+    QList<QPoint> actual;
+    for (const auto* item : view->scene()->items()) {
+        const auto* bitmap = dynamic_cast<const QGraphicsPixmapItem*>(item);
+        if (!bitmap || !bitmap->pixmap().hasAlphaChannel()) { continue; }
+        const auto layer = bitmap->pixmap().toImage();
+        for (int y = 0; y < layer.height(); ++y) {
+            for (int x = 0; x < layer.width(); ++x) {
+                if (qAlpha(layer.pixel(x, y)) > 0) { actual.append({x, y}); }
+            }
+        }
+    }
+    QCOMPARE(actual, expected);
+}
+
+void VisualTests::fits_newly_bound_calibration_file()
+{
+    const auto registry = take(app::make_tool_registry());
+    const auto flow = id<WorkflowId>("000000006810");
+    Solution draft{id<SolutionId>("000000006800"), "Desktop calibration", solution_format_version, 1,
+        {{flow, "Fit", {key<SchemaId>("test.fit"), 1}}}};
+    draft.coordinates.push_back({key<CoordinateSystemId>("camera"), CoordinateKind::Image, MeasurementUnit::Pixel,
+        {0,0}, {1,0}, {0,-1}, Handedness::LeftHanded});
+    EditorWindow window(std::move(draft), registry);
+    window.show();
+    auto* frame_action = window.findChild<QAction*>(QStringLiteral("addCoordinateFrame"));
+    QVERIFY(frame_action);
+    QTimer::singleShot(0, &window, [] {
+        auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+        if (!dialog) { return; }
+        if (auto* name = dialog->findChild<QLineEdit*>(QStringLiteral("coordinateFrameId"))) {
+            name->setText(QStringLiteral("world"));
+            dialog->accept();
+        } else { dialog->reject(); }
+    });
+    frame_action->trigger();
+    QCOMPARE(window.draft().coordinates.size(), 2u);
+    QCOMPARE(window.draft().coordinates.back().unit, MeasurementUnit::Millimetre);
+
+    auto* tools = window.findChild<QListWidget*>(QStringLiteral("toolList"));
+    QVERIFY(tools);
+    for (int i = 0; i < tools->count(); ++i) {
+        if (tools->item(i)->toolTip() == QStringLiteral("visionpro.calibration.fit")) { tools->setCurrentRow(i); break; }
+    }
+    QCOMPARE(tools->currentItem()->toolTip(), QStringLiteral("visionpro.calibration.fit"));
+    window.findChild<QAction*>(QStringLiteral("addTool"))->trigger();
+    QTRY_VERIFY(window.findChild<QPushButton*>(QStringLiteral("chooseExternalResource")));
+    const auto directory = fixture.parent_path() / "s6-calibration";
+    const auto path = directory / "resources" / "affine.json";
+    const bool nonnative = QApplication::testAttribute(Qt::AA_DontUseNativeDialogs);
+    QApplication::setAttribute(Qt::AA_DontUseNativeDialogs);
+    const auto restore = qScopeGuard([nonnative] { QApplication::setAttribute(Qt::AA_DontUseNativeDialogs, nonnative); });
+    QTimer::singleShot(0, &window, [path] {
+        auto* picker = qobject_cast<QFileDialog*>(QApplication::activeModalWidget());
+        if (!picker) { return; }
+        picker->selectFile(QString::fromStdWString(path.wstring()));
+        QMetaObject::invokeMethod(picker, "accept");
+    });
+    window.findChild<QPushButton*>(QStringLiteral("chooseExternalResource"))->click();
+    QTRY_VERIFY(!window.file_busy());
+    QCOMPARE(window.draft().resources.size(), 1u);
+    const auto& resource = window.draft().resources.front();
+    const auto& node = find_workflow(window.draft(), flow)->nodes.front();
+    const auto& file = std::get<ExternalFileResource>(resource.location);
+    QVERIFY(file.revision == 1 && file.read_policy == ResourceReadPolicy::SnapshotLocked && file.expected_sha256);
+    const auto sample = take(load_solution(directory, registry));
+    const auto known = std::ranges::find(sample.solution().resources, ResourceKind::Calibration, &ResourceDefinition::kind);
+    QVERIFY(known != sample.solution().resources.end());
+    QCOMPARE(*file.expected_sha256, std::get<ManagedResource>(known->location).sha256);
+    QVERIFY(node.resources.size() == 1 && node.resources.front().resource.id == resource.id
+        && node.resources.front().resource.revision == 1);
+
+    window.findChild<QAction*>(QStringLiteral("runWorkflow"))->trigger();
+    auto* panel = window.findChild<RunPanel*>();
+    QTRY_COMPARE_WITH_TIMEOUT(panel->findChild<QLabel*>(QStringLiteral("runCleanup"))->text(),
+        QStringLiteral("Cleanup: Quiescent"), 10000);
+    const auto run = panel->selected_run();
+    QVERIFY(run);
+    const auto progress = take(run->inspect());
+    QVERIFY2(progress.status == ExecutionStatus::Succeeded,
+        progress.diagnostics.empty() ? "Calibration failed" : progress.diagnostics.front().message.c_str());
+    const auto call = run_result(*run, progress, node.id);
+    const auto& fitted = std::get<DataValue>(call.output(key<OutputId>("transform"))->content);
+    const auto* transform = fitted.as_transform2d();
+    QVERIFY(transform && transform->model == TransformModel::Affine && transform->from == key<CoordinateSystemId>("camera")
+        && transform->to == key<CoordinateSystemId>("world") && transform->from_unit == MeasurementUnit::Pixel
+        && transform->to_unit == MeasurementUnit::Millimetre);
+    const auto* provenance = std::get<DataValue>(call.output(key<OutputId>("source"))->content).as_resource_reference();
+    QVERIFY(provenance && *provenance == node.resources.front().resource);
+    QVERIFY(select_run_node(*panel->findChild<QTreeWidget*>(QStringLiteral("runNodes")), node.id));
+    const auto details = panel->findChild<QPlainTextEdit*>(QStringLiteral("runDetails"))->toPlainText();
+    QVERIFY(details.contains(QStringLiteral("Affine · camera (px) → world (mm)")));
 }
 
 void VisualTests::window_previews_and_edits_symbolic_roi()

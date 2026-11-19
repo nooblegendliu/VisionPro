@@ -8,6 +8,8 @@
 #endif
 
 #include <QFileDialog>
+#include <QFile>
+#include <QCryptographicHash>
 #include <QFileInfo>
 #include <QDockWidget>
 #include <QInputDialog>
@@ -404,6 +406,18 @@ void EditorWindow::choose_resource_copy()
                 show_status(QStringLiteral("Copied resource. Save to publish the new reference."));
             }
         });
+}
+
+void EditorWindow::hash_resource_file(const QString& path, std::function<void(std::string)> apply)
+{
+    start_file_task(QStringLiteral("Reading resource fingerprint…"), [path]() -> Result<std::string> {
+        QFile file(path);
+        QCryptographicHash hash(QCryptographicHash::Sha256);
+        if (!file.open(QIODevice::ReadOnly) || !hash.addData(&file) || file.error() != QFileDevice::NoError) {
+            return file_error(ErrorCode::SolutionIoFailure, file.errorString().toStdString());
+        }
+        return hash.result().toHex().toStdString();
+    }, std::move(apply));
 }
 
 void EditorWindow::choose_resource_root()

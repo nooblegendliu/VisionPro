@@ -14,6 +14,7 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <numbers>
 
 namespace visionpro::ui {
 namespace {
@@ -79,9 +80,15 @@ Result<QPixmap> mask_pixmap(const RasterMask& mask, const ImageHandle& image)
     return pixmap;
 }
 
-std::array<QPointF, 4> corners(const QRectF& rect)
+QRectF circle_bounds(double x, double y, double radius)
 {
-    return {rect.topLeft(), rect.topRight(), rect.bottomRight(), rect.bottomLeft()};
+    return {x - radius, y - radius, 2 * radius, 2 * radius};
+}
+
+void add_ring(QPainterPath& path, double x, double y, double outer, double inner)
+{
+    path.addEllipse(circle_bounds(x, y, outer));
+    if (inner > 0) { path.addEllipse(circle_bounds(x, y, inner)); }
 }
 
 Result<QPainterPath> outline(const RegionSource& source, const ImageHandle& image)
@@ -96,43 +103,56 @@ Result<QPainterPath> outline(const RegionSource& source, const ImageHandle& imag
         return error(ErrorCode::UnsupportedConversion, "Display requires an unbounded Similarity or Affine region correction.");
     }
     const auto& geometry = primitive->geometry;
-    std::array<QPointF, 4> path;
+    QPainterPath path;
     if (std::holds_alternative<EmptyRegionShape>(geometry) || std::holds_alternative<MaskConfig>(geometry)) {
         // Raster masks have no independent vector outline. Their membership is drawn separately.
         return QPainterPath{};
     }
     if (std::holds_alternative<FullImageRegion>(geometry)) {
-        path = corners({0, 0, static_cast<double>(image.width()), static_cast<double>(image.height())});
+        path.addRect(0, 0, static_cast<double>(image.width()), static_cast<double>(image.height()));
     } else if (const auto* aligned = std::get_if<AxisAlignedRect>(&geometry)) {
-        path = corners({aligned->x, aligned->y, aligned->width, aligned->height});
+        path.addRect(aligned->x, aligned->y, aligned->width, aligned->height);
     } else if (const auto* rotated = std::get_if<RotatedRect>(&geometry)) {
-        path = corners({-rotated->width / 2, -rotated->height / 2, rotated->width, rotated->height});
-        const double cosine = std::cos(rotated->angle_radians);
-        const double sine = std::sin(rotated->angle_radians);
-        for (auto& point : path) {
-            const auto x = point.x();
-            const auto y = point.y();
-            point = {rotated->center_x + cosine * x - sine * y, rotated->center_y + sine * x + cosine * y};
+        path.addRect(-rotated->width / 2, -rotated->height / 2, rotated->width, rotated->height);
+        QTransform pose;
+        pose.translate(rotated->center_x, rotated->center_y);
+        pose.rotateRadians(rotated->angle_radians);
+        path = pose.map(path);
+    } else if (const auto* circle = std::get_if<CircleRegion>(&geometry)) {
+        path.addEllipse(circle_bounds(circle->center_x, circle->center_y, circle->radius));
+    } else if (const auto* ring = std::get_if<RingRegion>(&geometry)) {
+        add_ring(path, ring->center_x, ring->center_y, ring->outer_radius, ring->inner_radius);
+    } else if (const auto* sector = std::get_if<SectorRingRegion>(&geometry)) {
+        const auto x = sector->center_x, y = sector->center_y;
+        if (std::abs(sector->sweep_radians) == 2 * std::numbers::pi) {
+            add_ring(path, x, y, sector->outer_radius, sector->inner_radius);
+        } else {
+            // Qt arc angles run towards -y. ROI angles run towards +y.
+            constexpr auto degrees = -180.0 / std::numbers::pi;
+            const auto angle = sector->start_radians;
+            const auto start = std::atan2(std::sin(angle), std::cos(angle)) * degrees;
+            const auto sweep = sector->sweep_radians * degrees;
+            const auto outer = circle_bounds(x, y, sector->outer_radius);
+            path.arcMoveTo(outer, start);
+            path.arcTo(outer, start, sweep);
+            if (sector->inner_radius > 0) {
+                path.arcTo(circle_bounds(x, y, sector->inner_radius), start + sweep, -sweep);
+            } else { path.lineTo(x, y); }
+            path.closeSubpath();
         }
+    } else if (const auto* polygon = std::get_if<PolygonRegion>(&geometry)) {
+        const auto& first = polygon->vertices.front();
+        path.moveTo(first.x, first.y);
+        for (const auto& vertex : std::span(polygon->vertices).subspan(1)) { path.lineTo(vertex.x, vertex.y); }
+        path.closeSubpath();
     } else {
         return error(ErrorCode::UnsupportedRegion, "This region shape has no display adapter.");
     }
-    QPainterPath result;
-    for (std::size_t index = 0; index < path.size(); ++index) {
-        auto point = path[index];
-        if (primitive->transform) {
-            const auto mapped = map_point(*primitive->transform, {primitive->coordinate_frame, primitive->unit, point.x(), point.y()});
-            if (const auto* invalid = std::get_if<Diagnostic>(&mapped)) { return *invalid; }
-            const auto& local = std::get<Point2D>(mapped);
-            point = {local.x, local.y};
-        } else if (!std::isfinite(point.x()) || !std::isfinite(point.y())) {
-            return error(ErrorCode::InvalidGeometry, "Region outline contains a nonfinite point.");
-        }
-        if (index == 0) { result.moveTo(point); }
-        else { result.lineTo(point); }
+    if (primitive->transform) {
+        const auto& m = primitive->transform->matrix;
+        path = QTransform(m[0], m[3], m[1], m[4], m[2], m[5]).map(path);
     }
-    result.closeSubpath();
-    return result;
+    return path;
 }
 
 QPen overlay_pen(const QColor& color, double width, Qt::PenStyle style = Qt::SolidLine)
@@ -304,10 +324,10 @@ void ImageView::fit_image()
     fit_on_resize_ = true;
 }
 
-void ImageView::set_rectangle_drawing(bool enabled)
+void ImageView::set_drawing_mode(DrawingMode mode)
 {
-    if (enabled == rectangle_drawing_) { return; }
-    rectangle_drawing_ = enabled;
+    if (mode == drawing_mode_) { return; }
+    drawing_mode_ = mode;
     finish_gesture();
 }
 
@@ -358,10 +378,15 @@ void ImageView::mousePressEvent(QMouseEvent* event)
     const auto button = event->button();
     const auto position = event->position().toPoint();
     if (image_ && drag_ == Drag::None) {
-        if (button == Qt::MiddleButton || (button == Qt::LeftButton && !rectangle_drawing_)) {
+        if (button == Qt::LeftButton && drawing_mode_ == DrawingMode::Vertex) {
+            if (const auto point = image_coordinates(position)) { emit vertex_picked(*point); }
+            event->accept();
+            return;
+        }
+        if (button == Qt::MiddleButton || (button == Qt::LeftButton && drawing_mode_ == DrawingMode::Off)) {
             drag_ = Drag::Pan;
             pan_position_ = position;
-        } else if (button == Qt::LeftButton && rectangle_drawing_ && image_coordinates(position)) {
+        } else if (button == Qt::LeftButton && drawing_mode_ == DrawingMode::Rectangle && image_coordinates(position)) {
             drag_ = Drag::Rectangle;
             rectangle_start_ = rectangle_point(position);
             drawing_item_->setRect(QRectF(rectangle_start_, rectangle_start_));
@@ -499,7 +524,7 @@ void ImageView::update_cursor()
 {
     if (!image_) { viewport()->unsetCursor(); }
     else if (drag_ == Drag::Pan) { viewport()->setCursor(Qt::ClosedHandCursor); }
-    else { viewport()->setCursor(rectangle_drawing_ ? Qt::CrossCursor : Qt::OpenHandCursor); }
+    else { viewport()->setCursor(drawing_mode_ == DrawingMode::Off ? Qt::OpenHandCursor : Qt::CrossCursor); }
 }
 
 } // namespace visionpro::ui

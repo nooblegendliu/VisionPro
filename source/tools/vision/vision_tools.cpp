@@ -1,5 +1,6 @@
 #include "vision_tools.hpp"
 #include "blob.hpp"
+#include "calibration.hpp"
 #include "integer_range.hpp"
 #include "read_file.hpp"
 #include "threshold.hpp"
@@ -56,7 +57,8 @@ const RegionCapabilities& region_capabilities()
 {
     static const RegionCapabilities capabilities{
         {RegionShapeKind::FullImage, RegionShapeKind::Empty, RegionShapeKind::AxisAlignedRect,
-            RegionShapeKind::RotatedRect, RegionShapeKind::RasterMask},
+            RegionShapeKind::RotatedRect, RegionShapeKind::Circle, RegionShapeKind::Ring,
+            RegionShapeKind::SectorRing, RegionShapeKind::Polygon, RegionShapeKind::RasterMask},
         {RegionBoundaryPolicy::Reject, RegionBoundaryPolicy::Intersect},
         GeometryMaskPolicy::Combine, true, true, true, {PixelDepth::UInt8}};
     return capabilities;
@@ -130,18 +132,54 @@ bool supports_transform(const std::optional<Transform2D>& transform)
     return !transform || ((transform->model == TransformModel::Similarity || transform->model == TransformModel::Affine)
         && !transform->calibration && !transform->valid_domain);
 }
+
+constexpr ValueSemantics millimetres{MeasurementUnit::Millimetre, {}};
+const std::vector<BindingSourceKind> measurement_sources{BindingSourceKind::Constant, BindingSourceKind::RunOutput,
+    BindingSourceKind::PublicInput};
+
+ToolDescriptor fit_descriptor()
+{
+    auto tool = descriptor("visionpro.calibration.fit", "N-point planar calibration");
+    tool.execution.retry = ToolRetry::Idempotent;
+    tool.resources = {{key<SchemaId>("calibration"), ResourceKind::Calibration}};
+    tool.outputs = {output("transform", DataType::transform2d()), output("rms_error_mm", DataType::real(), millimetres),
+        output("source", DataType::resource_reference())};
+    return tool;
+}
+
+ToolDescriptor map_point_descriptor()
+{
+    auto tool = descriptor("visionpro.geometry.map_point", "Convert pixel point to millimetres");
+    tool.execution.retry = ToolRetry::Idempotent;
+    tool.inputs = {input("transform", DataType::transform2d(), measurement_sources),
+        input("point", DataType::point2d(), measurement_sources, pixels)};
+    tool.outputs = {output("point", DataType::point2d(), millimetres)};
+    return tool;
+}
+
+ToolDescriptor distance_descriptor()
+{
+    auto tool = descriptor("visionpro.measure.distance", "Measure two-point distance");
+    tool.execution.retry = ToolRetry::Idempotent;
+    tool.inputs = {input("first", DataType::point2d(), measurement_sources, millimetres),
+        input("second", DataType::point2d(), measurement_sources, millimetres)};
+    tool.outputs = {output("distance_mm", DataType::real(), millimetres)};
+    return tool;
+}
 } // namespace
 
 std::span<const core::ToolDescriptor> tool_descriptors()
 {
-    static const std::array descriptors{read_file_descriptor(), threshold_descriptor(), blob_descriptor(), integer_range_descriptor()};
+    static const std::array descriptors{read_file_descriptor(), threshold_descriptor(), blob_descriptor(), integer_range_descriptor(),
+        fit_descriptor(), map_point_descriptor(), distance_descriptor()};
     return descriptors;
 }
 
 std::vector<core::ToolRegistration> registrations()
 {
     return {read_file_registration(read_file_descriptor()), threshold_registration(threshold_descriptor()),
-        blob_registration(blob_descriptor()), integer_range_registration(integer_range_descriptor())};
+        blob_registration(blob_descriptor()), integer_range_registration(integer_range_descriptor()),
+        fit_registration(fit_descriptor()), map_point_registration(map_point_descriptor()), distance_registration(distance_descriptor())};
 }
 
 core::Result<std::monostate> validate_file_frame_origin(const core::Point2D& origin)

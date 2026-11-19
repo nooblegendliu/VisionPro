@@ -20,6 +20,10 @@ add_executable(visionpro_vision_contract_tests vision_contract_tests.cpp)
 target_link_libraries(visionpro_vision_contract_tests PRIVATE visionpro_vision_tools visionpro_build_options)
 add_test(NAME tools.vision_contracts COMMAND visionpro_vision_contract_tests)
 
+add_executable(visionpro_calibration_tests calibration_tests.cpp)
+target_link_libraries(visionpro_calibration_tests PRIVATE visionpro_vision_tools visionpro_build_options)
+add_test(NAME tools.planar_calibration COMMAND visionpro_calibration_tests)
+
 add_executable(visionpro_image_bridge_tests image_bridge_tests.cpp)
 target_link_libraries(visionpro_image_bridge_tests PRIVATE visionpro_vision_tools opencv_core visionpro_build_options)
 add_test(NAME tools.image_bridge COMMAND visionpro_image_bridge_tests)
@@ -52,7 +56,7 @@ add_executable(visionpro_judgement_tests judgement_tests.cpp)
 target_link_libraries(visionpro_judgement_tests PRIVATE visionpro_vision_tools visionpro_workflow visionpro_build_options)
 add_test(NAME tools.judgement COMMAND visionpro_judgement_tests)
 
-set_tests_properties(tools.opencv_release_smoke tools.vision_contracts tools.image_bridge tools.image_read
+set_tests_properties(tools.opencv_release_smoke tools.vision_contracts tools.planar_calibration tools.image_bridge tools.image_read
     tools.roi tools.mask tools.roi_runtime tools.threshold tools.blob tools.judgement PROPERTIES
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:opencv_core>"
     TIMEOUT 30

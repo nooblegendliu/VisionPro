@@ -1,4 +1,5 @@
 #include "roi_editor.hpp"
+#include "coordinate_text.hpp"
 
 #include "image_view.hpp"
 
@@ -16,6 +17,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QPlainTextEdit>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSignalBlocker>
@@ -114,8 +116,7 @@ struct Frame {
 
 QString frame_name(const Frame& frame)
 {
-    return QStringLiteral("%1 (%2)").arg(text(frame.id.text()),
-        frame.unit == MeasurementUnit::Pixel ? QStringLiteral("px") : QStringLiteral("mm"));
+    return QStringLiteral("%1 (%2)").arg(text(frame.id.text()), unit_symbol(frame.unit));
 }
 
 class FrameBox final : public QComboBox {
@@ -320,7 +321,7 @@ private:
     TransformForm* transform_{};
 };
 
-enum class SourceKind { FullImage, Empty, AxisAligned, Rotated, Inherited, Mask, Existing };
+enum class SourceKind { FullImage, Empty, AxisAligned, Rotated, Circle, Ring, SectorRing, Polygon, Inherited, Mask, Existing };
 
 SourceKind source_kind(const RegionSource& source)
 {
@@ -330,6 +331,10 @@ SourceKind source_kind(const RegionSource& source)
     if (std::holds_alternative<EmptyRegionShape>(geometry)) { return SourceKind::Empty; }
     if (std::holds_alternative<AxisAlignedRect>(geometry)) { return SourceKind::AxisAligned; }
     if (std::holds_alternative<RotatedRect>(geometry)) { return SourceKind::Rotated; }
+    if (std::holds_alternative<CircleRegion>(geometry)) { return SourceKind::Circle; }
+    if (std::holds_alternative<RingRegion>(geometry)) { return SourceKind::Ring; }
+    if (std::holds_alternative<SectorRingRegion>(geometry)) { return SourceKind::SectorRing; }
+    if (std::holds_alternative<PolygonRegion>(geometry)) { return SourceKind::Polygon; }
     if (const auto* mask = std::get_if<MaskConfig>(&geometry)) {
         if (mask->mapping.sampling != MaskSampling::Linear
             && (!mask->mapping.transform || simple_transform(*mask->mapping.transform))) { return SourceKind::Mask; }
@@ -344,6 +349,10 @@ QString source_name(SourceKind source)
     case SourceKind::Empty: return QStringLiteral("Empty region");
     case SourceKind::AxisAligned: return QStringLiteral("Axis-aligned rectangle");
     case SourceKind::Rotated: return QStringLiteral("Rotated rectangle");
+    case SourceKind::Circle: return QStringLiteral("Circle");
+    case SourceKind::Ring: return QStringLiteral("Ring");
+    case SourceKind::SectorRing: return QStringLiteral("Annular sector");
+    case SourceKind::Polygon: return QStringLiteral("Polygon");
     case SourceKind::Inherited: return QStringLiteral("Inherited region");
     case SourceKind::Mask: return QStringLiteral("Raster mask");
     case SourceKind::Existing: return QStringLiteral("Preserve existing source");
@@ -400,6 +409,10 @@ public:
         add_shape(SourceKind::Empty, RegionShapeKind::Empty);
         add_shape(SourceKind::AxisAligned, RegionShapeKind::AxisAlignedRect);
         add_shape(SourceKind::Rotated, RegionShapeKind::RotatedRect);
+        add_shape(SourceKind::Circle, RegionShapeKind::Circle);
+        add_shape(SourceKind::Ring, RegionShapeKind::Ring);
+        add_shape(SourceKind::SectorRing, RegionShapeKind::SectorRing);
+        add_shape(SourceKind::Polygon, RegionShapeKind::Polygon);
         if (!outputs_.empty() && (!capabilities || capabilities->inheritance)) {
             add_choice(source_, source_name(SourceKind::Inherited), SourceKind::Inherited);
         }
@@ -424,8 +437,14 @@ public:
         const auto* axis = primitive ? std::get_if<AxisAlignedRect>(&primitive->geometry) : nullptr;
         const auto* rotated = primitive ? std::get_if<RotatedRect>(&primitive->geometry) : nullptr;
         shape_angle_ = rotated ? rotated->angle_radians : 0.0;
-        x_ = field(this, "roiX", number(axis ? axis->x : (rotated ? rotated->center_x : 0.0)));
-        y_ = field(this, "roiY", number(axis ? axis->y : (rotated ? rotated->center_y : 0.0)));
+        QPointF position;
+        if (primitive) {
+            std::visit([&](const auto& shape) {
+                if constexpr (requires { shape.center_x; }) { position = {shape.center_x, shape.center_y}; }
+            }, primitive->geometry);
+        }
+        x_ = field(this, "roiX", number(axis ? axis->x : position.x()));
+        y_ = field(this, "roiY", number(axis ? axis->y : position.y()));
         width_ = field(this, "roiWidth", number(axis ? axis->width : (rotated ? rotated->width : 1.0)));
         height_ = field(this, "roiHeight", number(axis ? axis->height : (rotated ? rotated->height : 1.0)));
         angle_ = field(this, "roiAngle", angle_text(shape_angle_));
@@ -434,6 +453,29 @@ public:
         layout_->addRow(QStringLiteral("Width"), width_);
         layout_->addRow(QStringLiteral("Height"), height_);
         layout_->addRow(QStringLiteral("Rectangle angle (°)"), angle_);
+        const auto* circle = primitive ? std::get_if<CircleRegion>(&primitive->geometry) : nullptr;
+        const auto* ring = primitive ? std::get_if<RingRegion>(&primitive->geometry) : nullptr;
+        const auto* sector = primitive ? std::get_if<SectorRingRegion>(&primitive->geometry) : nullptr;
+        outer_ = field(this, "roiRadius", number(circle ? circle->radius : ring ? ring->outer_radius : sector ? sector->outer_radius : 2));
+        inner_ = field(this, "roiInnerRadius", number(ring ? ring->inner_radius : sector ? sector->inner_radius : 1));
+        start_angle_ = sector ? sector->start_radians : 0;
+        sweep_angle_ = sector ? sector->sweep_radians : std::numbers::pi / 2;
+        start_ = field(this, "roiStart", angle_text(start_angle_));
+        sweep_ = field(this, "roiSweep", angle_text(sweep_angle_));
+        layout_->addRow(QStringLiteral("Outer radius"), outer_);
+        layout_->addRow(QStringLiteral("Inner radius"), inner_);
+        layout_->addRow(QStringLiteral("Start angle (°)"), start_);
+        layout_->addRow(QStringLiteral("Signed sweep (°)"), sweep_);
+        vertices_ = new QPlainTextEdit(this);
+        vertices_->setObjectName(QStringLiteral("roiVertices"));
+        vertices_->setPlaceholderText(QStringLiteral("One x, y pair per line"));
+        vertices_->setMaximumHeight(100);
+        if (const auto* polygon = primitive ? std::get_if<PolygonRegion>(&primitive->geometry) : nullptr) {
+            QStringList lines;
+            for (const auto& p : polygon->vertices) { lines.append(number(p.x) + QStringLiteral(", ") + number(p.y)); }
+            vertices_->setPlainText(lines.join(QLatin1Char('\n')));
+        }
+        layout_->addRow(QStringLiteral("Vertices (x, y)"), vertices_);
         mask_ = new MaskForm(this, context, primitive ? std::get_if<MaskConfig>(&primitive->geometry) : nullptr);
         layout_->addRow(mask_);
         direction_angle_ = original ? std::visit([](const auto& source) { return source.local_direction_radians; }, *original) : 0.0;
@@ -466,11 +508,16 @@ public:
         view_ = &view;
         connect(draw_, &QCheckBox::toggled, this, [this] { update_drawing(); });
         connect(view_, &ImageView::rectangle_drawn, this, [this](const QRectF& rectangle) {
-            const auto position = kind() == SourceKind::Rotated ? rectangle.center() : rectangle.topLeft();
+            const auto position = kind() == SourceKind::AxisAligned ? rectangle.topLeft() : rectangle.center();
             x_->setText(number(position.x()));
             y_->setText(number(position.y()));
-            width_->setText(number(rectangle.width()));
-            height_->setText(number(rectangle.height()));
+            if (kind() == SourceKind::Rotated || kind() == SourceKind::AxisAligned) {
+                width_->setText(number(rectangle.width()));
+                height_->setText(number(rectangle.height()));
+            } else { outer_->setText(number(std::min(rectangle.width(), rectangle.height()) / 2)); }
+        });
+        connect(view_, &ImageView::vertex_picked, this, [this](const QPointF& point) {
+            vertices_->appendPlainText(number(point.x()) + QStringLiteral(", ") + number(point.y()));
         });
         update_drawing();
     }
@@ -546,10 +593,19 @@ private:
         layout_->setRowVisible(existing_, existing);
         layout_->setRowVisible(inherited_, inherited);
         layout_->setRowVisible(frame_, !existing && (corrected || inherited));
-        for (auto* field : {x_, y_, width_, height_}) { layout_->setRowVisible(field, rectangle); }
+        const bool annular = source == SourceKind::Ring || source == SourceKind::SectorRing;
+        const bool radial = source == SourceKind::Circle || annular;
+        for (auto* field : {x_, y_}) { layout_->setRowVisible(field, rectangle || radial); }
+        for (auto* field : {width_, height_}) { layout_->setRowVisible(field, rectangle); }
         layout_->setRowVisible(angle_, rotated);
-        static_cast<QLabel*>(layout_->labelForField(x_))->setText(rotated ? QStringLiteral("Center X") : QStringLiteral("X"));
-        static_cast<QLabel*>(layout_->labelForField(y_))->setText(rotated ? QStringLiteral("Center Y") : QStringLiteral("Y"));
+        static_cast<QLabel*>(layout_->labelForField(x_))->setText(rotated || radial ? QStringLiteral("Center X") : QStringLiteral("X"));
+        static_cast<QLabel*>(layout_->labelForField(y_))->setText(rotated || radial ? QStringLiteral("Center Y") : QStringLiteral("Y"));
+        static_cast<QLabel*>(layout_->labelForField(outer_))->setText(annular ? QStringLiteral("Outer radius") : QStringLiteral("Radius"));
+        layout_->setRowVisible(outer_, radial);
+        layout_->setRowVisible(inner_, annular);
+        layout_->setRowVisible(start_, source == SourceKind::SectorRing);
+        layout_->setRowVisible(sweep_, source == SourceKind::SectorRing);
+        layout_->setRowVisible(vertices_, source == SourceKind::Polygon);
         layout_->setRowVisible(mask_, source == SourceKind::Mask);
         layout_->setRowVisible(direction_, !existing);
         layout_->setRowVisible(correction_, !existing);
@@ -560,11 +616,16 @@ private:
     void update_drawing()
     {
         if (!view_) { return; }
-        const bool drawable = (kind() == SourceKind::AxisAligned || kind() == SourceKind::Rotated)
+        const bool polygon = kind() == SourceKind::Polygon;
+        const bool radial = kind() == SourceKind::Circle || kind() == SourceKind::Ring || kind() == SourceKind::SectorRing;
+        const bool drawable = (kind() == SourceKind::AxisAligned || kind() == SourceKind::Rotated || radial || polygon)
             && target_ && context_.image && target_->unit == MeasurementUnit::Pixel
             && target_->id == context_.image->coordinate_frame() && !correction_->isChecked();
         draw_->setEnabled(drawable);
-        view_->set_rectangle_drawing(drawable && draw_->isChecked());
+        draw_->setText(polygon ? QStringLiteral("Click the image to append vertices")
+            : radial ? QStringLiteral("Drag a box to set the center and outer radius") : QStringLiteral("Draw rectangle on the image"));
+        view_->set_drawing_mode(!drawable || !draw_->isChecked() ? ImageView::DrawingMode::Off
+            : polygon ? ImageView::DrawingMode::Vertex : ImageView::DrawingMode::Rectangle);
     }
 
     Result<RegionShape> geometry(const Frame& frame) const
@@ -577,6 +638,26 @@ private:
         case SourceKind::Rotated:
             return RegionShape{RotatedRect{read_number(x_), read_number(y_), read_number(width_), read_number(height_),
                 read_angle(angle_, shape_angle_)}};
+        case SourceKind::Circle:
+            return RegionShape{CircleRegion{read_number(x_), read_number(y_), read_number(outer_)}};
+        case SourceKind::Ring:
+            return RegionShape{RingRegion{read_number(x_), read_number(y_), read_number(inner_), read_number(outer_)}};
+        case SourceKind::SectorRing:
+            return RegionShape{SectorRingRegion{read_number(x_), read_number(y_), read_number(inner_), read_number(outer_),
+                read_angle(start_, start_angle_), read_angle(sweep_, sweep_angle_)}};
+        case SourceKind::Polygon: {
+            PolygonRegion polygon;
+            for (const auto& line : vertices_->toPlainText().trimmed().split(QLatin1Char('\n'))) {
+                const auto pair = line.split(QLatin1Char(','));
+                bool x_ok{}, y_ok{};
+                const double x = pair.value(0).toDouble(&x_ok), y = pair.value(1).toDouble(&y_ok);
+                if (pair.size() != 2 || !x_ok || !y_ok) {
+                    return invalid(ErrorCode::InvalidGeometry, "Enter one polygon vertex per line as x, y.");
+                }
+                polygon.vertices.push_back({x, y});
+            }
+            return RegionShape{std::move(polygon)};
+        }
         case SourceKind::Mask: return mask_->value(frame, correction_->isChecked());
         default: return invalid(ErrorCode::InvalidGeometry, "Select a local ROI geometry.");
         }
@@ -588,6 +669,8 @@ private:
     std::vector<OutputChoice> outputs_;
     double shape_angle_{};
     double direction_angle_{};
+    double start_angle_{};
+    double sweep_angle_{};
     QFormLayout* layout_{};
     QComboBox* source_{};
     QComboBox* inherited_{};
@@ -598,6 +681,11 @@ private:
     QLineEdit* width_{};
     QLineEdit* height_{};
     QLineEdit* angle_{};
+    QLineEdit* outer_{};
+    QLineEdit* inner_{};
+    QLineEdit* start_{};
+    QLineEdit* sweep_{};
+    QPlainTextEdit* vertices_{};
     QLineEdit* direction_{};
     QCheckBox* correction_{};
     TransformForm* transform_{};
@@ -891,6 +979,7 @@ private:
         const auto refresh = [this] { queue_preview(); };
         for (auto* control : editor.findChildren<QComboBox*>()) { connect(control, &QComboBox::currentIndexChanged, this, refresh); }
         for (auto* control : editor.findChildren<QLineEdit*>()) { connect(control, &QLineEdit::textChanged, this, refresh); }
+        for (auto* control : editor.findChildren<QPlainTextEdit*>()) { connect(control, &QPlainTextEdit::textChanged, this, refresh); }
         for (auto* control : editor.findChildren<QCheckBox*>()) { connect(control, &QCheckBox::toggled, this, refresh); }
         queue_preview();
     }

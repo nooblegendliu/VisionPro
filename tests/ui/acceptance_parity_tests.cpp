@@ -28,6 +28,7 @@
 
 #include <algorithm>
 #include <charconv>
+#include <cmath>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -461,6 +462,7 @@ private Q_SLOTS:
     void reproduces_saved_calculations();
     void reproduces_saved_shared_workflows();
     void reproduces_saved_reentrant_workflows();
+    void reproduces_saved_calibrated_measurement();
 };
 
 namespace {
@@ -696,6 +698,73 @@ void AcceptanceParityTests::reproduces_saved_reentrant_workflows()
 {
     try { compare_saved_workflows(VISIONPRO_S65_DIRECTORY); }
     catch (const std::exception& failure) { QFAIL(failure.what()); }
+}
+
+void AcceptanceParityTests::reproduces_saved_calibrated_measurement()
+{
+    try {
+        const auto verify = [](const json& run, double ref_x, double ref_y, double distance) {
+            require(run.at("status") == "Succeeded", "Measurement failed: " + run.dump());
+            const auto& calls = run.at("nodes");
+            const auto& threshold = named(calls, "id", "5ca4f87a-ea1e-4d62-89b0-000000006812");
+            const auto& blob = named(calls, "id", "5ca4f87a-ea1e-4d62-89b0-000000006813");
+            const auto& fit = named(calls, "id", "5ca4f87a-ea1e-4d62-89b0-000000006814");
+            const auto& first = named(calls, "id", "5ca4f87a-ea1e-4d62-89b0-000000006815");
+            const auto& second = named(calls, "id", "5ca4f87a-ea1e-4d62-89b0-000000006816");
+            const auto& measure = named(calls, "id", "5ca4f87a-ea1e-4d62-89b0-000000006817");
+            require(output(threshold, "binary").at("samples").at("nonzero_count") == 5
+                && output(blob, "total_area_pixels") == "5", "The circle must select the five cross-shaped pixels.");
+            const auto& source = output(fit, "source");
+            const auto& acquired = named(fit.at("resources"), "resource", "5ca4f87a-ea1e-4d62-89b0-000000006821");
+            require(source.at("resource") == acquired.at("resource") && source.at("revision") == "1"
+                && acquired.at("revision") == "1" && source.at("kind") == "Calibration",
+                "The fitted transform must come from the pinned calibration file.");
+            const auto near = [](const json& actual, double expected) { return std::abs(actual.get<double>() - expected) <= 1e-6; };
+            const auto& transform = output(fit, "transform");
+            require(transform.at("model") == "Affine" && transform.at("from") == "camera" && transform.at("to") == "world"
+                && near(output(fit, "rms_error_mm"), 0), "Unexpected affine fit or residual.");
+            const auto& centroid = output(first, "point");
+            const auto& reference = output(second, "point");
+            require(centroid.at("coordinate_frame") == "world" && centroid.at("unit") == "Millimetre"
+                && near(centroid.at("x"), 16) && near(centroid.at("y"), 8)
+                && near(reference.at("x"), ref_x) && near(reference.at("y"), ref_y)
+                && near(output(measure, "distance_mm"), distance), "Calibrated points or distance exceed the 1e-6 mm tolerance.");
+        };
+        QTemporaryDir scratch;
+        QVERIFY(scratch.isValid());
+        const auto sample = fs::path(QString::fromUtf8(VISIONPRO_S68_DIRECTORY).toStdU16String());
+        const auto saved = fs::path(scratch.path().toStdU16String()) / "measurement";
+        const auto registry = take(app::make_tool_registry());
+        const auto document = take(load_solution(sample, registry));
+        const auto flow = document.solution().workflows.front().id;
+        EditorWindow window(document.solution(), registry);
+        window.show();
+        window.open_document(sample);
+        wait_for_file(window);
+        QVERIFY(scene(window).select_workflow(flow));
+        verify(complete_editor_run(window, "runWorkflow"), 20, 11, 5);
+        const auto point_node = uuid<NodeId>("5ca4f87a-ea1e-4d62-89b0-000000006816");
+        QVERIFY(scene(window).reveal_node(point_node));
+        drive_dialog(window, "editBinding", QStringLiteral("point"), {set_source, source_kind(QStringLiteral("Constant")),
+            [](QDialog& dialog) -> QPushButton* {
+                auto* x = dialog.findChild<QLineEdit*>(QStringLiteral("pointX"));
+                auto* y = dialog.findChild<QLineEdit*>(QStringLiteral("pointY"));
+                if (!x || !y) { return nullptr; }
+                x->setText(QStringLiteral("3"));
+                y->setText(QStringLiteral("6"));
+                return ok_button(dialog);
+            }, accept_binding});
+        window.transfer_document(saved, SolutionTransfer::SaveAs);
+        wait_for_file(window);
+        window.open_document(saved);
+        wait_for_file(window);
+        QVERIFY(scene(window).select_workflow(flow));
+        const auto desktop = complete_editor_run(window, "runWorkflow");
+        const auto cli = run_cli(saved, flow);
+        verify(desktop, 16, 14, 6);
+        verify(cli, 16, 14, 6);
+        QVERIFY(desktop.at("revision") == cli.at("revision") && desktop.at("session") != cli.at("session"));
+    } catch (const std::exception& failure) { QFAIL(failure.what()); }
 }
 
 void AcceptanceParityTests::compares_saved_blob_loop()

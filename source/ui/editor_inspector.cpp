@@ -1,4 +1,5 @@
 #include "editor_inspector.hpp"
+#include "coordinate_text.hpp"
 #include "control_scene.hpp"
 #include "roi_editor.hpp"
 
@@ -23,6 +24,7 @@
 #include <QListWidget>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QPointer>
 #include <QScrollArea>
 #include <QSignalBlocker>
 #include <QStringList>
@@ -571,9 +573,12 @@ std::optional<ConfigValue> point_constant(QWidget* owner, const Solution& soluti
     auto* frame = new QComboBox(&dialog);
     auto* x = new QLineEdit(QStringLiteral("0"), &dialog);
     auto* y = new QLineEdit(QStringLiteral("0"), &dialog);
+    frame->setObjectName(QStringLiteral("pointFrame"));
+    x->setObjectName(QStringLiteral("pointX"));
+    y->setObjectName(QStringLiteral("pointY"));
     const auto* point = prior ? prior->as_point2d() : nullptr;
     for (const auto& [name, value] : frames) {
-        frame->addItem(name);
+        frame->addItem(QStringLiteral("%1 (%2)").arg(name, unit_symbol(value.unit)));
         if (point && point->coordinate_frame == value.id) { frame->setCurrentIndex(frame->count() - 1); }
     }
     if (point) {
@@ -1014,6 +1019,7 @@ struct InspectorContext {
     const ToolRegistry& registry;
     QWidget* owner;
     const std::optional<ImageHandle>& preview_image;
+    const EditorInspector::HashFile& hash_file;
 
     template<class Change>
     bool edit_flow(const WorkflowId& id, const QString& label, const Change& change) const
@@ -1518,9 +1524,13 @@ void select_resource(const InspectorContext& context, const WorkflowId& id, cons
     std::size_t current = 0;
     for (const auto& resource : solution.resources) {
         if (resource.kind != slot.kind) { continue; }
-        const auto pin = old && old->id == resource.id ? old->revision : std::nullopt;
+        auto pin = old && old->id == resource.id ? old->revision : std::nullopt;
+        if (slot.kind == ResourceKind::Calibration && !pin) {
+            if (const auto* file = std::get_if<ManagedResource>(&resource.location)) { pin = file->revision; }
+            if (const auto* file = std::get_if<ExternalFileResource>(&resource.location)) { pin = file->revision; }
+        }
         ResourceReference ref{resource.id, resource.kind, pin};
-        if (old == ref) { current = choices.size(); }
+        if (old && old->id == resource.id) { current = choices.size(); }
         choices.emplace_back(QStringLiteral("%1 [%2]").arg(qtext(resource.name), short_id(resource.id)), ref);
     }
     auto choice = choose(context.owner, QStringLiteral("Choose resource"), QStringLiteral("Resource"), choices, current);
@@ -1536,17 +1546,23 @@ void select_external_file(const InspectorContext& context, const WorkflowId& id,
 {
     const auto path = QFileDialog::getOpenFileName(context.owner, QStringLiteral("Choose external resource"));
     if (path.isEmpty()) { return; }
-    const QFileInfo file(path);
-    const auto absolute = file.absoluteFilePath();
-    context.edit_node(id, selected, QStringLiteral("Choose external file"), [&](Solution& solution, Workflow&, Node& draft) -> Check {
-        auto created = IdFactory::generate<ResourceId>();
-        if (const auto* failure = std::get_if<Diagnostic>(&created)) { return *failure; }
-        const auto resource = std::get<ResourceId>(created);
-        solution.resources.push_back({resource, utf8(file.fileName()), slot.kind,
-            ExternalFileResource{{PathBase::Absolute, utf8(absolute), {}}, ResourceReadPolicy::PerInvocation, {}, {}}});
-        write_resource_binding(draft, slot, ResourceReference{resource, slot.kind, {}});
-        return std::monostate{};
-    });
+    const auto apply = [context, owner = QPointer(context.owner), id, selected, slot, file = QFileInfo(path)](std::optional<std::string> digest) {
+        if (!owner) { return; }
+        context.edit_node(id, selected, QStringLiteral("Choose external file"), [&](Solution& solution, Workflow&, Node& draft) -> Check {
+            auto created = IdFactory::generate<ResourceId>();
+            if (const auto* failure = std::get_if<Diagnostic>(&created)) { return *failure; }
+            const auto resource = std::get<ResourceId>(created);
+            const auto policy = digest ? ResourceReadPolicy::SnapshotLocked : ResourceReadPolicy::PerInvocation;
+            const auto revision = digest ? std::optional<std::uint64_t>{1} : std::nullopt;
+            solution.resources.push_back({resource, utf8(file.fileName()), slot.kind,
+                ExternalFileResource{{PathBase::Absolute, utf8(file.absoluteFilePath()), {}}, policy, digest, revision}});
+            write_resource_binding(draft, slot, ResourceReference{resource, slot.kind, revision});
+            return std::monostate{};
+        });
+    };
+    if (slot.kind == ResourceKind::Calibration || slot.kind == ResourceKind::Template) {
+        if (context.hash_file) { context.hash_file(path, apply); }
+    } else { apply(std::nullopt); }
 }
 
 void resource_row(QFormLayout& form, QWidget* owner, const InspectorContext& context, const Workflow& flow,
@@ -1561,7 +1577,8 @@ void resource_row(QFormLayout& form, QWidget* owner, const InspectorContext& con
     });
     edit->setToolTip(summary);
     row->addWidget(edit, 1);
-    if (file_resource_kind(slot.kind)) {
+    const bool locked_file = slot.kind == ResourceKind::Calibration || slot.kind == ResourceKind::Template;
+    if (file_resource_kind(slot.kind) && (!locked_file || context.hash_file)) {
         row->addWidget(action(owner, QStringLiteral("File…"), "chooseExternalResource",
             [context, id = flow.id, selected = node.id, slot] { select_external_file(context, id, selected, slot); }));
     }
@@ -2188,8 +2205,9 @@ void boundary_controls(QVBoxLayout& panel, const InspectorContext& context, cons
 
 } // namespace
 
-EditorInspector::EditorInspector(ControlGraphModel& model, ControlScene& scene, const core::ToolRegistry& registry, QWidget* parent)
-    : QWidget(parent), model_(model), scene_(scene), registry_(registry), scroll_(new QScrollArea(this))
+EditorInspector::EditorInspector(ControlGraphModel& model, ControlScene& scene, const core::ToolRegistry& registry,
+    QWidget* parent, HashFile hash_file)
+    : QWidget(parent), model_(model), scene_(scene), registry_(registry), hash_file_(std::move(hash_file)), scroll_(new QScrollArea(this))
 {
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
@@ -2220,7 +2238,7 @@ void EditorInspector::refresh()
 {
     auto content = std::make_unique<QWidget>();
     auto* layout = new QVBoxLayout(content.get());
-    const InspectorContext context{model_, scene_, registry_, this, preview_image_};
+    const InspectorContext context{model_, scene_, registry_, this, preview_image_, hash_file_};
     const auto flow_id = model_.workflow_id();
     const auto* flow = flow_id ? find_workflow(model_.draft(), *flow_id) : nullptr;
     if (flow) {

@@ -37,6 +37,7 @@ class ImageView final : public QGraphicsView {
     Q_OBJECT
 
 public:
+    enum class DrawingMode { Off, Rectangle, Vertex };
     explicit ImageView(QWidget* parent = nullptr);
 
     [[nodiscard]] core::Result<std::monostate> set_image(const core::ImageHandle& image);
@@ -46,7 +47,8 @@ public:
         std::span<const BlobAnnotation> blobs = {});
     void clear_image();
     void fit_image();
-    void set_rectangle_drawing(bool enabled);
+    void set_drawing_mode(DrawingMode mode);
+    void set_rectangle_drawing(bool enabled) { set_drawing_mode(enabled ? DrawingMode::Rectangle : DrawingMode::Off); }
 
     // Scene coordinates coincide with local Pixel coordinates. Integer positions are pixel centers.
     [[nodiscard]] std::optional<QPointF> image_coordinates(const QPoint& viewport_position) const;
@@ -55,6 +57,7 @@ public:
 signals:
     void pixel_changed(const QString& pixel);
     void rectangle_drawn(const QRectF& rectangle);
+    void vertex_picked(const QPointF& position);
 
 protected:
     void drawForeground(QPainter* painter, const QRectF& rect) override;
@@ -85,7 +88,7 @@ private:
     QPolygonF blob_centroids_;
     bool fit_on_resize_{true};
     double fitted_scale_{1};
-    bool rectangle_drawing_{false};
+    DrawingMode drawing_mode_{DrawingMode::Off};
     Drag drag_{Drag::None};
     Qt::MouseButton drag_button_{Qt::NoButton};
     QPoint pan_position_;

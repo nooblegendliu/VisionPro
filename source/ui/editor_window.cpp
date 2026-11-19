@@ -10,7 +10,10 @@
 #include <QtNodes/internal/NodeGraphicsObject.hpp>
 #include <QAction>
 #include <QCloseEvent>
+#include <QComboBox>
+#include <QDialogButtonBox>
 #include <QDockWidget>
+#include <QFormLayout>
 #include <QInputDialog>
 #include <QLabel>
 #include <QLineEdit>
@@ -146,6 +149,7 @@ void EditorWindow::create_actions()
             return std::monostate{};
         });
     });
+    add_frame_ = action(edit, QStringLiteral("Add Coordinate Frame…"), "addCoordinateFrame", [this] { add_coordinate_frame(); });
 
     auto& graph = *menuBar()->addMenu(QStringLiteral("&Workflow"));
     new_workflow_ = action(graph, QStringLiteral("Add Workflow…"), "addWorkflow", [this] {
@@ -275,7 +279,8 @@ void EditorWindow::replace_canvas(Solution replacement, bool editable)
     auto scene = std::make_unique<ControlScene>(*model);
     scene->set_editing_enabled(editable);
     auto view = std::make_unique<QtNodes::GraphicsView>(scene.get());
-    auto inspector = std::make_unique<EditorInspector>(*model, *scene, registry_);
+    auto inspector = std::make_unique<EditorInspector>(*model, *scene, registry_, nullptr,
+        [this](const QString& path, std::function<void(std::string)> apply) { hash_resource_file(path, std::move(apply)); });
     for (auto* registered : view->actions()) {
         if (registered != view->clearSelectionAction()) { view->removeAction(registered); }
     }
@@ -411,6 +416,7 @@ void EditorWindow::refresh_actions()
     preview_roi_->setEnabled(false);
 #endif
     rename_->setEnabled(editable);
+    add_frame_->setEnabled(editable);
     new_workflow_->setEnabled(editable);
     remove_workflow_->setEnabled(editable && active);
     add_tool_->setEnabled(editable && active && tools_->currentRow() >= 0);
@@ -430,6 +436,38 @@ void EditorWindow::refresh_actions()
     scene_->set_editing_enabled(editable);
     setWindowTitle(QStringLiteral("VisionPro - Workflow Canvas - %1[*]").arg(QString::fromStdString(draft().name)));
     setWindowModified(!history.isClean());
+}
+
+void EditorWindow::add_coordinate_frame()
+{
+    QDialog dialog(this);
+    dialog.setWindowTitle(QStringLiteral("Add Coordinate Frame"));
+    auto* form = new QFormLayout(&dialog);
+    auto* name = new QLineEdit(&dialog);
+    name->setObjectName(QStringLiteral("coordinateFrameId"));
+    auto* kind = new QComboBox(&dialog);
+    kind->setObjectName(QStringLiteral("coordinateFrameKind"));
+    kind->addItems({QStringLiteral("Physical (mm, X right, Y up)"), QStringLiteral("Image (px, X right, Y down)")});
+    form->addRow(QStringLiteral("Frame ID"), name);
+    form->addRow(QStringLiteral("Convention"), kind);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    form->addRow(buttons);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    if (dialog.exec() != QDialog::Accepted) { return; }
+    scene_->edit_draft(QStringLiteral("Add coordinate frame"), [&](Solution& candidate) -> Result<std::monostate> {
+        auto parsed = SchemaIdFactory::parse<CoordinateSystemId>(name->text().trimmed().toStdString());
+        if (auto* issue = std::get_if<Diagnostic>(&parsed)) { return *issue; }
+        const auto id = std::get<CoordinateSystemId>(parsed);
+        if (std::ranges::find(candidate.coordinates, id, &CoordinateFrameDefinition::id) != candidate.coordinates.end()) {
+            return Diagnostic{ErrorCode::DuplicateIdentity, Severity::Error, {}, "This coordinate frame ID is already declared."};
+        }
+        const bool image = kind->currentIndex() == 1;
+        candidate.coordinates.push_back({id, image ? CoordinateKind::Image : CoordinateKind::Physical,
+            image ? MeasurementUnit::Pixel : MeasurementUnit::Millimetre, {0, 0}, {1, 0}, {0, image ? -1.0 : 1.0},
+            image ? Handedness::LeftHanded : Handedness::RightHanded});
+        return std::monostate{};
+    });
 }
 
 void EditorWindow::make_new_document()

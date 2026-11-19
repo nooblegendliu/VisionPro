@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <numbers>
 
 namespace visionpro::tools::vision {
@@ -137,7 +138,98 @@ Result<Extent> extent_of(Rectangle rectangle, const Matrix& matrix)
         matrix[3] <= 0 && matrix[4] <= 0};
 }
 
-using Shape = std::variant<std::monostate, Rectangle, PreparedRoiMask>;
+constexpr double full_turn = 2 * std::numbers::pi;
+constexpr double relative_roundoff = 8 * std::numeric_limits<double>::epsilon();
+constexpr double angular_roundoff = full_turn * relative_roundoff;
+
+struct RadialShape {
+    double inner, outer;
+    double start{0}, sweep{full_turn};
+
+    bool spans(double angle) const
+    {
+        if (std::abs(sweep) == full_turn) { return true; }
+        auto delta = std::remainder(sweep > 0 ? angle - start : start - angle, full_turn);
+        if (delta < -angular_roundoff) { delta += full_turn; }
+        return delta <= std::abs(sweep) + angular_roundoff;
+    }
+
+    bool contains(Vector2D point) const
+    {
+        const auto radius = std::hypot(point.x, point.y);
+        return std::isfinite(radius) && inner - radius <= relative_roundoff * inner
+            && radius - outer <= relative_roundoff * outer
+            && (radius == 0 || std::abs(sweep) == full_turn || spans(std::atan2(point.y, point.x)));
+    }
+};
+
+Result<Extent> extent_of(const RadialShape& shape, const Matrix& matrix)
+{
+    // Under affine placement each target coordinate is offset + r*(a*cos(t)+b*sin(t)).
+    // Its extrema occur at the angular limits or where this sinusoid is stationary.
+    const auto axis = [&](double a, double b, double offset) {
+        const auto amplitude = std::hypot(a, b);
+        if (std::abs(shape.sweep) == full_turn) {
+            return std::pair{offset - shape.outer * amplitude, offset + shape.outer * amplitude};
+        }
+        const auto projection = [&](double angle) {
+            const auto v = unit_direction(angle);
+            const auto value = a * v.x + b * v.y;
+            // A closed end ray perpendicular to this axis contributes exactly zero.
+            return std::abs(value) <= angular_roundoff * amplitude ? 0.0 : value;
+        };
+        const auto first = projection(shape.start), last = projection(shape.start + shape.sweep);
+        const auto low = shape.spans(std::atan2(-b, -a)) ? -amplitude : (std::min)(first, last);
+        const auto high = shape.spans(std::atan2(b, a)) ? amplitude : (std::max)(first, last);
+        return std::pair{offset + low * (low < 0 ? shape.outer : shape.inner),
+            offset + high * (high > 0 ? shape.outer : shape.inner)};
+    };
+    const auto [left, right] = axis(matrix[0], matrix[1], matrix[2]);
+    const auto [top, bottom] = axis(matrix[3], matrix[4], matrix[5]);
+    if (!std::isfinite(left) || !std::isfinite(right) || !std::isfinite(top) || !std::isfinite(bottom)) {
+        return error(ErrorCode::InvalidTransform, "ROI correction produces nonfinite radial bounds.");
+    }
+    return Extent{{left, top, right, bottom}, true, true};
+}
+
+Result<Extent> extent_of(const PolygonRegion& polygon, const Matrix& matrix)
+{
+    Rectangle box{};
+    for (std::size_t i = 0; i < polygon.vertices.size(); ++i) {
+        const auto vertex = linear(matrix, polygon.vertices[i]);
+        const auto x = vertex.x + matrix[2], y = vertex.y + matrix[5];
+        if (!std::isfinite(x) || !std::isfinite(y)) {
+            return error(ErrorCode::InvalidTransform, "ROI correction produces a nonfinite polygon vertex.");
+        }
+        if (i == 0) { box = {x, y, x, y}; }
+        else {
+            box.left = (std::min)(box.left, x);
+            box.top = (std::min)(box.top, y);
+            box.right = (std::max)(box.right, x);
+            box.bottom = (std::max)(box.bottom, y);
+        }
+    }
+    return Extent{box, true, true};
+}
+
+bool polygon_contains(const PolygonRegion& polygon, Vector2D point)
+{
+    bool inside = false;
+    auto a = polygon.vertices.back();
+    for (const auto b : polygon.vertices) {
+        const auto xy = (b.x - a.x) * (point.y - a.y), yx = (b.y - a.y) * (point.x - a.x);
+        const auto side = xy - yx;
+        const auto edge_roundoff = relative_roundoff * (std::max)(std::abs(xy), std::abs(yx));
+        if (std::isfinite(side) && std::abs(side) <= edge_roundoff
+            && point.x >= (std::min)(a.x, b.x) && point.x <= (std::max)(a.x, b.x)
+            && point.y >= (std::min)(a.y, b.y) && point.y <= (std::max)(a.y, b.y)) { return true; }
+        if ((a.y > point.y) != (b.y > point.y) && (side > 0) == (b.y > a.y)) { inside = !inside; }
+        a = b;
+    }
+    return inside;
+}
+
+using Shape = std::variant<std::monostate, Rectangle, RadialShape, PolygonRegion, PreparedRoiMask>;
 
 struct PlacedShape {
     Shape shape;
@@ -149,12 +241,15 @@ struct PlacedShape {
     {
         const auto local = linear(inverse, {point.x - origin.x, point.y - origin.y});
         if (const auto* rectangle = std::get_if<Rectangle>(&shape)) { return rectangle->contains(local); }
+        if (const auto* radial = std::get_if<RadialShape>(&shape)) { return radial->contains(local); }
+        if (const auto* polygon = std::get_if<PolygonRegion>(&shape)) { return polygon_contains(*polygon, local); }
         const auto* mask = std::get_if<PreparedRoiMask>(&shape);
         return mask && mask->contains(local);
     }
 };
 
-Result<PlacedShape> place_shape(Shape shape, Rectangle support, const Matrix& to_source,
+template<class Support>
+Result<PlacedShape> place_shape(Shape shape, const Support& support, const Matrix& to_source,
     const RegionPrimitive& primitive)
 {
     auto placement = primitive.transform.value_or(Transform2D{primitive.coordinate_frame, primitive.coordinate_frame,
@@ -187,6 +282,26 @@ Result<PlacedShape> prepare_shape(const RegionPrimitive& primitive, const ImageH
         const auto [cosine, sine] = unit_direction(rotated->angle_radians);
         const Matrix pose{cosine, -sine, rotated->center_x, sine, cosine, rotated->center_y, 0, 0, 1};
         return place_shape(rectangle, rectangle, pose, primitive);
+    }
+    const auto radial = [&](double x, double y, RadialShape shape) {
+        const Matrix offset{1, 0, x, 0, 1, y, 0, 0, 1};
+        return place_shape(shape, shape, offset, primitive);
+    };
+    if (const auto* circle = std::get_if<CircleRegion>(&geometry)) {
+        return radial(circle->center_x, circle->center_y, {0, circle->radius});
+    }
+    if (const auto* ring = std::get_if<RingRegion>(&geometry)) {
+        return radial(ring->center_x, ring->center_y, {ring->inner_radius, ring->outer_radius});
+    }
+    if (const auto* sector = std::get_if<SectorRingRegion>(&geometry)) {
+        const auto angle = sector->start_radians;
+        const auto start = std::abs(angle) <= 2 * full_turn ? std::remainder(angle, full_turn)
+            : std::atan2(std::sin(angle), std::cos(angle));
+        return radial(sector->center_x, sector->center_y, {sector->inner_radius, sector->outer_radius,
+            start, sector->sweep_radians});
+    }
+    if (const auto* polygon = std::get_if<PolygonRegion>(&geometry)) {
+        return place_shape(*polygon, *polygon, identity_matrix, primitive);
     }
     if (const auto* mask = std::get_if<MaskConfig>(&geometry)) {
         const auto& mapping = mask->mapping;

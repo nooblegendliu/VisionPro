@@ -290,6 +290,61 @@ void inherited_layer_policies()
     unsupported_exclusion.exclusions.emplace_back(inherited);
     rejects(evaluate_roi(target, unsupported_exclusion, binding), ErrorCode::UnsupportedRegion, unsupported_exclusion.id);
 }
+
+void curved_bounds_and_inheritance()
+{
+    const auto frame = key<CoordinateSystemId>("camera");
+    const ToolValueTarget binding{key<ParameterId>("roi")};
+    const auto target = image(7, 5, frame);
+    constexpr auto pi = std::numbers::pi;
+    const auto quarter = region(id<RegionId>(), frame, primitive(frame, SectorRingRegion{0, 0, 0, 2, 0, pi/2}));
+    expect_members(take(evaluate_roi(target, quarter, binding)), target,
+        {{0, 0}, {1, 0}, {2, 0}, {0, 1}, {1, 1}, {0, 2}});
+
+    auto source = region(id<RegionId>('1'), frame, primitive(frame, SectorRingRegion{2, 2, 1, 2, pi/4, -pi/2}));
+    source.exclusions.push_back(primitive(frame, CircleRegion{3, 2, 0.25}));
+    const auto resolved = take(evaluate_roi(target, source, binding));
+    expect_members(resolved, target, {{3, 1}, {4, 2}, {3, 3}});
+    const auto reference = source_in(frame, translation(frame, 1));
+    auto outer = region(id<RegionId>('2'), frame, reference);
+    outer.exclusions.push_back(primitive(frame, PolygonRegion{{{4, 1}, {4.25, 1}, {4, 1.25}}}));
+    const auto inherited = inherited_roi(target, outer, binding, freeze(binding, reference, take(resolved.effective_region)));
+    expect_members(inherited, target, {{5, 2}, {4, 3}});
+    expect_members(take(evaluate_roi(target, take(inherited.effective_region), binding)), target, {{5, 2}, {4, 3}});
+
+    const Transform2D shear{frame, frame, pixels, pixels, TransformModel::Affine, {1, 1, 1.5, 0, 1, 2, 0, 0, 1}};
+    const auto ellipse = region(id<RegionId>(), frame, primitive(frame, CircleRegion{0, 0, 1}, 0, shear));
+    // Its transformed square support extends to x=-0.5, but the actual ellipse fits.
+    expect_members(take(evaluate_roi(target, ellipse, binding)), target, {{1, 2}, {2, 2}});
+    const auto tangent = region(id<RegionId>(), frame, primitive(frame, CircleRegion{6, 2, 1}));
+    rejects(evaluate_roi(target, tangent, binding), ErrorCode::ImageBounds, tangent.id);
+}
+
+void closed_shape_roundoff()
+{
+    const auto frame = key<CoordinateSystemId>("camera");
+    const ToolValueTarget binding{key<ParameterId>("roi")};
+    const auto target = image(7, 6, frame);
+    constexpr double pi = std::numbers::pi;
+    SectorRingRegion crossing{3, 3, 1, 2.25, 2 * pi - pi / 6, pi / 6 + std::atan2(1.0, 2.0)};
+    const auto evaluate = [&](RegionShape shape) {
+        return evaluate_roi(target, region(id<RegionId>(), frame, primitive(frame, std::move(shape))), binding);
+    };
+    expect_members(take(evaluate(crossing)), target, {{5, 2}, {4, 3}, {5, 3}, {5, 4}});
+    crossing.sweep_radians -= 1e-8;
+    expect_members(take(evaluate(crossing)), target, {{5, 2}, {4, 3}, {5, 3}});
+
+    // The continuous sector is tangent to x=0 at its end, with no part left of the image.
+    SectorRingRegion tangent{0, 2, 0, 2, 2 * pi - pi / 9, pi / 9 + pi / 2};
+    expect_members(take(evaluate(tangent)), target, {{0, 2}, {1, 2}, {2, 2}, {0, 3}, {1, 3}, {0, 4}});
+    tangent.sweep_radians += 1e-8;
+    rejects(evaluate(tangent), ErrorCode::ImageBounds, id<RegionId>());
+
+    PolygonRegion triangle{{{0.1, 0.4}, {2.8, 2.2}, {0.1, 2.2}}};
+    expect_members(take(evaluate(triangle)), target, {{1, 1}, {1, 2}, {2, 2}});
+    triangle.vertices[1].y += 1e-8;
+    expect_members(take(evaluate(triangle)), target, {{1, 2}, {2, 2}});
+}
 } // namespace
 
 int main()
@@ -299,6 +354,8 @@ int main()
         direction_and_affine_correction();
         boundaries_and_empty_roi();
         inherited_layer_policies();
+        curved_bounds_and_inheritance();
+        closed_shape_roundoff();
         std::cout << "V07-V09 ROI geometry, inherited layers and boundary policies passed\n";
         return 0;
     } catch (const std::exception& failure) {

@@ -2451,3 +2451,28 @@ $workflow = '5ca4f87a-ea1e-4d62-89b0-000000006710'
 ctest --test-dir out/build/s67-headless -C Release -R 'workflow\.(timeout_retry|logical_timeout_and_cancel|recovery_and_judgement|external_deduplication)|app\.cli_error_recovery' --output-on-failure
 ctest --test-dir out/build/s67-gui -C Release -R '^visionpro_inspector_tests$' --output-on-failure
 ```
+
+### 10.8 S6.8 ROI 与标定测量
+
+2026-11-19，Windows x64 Release 全量回归通过，启用 GUI 与 OpenCV 时为 **154/154** 项，关闭两者时为 **123/123** 项。Qt 交互与像素对照使用 offscreen，测量精度使用合成点对和固定图像验收。
+
+使用启用 OpenCV 的 Windows x64 Release 构建。桌面操作另需启用 GUI。打开[测量方案](../samples/s6-calibration/solution.json)，从 **Run → Run Workflow** 运行，在运行面板依次查看阈值、Blob、平面标定、两次坐标转换和测距结果。
+
+| 固定输入或操作 | 预期与实测 |
+|---|---|
+| 9×9 白图，阈值节点使用圆心 (3,4)、半径 1 px 的圆 | 掩膜包含中心及上下左右共 5 个像素。Blob 面积为 5，质心为 (3,4) px |
+| 四角标定点，仿射关系 `X=2x+10, Y=3y-4` | 独立质心映射为 (16,8) mm，参考点 (5,5) px 映射为 (20,11) mm，距离 5 mm。样例拟合 RMS 为 0 mm，回归容差为 1e-6 mm |
+| 在桌面将 **Map reference point → Properties → point** 的常量改为 (3,6) px，另存并重开 | 桌面和独立 CLI 均得到参考点 (16,14) mm、距离 6 mm；两边都读到同一 Calibration UUID 的修订 1 |
+| 像素点移到源域 [0,8]×[0,8] 外，或修改已锁定文件的内容 | 分别报告 `InvalidTransform` 和 `ResourceVersionMismatch` |
+
+**编辑 ROI。** 在阈值或 Blob 的属性面板打开 **Edit ROI…**，选择 Circle、Ring、Annular sector 或 Polygon。角度以度输入，正方向从图像 +X 朝 +Y。预览显示实际成员掩膜。四种形状的测试分别核对手列像素、阈值结果和 Blob 面积；桌面测试另存、重开后逐像素读取显示的掩膜。斜边、跨零、内孔、排除和继承修正另有边界用例。[ROI 求值测试](../tests/tools/roi_tests.cpp) · [阈值与 Blob 对照](../tests/tools/blob_tests.cpp) · [桌面测试](../tests/ui/visual_tests.cpp)
+
+**使用自己的标定。** 按[版本 1 文件](../samples/s6-calibration/resources/affine.json)填写模型、源/目标坐标系、源域 `[xmin,ymin,xmax,ymax]` 及 `[[x_px,y_px],[X_mm,Y_mm]]` 点对。模型名为 `Similarity`、`Affine` 或 `Projective`，退化点组和穿越投影无穷线的有效域会产生诊断。桌面通过 **Edit → Add Coordinate Frame…** 声明文件中使用的坐标系，在 **N-point planar calibration → Resources → File…** 选择文件。文件选择器记录 SHA-256 并锁定该资源修订。将标定节点的 `transform` 输出接到坐标转换工具的同名输入，将转换出的两点绑定到距离工具的 `first` 与 `second`。[模型与误差测试](../tests/tools/calibration_tests.cpp)
+
+本次复用 `out/build/s67-gui` 和 `out/build/s67-headless` 两个 Release 目录；新环境可按 §3.28 配置。运行独立 CLI 时，将 OpenCV 的 Release DLL 目录加入当前进程的 `PATH`。下列命令从仓库根目录执行。
+
+```powershell
+$guiBuild = 'out/build/s67-gui'
+& "$guiBuild/source/app/visionpro_cli.exe" run --solution samples/s6-calibration/solution.json --workflow 5ca4f87a-ea1e-4d62-89b0-000000006810
+ctest --test-dir $guiBuild -C Release -R '^tools\.(planar_calibration|vision_contracts|roi|blob)$|^visionpro_(image_view|visual|calibration_parity)_tests$' --output-on-failure --no-tests=error
+```

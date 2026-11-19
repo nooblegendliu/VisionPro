@@ -66,6 +66,7 @@ private:
     void refresh_actions();
     void frame_canvas();
     void make_new_document();
+    void add_coordinate_frame();
     bool confirm_replacement(Continuation action);
     void choose_open();
     void choose_transfer(infrastructure::SolutionTransfer operation, Continuation after = {});
@@ -77,6 +78,7 @@ private:
     void accept_opened(infrastructure::SolutionDocument source);
     void accept_committed(CommittedDocument committed, bool replace, const Continuation& after);
     void choose_resource_copy();
+    void hash_resource_file(const QString& path, std::function<void(std::string)> apply);
     void choose_resource_root();
     void choose_preview_image();
     void choose_preview_resource();
@@ -152,6 +154,7 @@ private:
     QAction* reset_state_{};
     QAction* run_limits_{};
     QAction* rename_{};
+    QAction* add_frame_{};
     QAction* new_workflow_{};
     QAction* remove_workflow_{};
     QAction* add_tool_{};

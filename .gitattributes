@@ -3,6 +3,9 @@
 ###############################################################################
 * text=auto
 
+# The sample manifest pins this file's exact SHA-256 across checkouts.
+samples/s6-calibration/resources/affine.json text eol=lf
+
 ###############################################################################
 # Set default behavior for command prompt diff.
 #

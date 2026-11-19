@@ -262,6 +262,41 @@ void component_order(const Fixture& fixture)
     expect_blobs(measure(fixture, input, 4), camera(), {{2, 1, 0.5, 1, 0, 1, 2}, {8, 2.75, 2.25, 0, 0, 5, 4}});
 }
 
+void shaped_threshold_and_blob(const Fixture& fixture)
+{
+    struct Case { RegionShape shape; std::array<std::string_view, 5> rows; };
+    constexpr double pi = std::numbers::pi;
+    const Case cases[]{
+        {CircleRegion{2, 2, 2}, {"..#..", ".###.", "#####", ".###.", "..#.."}},
+        {RingRegion{2, 2, 1, 2}, {"..#..", ".###.", "##.##", ".###.", "..#.."}},
+        {SectorRingRegion{2, 2, 1, 2, 7*pi/4, pi/2}, {".....", "...#.", "...##", "...#.", "....."}},
+        {PolygonRegion{{{0,0},{3,0},{3,1},{1,1},{1,3},{0,3}}}, {"####.", "####.", "##...", "##...", "....."}}
+    };
+    std::array<unsigned char, 25> foreground;
+    foreground.fill(255);
+    const ImageLayout layout{5, 5, 5, mono8};
+    const auto bright = image(layout, foreground);
+    for (const auto& test : cases) {
+        const auto roi = region(test.shape);
+        std::vector<unsigned char> expected;
+        for (const auto row : test.rows) {
+            for (const auto pixel : row) { expected.push_back(pixel == '#' ? 255 : 0); }
+        }
+        const auto run = fixture.run(solution(bright, {fixture.threshold('1', roi, 128)}), bright);
+        const auto threshold = result_of(run, progress_of(successful(run), '1'));
+        const auto& mask = produced(threshold, "roi_mask").as_raster_mask()->pixels;
+        const auto& binary = produced(threshold, "binary").as_image()->image;
+        check(std::ranges::equal(mask.copy_pixels(), std::as_bytes(std::span{expected}))
+            && std::ranges::equal(binary.copy_pixels(), std::as_bytes(std::span{expected})),
+            "Threshold mask and binary image match the hand-listed members.");
+        const auto inside = measure(fixture, image(layout, expected), 8, roi);
+        check(integer(produced(inside, "total_area_pixels")) == std::ranges::count(expected, 255),
+            "Blob includes every hand-listed member.");
+        for (auto& pixel : expected) { pixel = pixel == 0 ? 255 : 0; }
+        expect_blobs(measure(fixture, image(layout, expected), 8, roi), camera(), {});
+    }
+}
+
 void cropped_components(const Fixture& fixture)
 {
     constexpr unsigned char padded[]{1, 2, 3, 4, 99, 98, 11, 12, 13, 14, 97, 96, 21, 22, 23, 24};
@@ -420,6 +455,7 @@ int main()
     try {
         const Fixture fixture;
         connectivity_and_area(fixture);
+        shaped_threshold_and_blob(fixture);
         component_order(fixture);
         cropped_components(fixture);
         inherited_roi(fixture);

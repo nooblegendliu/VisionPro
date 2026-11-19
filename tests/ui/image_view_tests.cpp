@@ -205,10 +205,19 @@ void ImageViewTests::aligns_effective_mask_and_geometry_in_the_crop()
     QCOMPARE(std::get<core::Diagnostic>(view.set_overlays(std::nullopt, deferred_mask)).code, core::ErrorCode::InvalidMask);
 
     auto unsupported = region;
-    std::get<core::RegionPrimitive>(unsupported.source).geometry = core::CircleRegion{4, 4, 2};
-    QCOMPARE(std::get<core::Diagnostic>(view.set_overlays(unsupported, mask)).code, core::ErrorCode::UnsupportedRegion);
+    std::get<core::RegionPrimitive>(unsupported.source).transform->valid_domain = core::TransformDomain{0, 0, 8, 8};
+    QCOMPARE(std::get<core::Diagnostic>(view.set_overlays(unsupported, mask)).code, core::ErrorCode::UnsupportedConversion);
     QCOMPARE(visible_paths(view), outlines);
     QCOMPARE(render_viewport(view).pixelColor(center_position), center_color);
+
+    auto sector = region;
+    auto& shape = std::get<core::RegionPrimitive>(sector.source);
+    shape.geometry = core::SectorRingRegion{4, 4, 1, 3, -std::numbers::pi / 4, std::numbers::pi / 2};
+    take(view.set_overlays(sector, {}));
+    const auto sector_path = visible_paths(view).front();
+    QVERIFY(sector_path.contains({7, 4}));
+    QVERIFY(!sector_path.contains({5.5, 4})); // Inside the translated hole.
+    QVERIFY(!sector_path.contains({4, 3}));   // Outside the positive sweep.
 }
 
 void ImageViewTests::preserves_business_coordinates_through_zoom_pan_and_draw()

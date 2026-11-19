@@ -71,6 +71,7 @@ if(VISIONPRO_WITH_OPENCV)
         "VISIONPRO_S63_DIRECTORY=\"${PROJECT_SOURCE_DIR}/samples/s6-calculation\""
         "VISIONPRO_S64_DIRECTORY=\"${PROJECT_SOURCE_DIR}/samples/s6-shared\""
         "VISIONPRO_S65_DIRECTORY=\"${PROJECT_SOURCE_DIR}/samples/s6-concurrency\""
+        "VISIONPRO_S68_DIRECTORY=\"${PROJECT_SOURCE_DIR}/samples/s6-calibration\""
         "VISIONPRO_TEST_CLI=\"$<TARGET_FILE:visionpro_cli>\"")
     target_link_libraries(visionpro_acceptance_parity_tests PRIVATE
         visionpro_ui visionpro_app_tools visionpro_infrastructure visionpro_build_options Qt6::Test)
@@ -87,8 +88,11 @@ if(VISIONPRO_WITH_OPENCV)
         reproduces_saved_shared_workflows)
     add_test(NAME visionpro_concurrency_parity_tests COMMAND visionpro_acceptance_parity_tests -platform offscreen
         reproduces_saved_reentrant_workflows)
+    add_test(NAME visionpro_calibration_parity_tests COMMAND visionpro_acceptance_parity_tests -platform offscreen
+        reproduces_saved_calibrated_measurement)
     list(APPEND ui_tests visionpro_visual_tests visionpro_acceptance_parity_tests visionpro_loop_parity_tests
-        visionpro_group_parity_tests visionpro_calculation_parity_tests visionpro_shared_parity_tests visionpro_concurrency_parity_tests)
+        visionpro_group_parity_tests visionpro_calculation_parity_tests visionpro_shared_parity_tests visionpro_concurrency_parity_tests
+        visionpro_calibration_parity_tests)
 
     if(WIN32)
         add_executable(visionpro_acceptance_load acceptance_load.cpp)
@@ -106,6 +110,7 @@ set_tests_properties(${ui_tests} PROPERTIES
 if(VISIONPRO_WITH_OPENCV)
     set_property(TEST visionpro_editor_tests visionpro_inspector_tests visionpro_editor_run_tests visionpro_run_lifecycle_tests visionpro_visual_tests
         visionpro_acceptance_parity_tests visionpro_loop_parity_tests visionpro_group_parity_tests visionpro_calculation_parity_tests visionpro_shared_parity_tests visionpro_concurrency_parity_tests
+        visionpro_calibration_parity_tests
         APPEND PROPERTY ENVIRONMENT_MODIFICATION
         "PATH=path_list_prepend:$<TARGET_FILE_DIR:opencv_core>")
 endif()

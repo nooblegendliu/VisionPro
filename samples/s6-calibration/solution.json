@@ -1,0 +1,661 @@
+{
+  "coordinates": [
+    {
+      "handedness": "left_handed",
+      "id": "camera",
+      "kind": "image",
+      "origin": {
+        "x": 0.0,
+        "y": 0.0
+      },
+      "unit": "pixel",
+      "x_axis": {
+        "x": 1.0,
+        "y": 0.0
+      },
+      "y_axis": {
+        "x": 0.0,
+        "y": -1.0
+      }
+    },
+    {
+      "handedness": "right_handed",
+      "id": "world",
+      "kind": "physical",
+      "origin": {
+        "x": 0.0,
+        "y": 0.0
+      },
+      "unit": "millimetre",
+      "x_axis": {
+        "x": 1.0,
+        "y": 0.0
+      },
+      "y_axis": {
+        "x": 0,
+        "y": 1
+      }
+    }
+  ],
+  "format": "visionpro.solution",
+  "format_version": 1,
+  "id": "5ca4f87a-ea1e-4d62-89b0-000000006800",
+  "layouts": [
+    {
+      "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006810",
+      "nodes": [
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000006811",
+          "x": 0,
+          "y": 100
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000006812",
+          "x": 280,
+          "y": 100
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000006813",
+          "x": 560,
+          "y": 100
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000006814",
+          "x": 840,
+          "y": 100
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000006815",
+          "x": 1120,
+          "y": 100
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000006816",
+          "x": 1400,
+          "y": 100
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000006817",
+          "x": 1680,
+          "y": 100
+        }
+      ]
+    }
+  ],
+  "name": "S6.8 ROI and planar measurement",
+  "queues": [],
+  "resources": [
+    {
+      "id": "5ca4f87a-ea1e-4d62-89b0-000000006820",
+      "kind": "image",
+      "name": "White image",
+      "location": {
+        "kind": "managed",
+        "revision": "1",
+        "sha256": "499b91f447c1c8680c72097ec436b237210798c9d6297088e00bb8ae0947622c",
+        "path": {
+          "base": "solution_directory",
+          "named_root": null,
+          "path": "resources/white.bmp"
+        }
+      }
+    },
+    {
+      "id": "5ca4f87a-ea1e-4d62-89b0-000000006821",
+      "kind": "calibration",
+      "name": "Affine calibration v1",
+      "location": {
+        "kind": "managed",
+        "revision": "1",
+        "sha256": "b8f8209f8bde8f413bd2155a776f46fab6c4536e37256d9351d1939dc14c200c",
+        "path": {
+          "base": "solution_directory",
+          "named_root": null,
+          "path": "resources/affine.json"
+        }
+      }
+    }
+  ],
+  "revision": "1",
+  "variables": [],
+  "workflows": [
+    {
+      "containment": [],
+      "control_exports": [],
+      "control_links": [
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000006840",
+          "output": null,
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000006811",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000006812"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000006841",
+          "output": null,
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000006812",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000006813"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000006842",
+          "output": null,
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000006813",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000006814"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000006843",
+          "output": null,
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000006814",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000006815"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000006844",
+          "output": null,
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000006815",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000006816"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000006845",
+          "output": null,
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000006816",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000006817"
+        }
+      ],
+      "enabled": true,
+      "entries": [
+        "5ca4f87a-ea1e-4d62-89b0-000000006811"
+      ],
+      "id": "5ca4f87a-ea1e-4d62-89b0-000000006810",
+      "interface": {
+        "control_outputs": [],
+        "id": "s68.measurement",
+        "inputs": [],
+        "outputs": [],
+        "version": 1
+      },
+      "name": "Calibrated Blob measurement",
+      "nodes": [
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "enum",
+                      "members": [
+                        {
+                          "display_name": "Gray8",
+                          "id": "Gray8"
+                        },
+                        {
+                          "display_name": "Native8",
+                          "id": "Native8"
+                        }
+                      ],
+                      "schema": "visionpro.image.read_file.decode_mode",
+                      "version": 1
+                    },
+                    "value": "Gray8"
+                  }
+                }
+              ],
+              "target": {
+                "id": "decode_mode",
+                "kind": "parameter"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "point2d"
+                    },
+                    "value": {
+                      "coordinate_frame": "camera",
+                      "unit": "pixel",
+                      "x": 0.0,
+                      "y": 0.0
+                    }
+                  }
+                }
+              ],
+              "target": {
+                "id": "frame_origin",
+                "kind": "parameter"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "type": "visionpro.image.read_file"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000006811",
+          "join": "all_activated",
+          "name": "读取灰度图",
+          "resources": [
+            {
+              "slot": "source",
+              "resource": {
+                "kind": "image",
+                "id": "5ca4f87a-ea1e-4d62-89b0-000000006820",
+                "revision": "1"
+              }
+            }
+          ]
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000006811",
+                    "output": {
+                      "id": "image",
+                      "kind": "port"
+                    },
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006810"
+                  }
+                }
+              ],
+              "target": {
+                "id": "image",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "region2d"
+                    },
+                    "value": {
+                      "boundary_policy": "reject",
+                      "coordinate_frame": "camera",
+                      "empty_policy": "error",
+                      "exclusions": [],
+                      "fill": null,
+                      "id": "5ca4f87a-ea1e-4d62-89b0-000000006830",
+                      "source": {
+                        "coordinate_frame": "camera",
+                        "geometry": {
+                          "kind": "circle",
+                          "center_x": 3,
+                          "center_y": 4,
+                          "radius": 1
+                        },
+                        "kind": "primitive",
+                        "local_direction_radians": 0.0,
+                        "transform": null,
+                        "unit": "pixel"
+                      },
+                      "unit": "pixel"
+                    }
+                  }
+                }
+              ],
+              "target": {
+                "id": "roi",
+                "kind": "parameter"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "128"
+                  }
+                }
+              ],
+              "target": {
+                "id": "threshold",
+                "kind": "parameter"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "enum",
+                      "members": [
+                        {
+                          "display_name": "Binary",
+                          "id": "Binary"
+                        },
+                        {
+                          "display_name": "Binary inverse",
+                          "id": "BinaryInverse"
+                        }
+                      ],
+                      "schema": "visionpro.image.threshold.mode",
+                      "version": 1
+                    },
+                    "value": "Binary"
+                  }
+                }
+              ],
+              "target": {
+                "id": "mode",
+                "kind": "parameter"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "type": "visionpro.image.threshold"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000006812",
+          "join": "all_activated",
+          "name": "Circle at (3,4)",
+          "resources": []
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000006812",
+                    "output": {
+                      "id": "binary",
+                      "kind": "port"
+                    },
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006810"
+                  }
+                }
+              ],
+              "target": {
+                "id": "binary",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "8"
+                  }
+                }
+              ],
+              "target": {
+                "id": "connectivity",
+                "kind": "parameter"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "type": "visionpro.image.blob"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000006813",
+          "join": "all_activated",
+          "name": "测量连通域",
+          "resources": []
+        },
+        {
+          "bindings": [],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "type": "visionpro.calibration.fit"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000006814",
+          "join": "all_activated",
+          "name": "Fit pixel to millimetre transform",
+          "resources": [
+            {
+              "slot": "calibration",
+              "resource": {
+                "kind": "calibration",
+                "id": "5ca4f87a-ea1e-4d62-89b0-000000006821",
+                "revision": "1"
+              }
+            }
+          ]
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000006814",
+                    "output": {
+                      "id": "transform",
+                      "kind": "port"
+                    },
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006810"
+                  }
+                }
+              ],
+              "target": {
+                "id": "transform",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000006813",
+                    "output": {
+                      "id": "components",
+                      "kind": "port"
+                    },
+                    "selector": [
+                      {
+                        "kind": "element",
+                        "index": "0"
+                      },
+                      {
+                        "kind": "field",
+                        "field": "centroid"
+                      }
+                    ],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006810"
+                  }
+                }
+              ],
+              "target": {
+                "id": "point",
+                "kind": "input"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "type": "visionpro.geometry.map_point"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000006815",
+          "join": "all_activated",
+          "name": "Map Blob centroid",
+          "resources": []
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000006814",
+                    "output": {
+                      "id": "transform",
+                      "kind": "port"
+                    },
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006810"
+                  }
+                }
+              ],
+              "target": {
+                "id": "transform",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "point2d"
+                    },
+                    "value": {
+                      "coordinate_frame": "camera",
+                      "unit": "pixel",
+                      "x": 5,
+                      "y": 5
+                    }
+                  }
+                }
+              ],
+              "target": {
+                "id": "point",
+                "kind": "input"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "type": "visionpro.geometry.map_point"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000006816",
+          "join": "all_activated",
+          "name": "Map reference point",
+          "resources": []
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000006815",
+                    "output": {
+                      "id": "point",
+                      "kind": "port"
+                    },
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006810"
+                  }
+                }
+              ],
+              "target": {
+                "id": "first",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000006816",
+                    "output": {
+                      "id": "point",
+                      "kind": "port"
+                    },
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006810"
+                  }
+                }
+              ],
+              "target": {
+                "id": "second",
+                "kind": "input"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "type": "visionpro.measure.distance"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000006817",
+          "join": "all_activated",
+          "name": "Measure distance in mm",
+          "resources": []
+        }
+      ],
+      "outputs": []
+    }
+  ]
+}
