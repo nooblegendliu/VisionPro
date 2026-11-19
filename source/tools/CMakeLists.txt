@@ -21,6 +21,7 @@ if(VISIONPRO_WITH_OPENCV)
     add_library(visionpro_vision_tools STATIC
         vision/vision_tools.cpp vision/vision_tools.hpp
         vision/calibration.cpp vision/calibration.hpp vision/calibration_tools.cpp
+        vision/inspection.cpp vision/inspection.hpp vision/class_map_tool.cpp vision/class_map_tool.hpp
         vision/opencv_image.cpp vision/opencv_image.hpp
         vision/read_file.cpp vision/read_file.hpp
         vision/roi.cpp vision/roi.hpp

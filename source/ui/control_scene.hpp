@@ -19,6 +19,7 @@ public:
     std::vector<core::NodeId> selected_nodes() const;
 
     bool edit_draft(const QString& label, const DraftEdit& edit);
+    bool set_class_palette(const core::NodeId& node, workflow::ClassPalette palette);
     void set_editing_enabled(bool enabled);
     bool add_workflow(std::string name);
     bool remove_workflow(core::WorkflowId workflow);

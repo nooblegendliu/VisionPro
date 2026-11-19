@@ -44,15 +44,17 @@ Matrix compose(const Matrix& outer, const Matrix& inner)
     return result;
 }
 
+std::optional<Transform2D> combine(const std::optional<Transform2D>& inner, const std::optional<Transform2D>& outer)
+{
+    if (!outer) { return inner; }
+    if (!inner) { return outer; }
+    return Transform2D{inner->from, outer->to, inner->from_unit, outer->to_unit,
+        TransformModel::Affine, compose(outer->matrix, inner->matrix)};
+}
+
 RegionPrimitive transform_primitive(RegionPrimitive primitive, const std::optional<Transform2D>& outer)
 {
-    if (!outer) { return primitive; }
-    if (!primitive.transform) { primitive.transform = outer; }
-    else {
-        const auto& inner = *primitive.transform;
-        primitive.transform = Transform2D{inner.from, outer->to, inner.from_unit, outer->to_unit,
-            TransformModel::Affine, compose(outer->matrix, inner.matrix)};
-    }
+    primitive.transform = combine(primitive.transform, outer);
     return primitive;
 }
 
@@ -376,9 +378,11 @@ RegionPrimitive pin_mask(RegionPrimitive primitive, const std::optional<Resource
 }
 
 Result<RegionDefinition> effective_region(const RegionDefinition& region, const RegionDefinition* inherited_source,
-    RegionPrimitive primary, const std::vector<Layer>& layers, const std::optional<ResourceReference>& mask)
+    RegionPrimitive primary, const std::vector<Layer>& layers, const std::optional<ResourceReference>& mask,
+    const CoordinateSystemId& target)
 {
     auto effective = region;
+    effective.coordinate_frame = target;
     if (inherited_source) {
         const auto& inherited = std::get<InheritedRegion>(region.source);
         if (inherited_source->boundary_policy == RegionBoundaryPolicy::Reject) { effective.boundary_policy = RegionBoundaryPolicy::Reject; }
@@ -411,12 +415,22 @@ Result<RegionDefinition> effective_region(const RegionDefinition& region, const 
     return effective;
 }
 Result<std::monostate> validate_target(const ImageHandle& image, const RegionDefinition& region,
-    const ToolValueTarget& binding)
+    const ToolValueTarget& binding, const std::optional<Transform2D>& placement = {})
 {
     if (auto valid = validate_region_support(region); auto* failure = std::get_if<Diagnostic>(&valid)) {
         return locate(std::move(*failure), region, binding);
     }
-    if (region.coordinate_frame != image.coordinate_frame() || region.unit != MeasurementUnit::Pixel) {
+    if (placement) {
+        if (auto valid = validate_transform(*placement); auto* failure = std::get_if<Diagnostic>(&valid)) {
+            return locate(std::move(*failure), region, binding);
+        }
+    }
+    if (placement && ((placement->model != TransformModel::Similarity && placement->model != TransformModel::Affine)
+        || placement->calibration || placement->valid_domain || placement->from_unit != MeasurementUnit::Pixel
+        || placement->to_unit != MeasurementUnit::Pixel || placement->to != image.coordinate_frame())) {
+        return locate(error(ErrorCode::CoordinateMismatch, "ROI placement requires an unbounded Pixel transform to the image frame."), region, binding);
+    }
+    if (region.coordinate_frame != (placement ? placement->from : image.coordinate_frame()) || region.unit != MeasurementUnit::Pixel) {
         return locate(error(ErrorCode::CoordinateMismatch, "ROI must map to the input image's current Pixel coordinate frame."), region, binding);
     }
     return std::monostate{};
@@ -424,7 +438,8 @@ Result<std::monostate> validate_target(const ImageHandle& image, const RegionDef
 
 Result<RoiEvaluation> evaluate_layers(const ImageHandle& image, const RegionDefinition& region,
     const ToolValueTarget& binding, const RegionDefinition* inherited_source,
-    std::optional<ToolInvocationIdentity> producer, std::span<const InvocationResourceLease> resources)
+    std::optional<ToolInvocationIdentity> producer, std::span<const InvocationResourceLease> resources,
+    const std::optional<Transform2D>& placement = {})
 {
     const auto& base = inherited_source ? *inherited_source : region;
     if (inherited_source) {
@@ -434,7 +449,7 @@ Result<RoiEvaluation> evaluate_layers(const ImageHandle& image, const RegionDefi
     }
 
     const auto* inherited = std::get_if<InheritedRegion>(&region.source);
-    const auto correction = inherited ? inherited->transform : std::nullopt;
+    const auto correction = combine(inherited ? inherited->transform : std::nullopt, placement);
     auto primary = transform_primitive(std::get<RegionPrimitive>(base.source), correction);
     RoiMaskResource masks(resources);
     auto prepared = prepare_shape(primary, image, masks);
@@ -447,7 +462,7 @@ Result<RoiEvaluation> evaluate_layers(const ImageHandle& image, const RegionDefi
     if (auto* failure = std::get_if<Diagnostic>(&source)) { return std::move(*failure); }
     layers.push_back(std::get<Layer>(std::move(source)));
     if (inherited) {
-        auto outer = prepare_layer(region, binding, image, {}, {}, inherited->local_direction_radians, correction, masks);
+        auto outer = prepare_layer(region, binding, image, placement, {}, inherited->local_direction_radians, correction, masks);
         if (auto* failure = std::get_if<Diagnostic>(&outer)) { return std::move(*failure); }
         layers.push_back(std::get<Layer>(std::move(outer)));
     }
@@ -489,7 +504,7 @@ Result<RoiEvaluation> evaluate_layers(const ImageHandle& image, const RegionDefi
     auto copied = image.copy_with_pixels(layout, pixels);
     if (auto* failure = std::get_if<Diagnostic>(&copied)) { return locate(std::move(*failure), region, binding); }
     const auto mask_resource = masks.reference();
-    auto effective = effective_region(region, inherited_source, std::move(primary), layers, mask_resource);
+    auto effective = effective_region(region, inherited_source, std::move(primary), layers, mask_resource, image.coordinate_frame());
     if (auto* failure = std::get_if<Diagnostic>(&effective)) { *failure = locate(std::move(*failure), region, binding); }
     const auto count = layers.back().trace.member_count;
     const auto direction = layers.back().trace.direction;
@@ -504,16 +519,16 @@ Result<RoiEvaluation> evaluate_layers(const ImageHandle& image, const RegionDefi
 
 core::Result<RoiEvaluation> evaluate_roi(const core::ImageHandle& image, const core::RegionDefinition& region,
     const core::ToolValueTarget& binding, std::span<const core::ResolvedRegionInput> regions,
-    std::span<const core::InvocationResourceLease> resources)
+    std::span<const core::InvocationResourceLease> resources, const std::optional<Transform2D>& placement)
 {
-    if (auto checked = validate_target(image, region, binding); auto* failure = std::get_if<Diagnostic>(&checked)) {
+    if (auto checked = validate_target(image, region, binding, placement); auto* failure = std::get_if<Diagnostic>(&checked)) {
         return std::move(*failure);
     }
     auto selected = frozen_source(region, binding, regions);
     if (auto* failure = std::get_if<Diagnostic>(&selected)) { return locate(std::move(*failure), region, binding, {field("source")}); }
     const auto* frozen = std::get<const ResolvedRegionInput*>(selected);
     return evaluate_layers(image, region, binding, frozen ? &frozen->value : nullptr,
-        frozen ? std::optional{frozen->producer} : std::nullopt, resources);
+        frozen ? std::optional{frozen->producer} : std::nullopt, resources, placement);
 }
 
 core::Result<RoiEvaluation> evaluate_roi_preview(const core::ImageHandle& image, const core::RegionDefinition& region,

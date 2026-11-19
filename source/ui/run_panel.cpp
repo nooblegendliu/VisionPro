@@ -1,5 +1,6 @@
 #include "run_panel.hpp"
 #include "coordinate_text.hpp"
+#include <visionpro/core/class_map.hpp>
 
 #include <QComboBox>
 #include <QHeaderView>
@@ -225,7 +226,7 @@ QString output_text(const OutputSlot& output)
 bool is_image(const OutputSlot& output)
 {
     const auto* data = std::get_if<DataValue>(&output.content);
-    return data && data->as_image();
+    return data && (data->as_image() || data->as_raster_mask() || data->type() == class_map_type());
 }
 
 QLabel* panel_label(QWidget* parent, const char* name)
@@ -669,7 +670,7 @@ void RunPanel::refresh_image_button()
                 const auto* flow = find_workflow(run->request().snapshot().solution(), run->identity().workflow);
                 const auto* node = flow ? find_node(*flow, result.identity.invocation.node) : nullptr;
                 const auto* tool = node ? std::get_if<ToolConfiguration>(&node->configuration) : nullptr;
-                available = tool && tool->type.text() == "visionpro.image.blob";
+                available = tool && (tool->type.text() == "visionpro.image.blob" || tool->type.text() == "visionpro.measure.color_mean");
             }
         }
         show_image_->setEnabled(available);

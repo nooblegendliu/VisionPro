@@ -37,18 +37,18 @@ template<UuidIdentity T> T id()
 
 ToolTypeId judge_type() { return key<ToolTypeId>("visionpro.judge.integer_range"); }
 
-RunHandle execute(const ToolRegistry& registry, IntegerRange range, std::int64_t value)
+RunHandle execute_typed(const ToolRegistry& registry, ToolTypeId type, ConfigValue minimum, ConfigValue maximum, DataValue value)
 {
     const auto input_id = key<InputId>("value");
     const auto workflow_id = id<WorkflowId>();
     const auto node_id = id<NodeId>();
     const auto schema = key<SchemaId>("s45.judgement_test");
-    InputDescriptor input{input_id, "Value", DataType::integer()};
+    InputDescriptor input{input_id, "Value", value.type()};
     input.binding.allowed_sources = {BindingSourceKind::PublicInput};
-    Node judge{node_id, "Judge integer", ToolConfiguration{judge_type(), 1},
+    Node judge{node_id, "Judge range", ToolConfiguration{type, 1},
         {{input_id, {ScopedInputReference{workflow_id, {}, input_id, {}}}},
-            {key<ParameterId>("minimum"), {ConfigValue::integer(range.minimum)}},
-            {key<ParameterId>("maximum"), {ConfigValue::integer(range.maximum)}}}, {}};
+            {key<ParameterId>("minimum"), {std::move(minimum)}},
+            {key<ParameterId>("maximum"), {std::move(maximum)}}}, {}};
     Workflow flow{workflow_id, "Integer judgement", {schema, 1, {std::move(input)}, {}, {}},
         {std::move(judge)}, {}, {}, {node_id}};
     const Solution solution{id<SolutionId>(), "Integer judgement fixture", 1, 1, {std::move(flow)}, {}, {}, {}, {}, {}};
@@ -56,7 +56,7 @@ RunHandle execute(const ToolRegistry& registry, IntegerRange range, std::int64_t
     const auto snapshot_id = take(RuntimeIdFactory::from_value<ConfigSnapshotId>(1));
     const auto snapshot = take(ConfigSnapshot::capture(solution, registry.descriptors(), {engine->session(), snapshot_id}));
     const auto request = take(RunRequest::create(snapshot, WorkflowTarget{workflow_id},
-        {{input_id, DataValue::integer(value)}}, {TriggerKind::Manual, schema}));
+        {{input_id, std::move(value)}}, {TriggerKind::Manual, schema}));
     auto submission = engine->submit(request);
     if (const auto* rejection = std::get_if<RunRejected>(&submission)) { throw std::runtime_error(error_text(rejection->diagnostic)); }
     auto* accepted = std::get_if<RunHandle>(&submission);
@@ -64,6 +64,26 @@ RunHandle execute(const ToolRegistry& registry, IntegerRange range, std::int64_t
     const auto waited = take(accepted->wait(RunWaitTarget::Quiescence, std::chrono::steady_clock::now() + 5s));
     check(waited.outcome == RunWaitOutcome::Satisfied && waited.progress.quiescent, "The workflow must reach quiescence.");
     return std::move(*accepted);
+}
+
+RunHandle execute(const ToolRegistry& registry, IntegerRange range, std::int64_t value)
+{
+    return execute_typed(registry, judge_type(), ConfigValue::integer(range.minimum),
+        ConfigValue::integer(range.maximum), DataValue::integer(value));
+}
+
+void floating_range(const ToolRegistry& registry)
+{
+    for (const auto value : {9.5, 10.0, 40.0, 40.5}) {
+        const auto run = execute_typed(registry, key<ToolTypeId>("visionpro.judge.float_range"),
+            take(ConfigValue::real(10)), take(ConfigValue::real(40)), take(DataValue::real(value)));
+        const auto progress = take(run.inspect());
+        check(progress.status == ExecutionStatus::Succeeded && progress.nodes.front().invocation.has_value(),
+            "Float64 closed-range judgement succeeds for in-range and out-of-range values.");
+        const auto result = take(run.lookup(*progress.nodes.front().invocation));
+        check(result && result->data().judgement == (value >= 10 && value <= 40 ? Judgement::OK : Judgement::NG),
+            "Float64 endpoints are inclusive and fractional values preserve their precision.");
+    }
 }
 
 void closed_range(const ToolRegistry& registry)
@@ -115,6 +135,7 @@ int main()
     try {
         const auto registry = take(ToolRegistry::create(visionpro::tools::vision::registrations()));
         closed_range(registry);
+        floating_range(registry);
         reversed_range(registry);
         std::cout << "Integer range workflow judgement and configuration checks passed.\n";
         return 0;

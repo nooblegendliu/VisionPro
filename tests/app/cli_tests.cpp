@@ -1053,6 +1053,86 @@ void vision_diagnostics(const fs::path& executable)
     check(missing.output.empty(), "A missing required image fails before acceptance.");
     check(read_file(fixture.manifest) == original, "Failed runs preserve the original manifest.");
 }
+
+void inspection(const fs::path& executable)
+{
+    ScratchDirectory scratch;
+    const auto package = scratch.path / "inspection";
+    fs::copy(VISIONPRO_INSPECTION_DIRECTORY, package, fs::copy_options::recursive);
+    const auto manifest = package / "solution.json";
+    const auto original = Json::parse(read_file(manifest));
+    const auto id = [](auto suffix) { return "5ca4f87a-ea1e-4d62-89b0-00000000" + std::to_string(suffix); };
+    const auto run = [&](int number) {
+        const auto flow = id(number);
+        return invoke(executable, scratch.path, {L"run", L"--solution", manifest.native(), L"--workflow", {flow.begin(), flow.end()}});
+    };
+    const auto call = [&](const Json& report, int suffix) -> const Json& { return find_by(report.at("nodes"), "id", id(suffix)); };
+    const auto normal = success(run(6910));
+    const auto& transform = produced(call(normal, 6912), "transform");
+    check(normal.at("status") == "Succeeded" && transform.at("from") == "workpiece" && transform.at("to") == "camera"
+        && transform.at("matrix").at(2) == 3 && transform.at("matrix").at(5) == 2, "Independent CLI reproduces the calibrated fixture shift.");
+    for (int lane = 0; lane < 5; ++lane) {
+        check(produced(call(normal, 6920 + lane), "blue") == (lane + 1) * 10
+            && produced(call(normal, 6930 + lane), "passed") == (lane < 4), "All five measured values and inclusive range judgements agree.");
+    }
+    check(produced(call(normal, 6940), "passed") == false && produced(call(normal, 6945), "sequence") == "1"
+        && call(normal, 6945).at("attempts").size() == 1, "Only one NG delivery occurred.");
+    skipped(call(normal, 6943));
+
+    const auto labels = success(run(6950));
+    const auto& map = produced(call(labels, 6952), "class_map");
+    check(map.at("pixels").at("labels") == Json::parse("[[0,1],[2,1]]") && map.at("classes").size() == 3
+        && produced(call(labels, 6953), "passed") == true, "CLI preserves the 2x2 label raster and the class-count judgement.");
+    for (int index = 0; index < 3; ++index) {
+        const auto& entry = map.at("classes").at(index);
+        check(entry.at("id") == std::to_string(index) && entry.at("count") == (index == 1 ? "2" : "1"),
+            "Each class count is associated with its original label ID.");
+    }
+
+    // Remove label 2 from the class table, leaving the input pixels intact.
+    auto edited = original;
+    auto& label_nodes = edited.at("workflows").at(1).at("nodes");
+    const auto classifier = std::ranges::find_if(label_nodes, [&](const Json& n) { return n.at("id") == id(6952); });
+    check(classifier != label_nodes.end(), "Fixture includes the classifier.");
+    const Json text = {{"kind","string"}};
+    const Json names = {{"type", {{"kind","list"},{"element",text}}},
+        {"value", Json::array({Json{{"type",text},{"value","Background"}}, Json{{"type",text},{"value","Class 1"}}})}};
+    classifier->at("bindings").push_back({{"target",{{"kind","parameter"},{"id","class_names"}}},
+        {"accepted_absence",Json::array()},{"cardinality","single_source"},{"conversion","exact"},
+        {"sources",Json::array({Json{{"kind","constant"},{"value",names}}})}});
+    write_file(manifest, edited.dump());
+    const auto missing = run(6950);
+    rejected(missing, 1, "MissingField");
+    const auto failed = Json::parse(missing.output);
+    check(call(failed, 6952).at("status") == "Failed" && call(failed, 6953).at("invocation").is_null(),
+        "A missing class fails classification and prevents downstream judgement.");
+
+    // The label fixture also supplies a nonconstant BGR patch absent from the workpiece.
+    // Copy its verified bytes to the template resource, then pin that resource's next revision.
+    edited = original;
+    auto& resources = edited.at("resources");
+    auto& pattern = resources.at(1);
+    const auto& replacement = resources.at(2);
+    check(pattern.at("id") == id(6902) && replacement.at("id") == id(6903), "Template and replacement fixture IDs agree.");
+    const auto path = [&](const Json& resource) {
+        return package / resource.at("location").at("path").at("path").get<std::string>();
+    };
+    fs::copy_file(path(replacement), path(pattern), fs::copy_options::overwrite_existing);
+    pattern.at("location").at("sha256") = replacement.at("location").at("sha256");
+    pattern.at("location").at("revision") = "2";
+    auto& nodes = edited.at("workflows").at(0).at("nodes");
+    const auto locator = std::ranges::find_if(nodes, [&](const Json& n) { return n.at("id") == id(6912); });
+    check(locator != nodes.end(), "Fixture includes the locator.");
+    locator->at("resources").at(0).at("resource").at("revision") = "2";
+    write_file(manifest, edited.dump());
+    const auto absent = success(run(6910));
+    const auto& locate = call(absent, 6912);
+    check(locate.at("status") == "Succeeded" && locate.at("judgement") == "NG" && produced(locate, "matched") == false
+        && find_by(locate.at("outputs"), "id", "transform").at("status") == "NotProduced"
+        && absent.at("call_order").size() == 2, "Absent template produces NG and no downstream measurement or delivery.");
+    skipped(call(absent, 6943));
+    skipped(call(absent, 6945));
+}
 #endif
 
 } // namespace
@@ -1075,6 +1155,7 @@ int wmain(int argc, wchar_t** argv)
 #ifdef VISIONPRO_WITH_OPENCV
         else if (group == L"vision-roundtrip") { vision_roundtrip(cli); }
         else if (group == L"vision-diagnostics") { vision_diagnostics(cli); }
+        else if (group == L"inspection") { inspection(cli); }
 #endif
         else { throw std::runtime_error("Unknown CLI test group."); }
         std::cout << checks << " checks passed\n";

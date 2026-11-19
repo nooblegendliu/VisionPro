@@ -288,7 +288,7 @@ void EditorWindow::show_selected_run_image()
         const auto run = run_panel_->selected_run();
         const auto invocation = run_panel_->selected_invocation();
         if (!run || !invocation) { return; }
-        const auto displayed = show_run_image(*images_, *run, *invocation, run_panel_->selected_output());
+        const auto displayed = show_run_image(*images_, *run, *invocation, run_panel_->selected_output(), &draft());
         if (const auto* failure = std::get_if<Diagnostic>(&displayed)) {
             report_error(QString::fromStdString(failure->message));
             return;

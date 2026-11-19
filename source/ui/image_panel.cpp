@@ -1,4 +1,5 @@
 #include "image_panel.hpp"
+#include "class_palette.hpp"
 
 #include <visionpro/core/schema_id_factory.hpp>
 #include <visionpro/workflow/run.hpp>
@@ -6,6 +7,7 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPushButton>
+#include <QTreeWidget>
 #include <QVBoxLayout>
 
 namespace visionpro::ui {
@@ -17,6 +19,14 @@ template<class Id>
 Id key(std::string_view name) { return std::get<Id>(SchemaIdFactory::parse<Id>(name)); }
 
 Diagnostic issue(ErrorCode code, std::string message) { return {code, Severity::Error, {}, std::move(message)}; }
+
+QList<QRgb> color_table(const workflow::ClassPalette& palette)
+{
+    QList<QRgb> colors;
+    colors.reserve(256);
+    for (int id = 0; id < 256; ++id) { colors.append(class_color(palette, static_cast<std::uint8_t>(id)).rgb()); }
+    return colors;
+}
 
 const DataValue* output_value(const NodeResult& result, const OutputId& output)
 {
@@ -62,7 +72,7 @@ Result<std::vector<BlobAnnotation>> read_blobs(const NodeResult& result)
 
 ImagePanel::ImagePanel(QWidget* parent)
     : QWidget(parent), view_(new ImageView(this)), image_info_(new QLabel(this)), provenance_(new QLabel(this)),
-      pixel_info_(new QLabel(this))
+      pixel_info_(new QLabel(this)), legend_(new QTreeWidget(this))
 {
     auto* layout = new QVBoxLayout(this);
     auto* controls = new QHBoxLayout;
@@ -83,6 +93,11 @@ ImagePanel::ImagePanel(QWidget* parent)
     layout->addLayout(controls);
     layout->addWidget(provenance_);
     layout->addWidget(view_, 1);
+    legend_->setObjectName(QStringLiteral("classLegend"));
+    legend_->setHeaderLabels({QStringLiteral("Class ID"), QStringLiteral("Name"), QStringLiteral("Pixels")});
+    legend_->setRootIsDecorated(false);
+    legend_->setMaximumHeight(130);
+    layout->addWidget(legend_);
     layout->addWidget(pixel_info_);
     connect(view_, &ImageView::pixel_changed, pixel_info_, &QLabel::setText);
     clear_frame();
@@ -91,6 +106,16 @@ ImagePanel::ImagePanel(QWidget* parent)
 Result<std::monostate> ImagePanel::set_frame(const ImageHandle& image)
 {
     if (auto shown = view_->set_image(image); std::holds_alternative<Diagnostic>(shown)) { return shown; }
+    class_producer_.reset();
+    palette_.clear();
+    legend_->clear();
+    legend_->hide();
+    describe_frame(image);
+    return std::monostate{};
+}
+
+void ImagePanel::describe_frame(const ImageHandle& image)
+{
     frame_ = image;
     const auto frame = image.coordinate_frame().text();
     image_info_->setText(QStringLiteral("%1 × %2  ·  %3")
@@ -98,6 +123,42 @@ Result<std::monostate> ImagePanel::set_frame(const ImageHandle& image)
     set_provenance({});
     pixel_info_->clear();
     emit frame_changed();
+}
+
+Result<std::monostate> ImagePanel::present_class_map(const ClassMap& map, const WorkflowId& flow, const NodeId& node,
+    workflow::ClassPalette palette)
+{
+    if (auto shown = view_->set_image(map.pixels.image, color_table(palette)); std::holds_alternative<Diagnostic>(shown)) { return shown; }
+    class_producer_ = std::pair{flow, node};
+    palette_ = std::move(palette);
+    legend_->clear();
+    for (const auto& item : map.classes) {
+        auto* row = new QTreeWidgetItem(legend_, {QString::number(item.id), QString::fromStdString(item.name), QString::number(item.count)});
+        row->setData(0, Qt::UserRole, item.id);
+    }
+    color_legend();
+    legend_->show();
+    describe_frame(map.pixels.image);
+    return std::monostate{};
+}
+
+void ImagePanel::color_legend()
+{
+    for (int i = 0; i < legend_->topLevelItemCount(); ++i) {
+        auto* row = legend_->topLevelItem(i);
+        row->setData(0, Qt::DecorationRole, class_color(palette_, static_cast<std::uint8_t>(row->data(0, Qt::UserRole).toUInt())));
+    }
+}
+
+Result<std::monostate> ImagePanel::refresh_class_palette(const workflow::Solution& draft)
+{
+    if (!class_producer_) { return std::monostate{}; }
+    const auto* saved = workflow::find_placement(draft, class_producer_->first, class_producer_->second);
+    auto colors = saved ? saved->class_palette : workflow::ClassPalette{};
+    if (colors == palette_) { return std::monostate{}; }
+    if (auto shown = view_->recolor_labels(color_table(colors)); std::holds_alternative<Diagnostic>(shown)) { return shown; }
+    palette_ = std::move(colors);
+    color_legend();
     return std::monostate{};
 }
 
@@ -165,6 +226,10 @@ void ImagePanel::clear_frame()
 {
     view_->clear_image();
     frame_.reset();
+    class_producer_.reset();
+    palette_.clear();
+    legend_->clear();
+    legend_->hide();
     image_info_->setText(QStringLiteral("Open an image from the View menu."));
     set_provenance({});
     pixel_info_->clear();

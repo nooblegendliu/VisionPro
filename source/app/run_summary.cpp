@@ -1,4 +1,5 @@
 #include "run_summary.hpp"
+#include <visionpro/core/class_map.hpp>
 
 #include <algorithm>
 #include <array>
@@ -576,6 +577,19 @@ json raster_mask_json(const RasterMask& mask)
     return result;
 }
 
+void add_small_label_raster(json& summary, const ImageHandle& pixels)
+{
+    // Keep CLI reports bounded while exposing the exact IDs for small inspection maps.
+    constexpr std::size_t maximum_labels = 256;
+    if (pixels.width() > maximum_labels / pixels.height()) { return; }
+    auto labels = json::array();
+    for (std::size_t y = 0; y < pixels.height(); ++y) {
+        labels.push_back(array_json(std::get<std::span<const std::byte>>(pixels.row(y)),
+            [](std::byte id) { return std::to_integer<std::uint8_t>(id); }));
+    }
+    summary["labels"] = std::move(labels);
+}
+
 json data_json(const DataValue& data)
 {
     if (const auto* flag = data.as_bool()) { return *flag; }
@@ -589,7 +603,12 @@ json data_json(const DataValue& data)
     if (const auto* list = data.elements()) { return array_json(*list, data_json); }
     if (const auto* fields = data.fields()) {
         auto result = json::object();
-        for (const auto& field : *fields) { result[id_text(field.id)] = data_json(field.value); }
+        const bool class_map = data.type() == class_map_type();
+        for (const auto& field : *fields) {
+            auto& member = result[id_text(field.id)];
+            member = data_json(field.value);
+            if (class_map && field.id.text() == "pixels") { add_small_label_raster(member, field.value.as_image()->image); }
+        }
         return result;
     }
     if (data.type().kind() == TypeKind::Optional) {

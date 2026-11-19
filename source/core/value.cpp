@@ -1,5 +1,6 @@
 #include <visionpro/core/value.hpp>
 #include <visionpro/core/text.hpp>
+#include "class_map_validation.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -243,7 +244,14 @@ Result<BasicValue<Domain>> BasicValue<Domain>::record(DataType type,
                 "Record is missing a declared field; Optional fields require an explicit None value.");
         }
     }
-    return BasicValue{std::make_shared<const Node>(Node{std::move(type), std::move(fields)})};
+    BasicValue result{std::make_shared<const Node>(Node{std::move(type), std::move(fields)})};
+    if constexpr (Domain == ValueDomain::Data) {
+        if (result.type().schema_id()->text() == class_map_schema) {
+            auto checked = detail::validate_class_map_record(result);
+            if (auto* failure = std::get_if<Diagnostic>(&checked)) { return std::move(*failure); }
+        }
+    }
+    return result;
 }
 
 template <ValueDomain Domain>

@@ -3,6 +3,7 @@
 #include <visionpro/core/schema_id_factory.hpp>
 
 #include <algorithm>
+#include <charconv>
 #include <limits>
 #include <set>
 
@@ -159,7 +160,9 @@ Result<std::monostate> format_list(const InvocationContextData& call, ToolComple
 
     const auto source_count = list.size() + values.size();
     const auto count = indices.empty() ? source_count : indices.size();
+    const auto& element_type = *input(call, "list").type().element_type();
     std::string text;
+    if (element_type.kind() == TypeKind::Float64) { text = *parameter(call, "prefix").as_string(); }
     std::vector<DataValue> used_indices;
     std::vector<DataValue> used_values;
     for (std::size_t position = 0; position < count; ++position) {
@@ -173,14 +176,23 @@ Result<std::monostate> format_list(const InvocationContextData& call, ToolComple
         const auto& value = offset < list.size() ? list[offset] : values[offset - list.size()];
         if (!used_values.empty()) { text += separator; }
         text.append(pattern, 0, at);
-        text += std::to_string(*value.as_int64());
+        if (const auto* integer = value.as_int64()) {
+            text += std::to_string(*integer);
+        } else {
+            char digits[64];
+            const auto converted = std::to_chars(std::begin(digits), std::end(digits), *value.as_float64(), std::chars_format::general);
+            if (converted.ec != std::errc{}) {
+                return parameter_error("format", ErrorCode::InvalidValue, "Cannot represent the measurement as decimal text.");
+            }
+            text.append(digits, converted.ptr);
+        }
         text.append(pattern, at + placeholder.size());
         used_indices.push_back(DataValue::integer(index));
         used_values.push_back(value);
     }
     result.outputs = {{key<OutputId>("text"), std::get<DataValue>(DataValue::string(text))},
         {key<OutputId>("used_indices"), std::get<DataValue>(DataValue::list(DataType::integer(), used_indices))},
-        {key<OutputId>("used_values"), std::get<DataValue>(DataValue::list(DataType::integer(), used_values))}};
+        {key<OutputId>("used_values"), std::get<DataValue>(DataValue::list(element_type, used_values))}};
     return std::monostate{};
 }
 
@@ -258,18 +270,28 @@ std::vector<core::ToolRegistration> logic_registrations()
     branch.inputs = {port("condition", DataType::boolean())};
     branch.control_outputs = {{key<ControlOutputId>("true"), "True"}, {key<ControlOutputId>("false"), "False"}};
 
-    auto formatter = descriptor("visionpro.format.int64_list", "Format integer list");
-    formatter.execution.retry = ToolRetry::Idempotent;
-    formatter.inputs = {port("list", integers), port("values", integers)};
-    for (auto& port : formatter.inputs) { port.required = false; port.default_value = empty; }
-    formatter.inputs.back().binding.cardinality = BindingCardinality::MultipleSources;
-    formatter.parameters = {fixed("indices", "Selected indices (in order)", empty),
-        fixed("skip_out_of_range", "Skip out-of-range positions in indices (0-based)", empty),
-        fixed("format", "Item format", std::get<ConfigValue>(ConfigValue::string("{value}"))),
-        fixed("separator", "Separator", std::get<ConfigValue>(ConfigValue::string(",")))};
-    formatter.outputs = {output("text", DataType::string()), output("used_indices", integers), output("used_values", integers)};
+    const auto formatter = [&](std::string_view id, std::string name, const DataType& element) {
+        auto tool = descriptor(id, std::move(name));
+        const auto list = DataType::list(element);
+        const auto empty_list = std::get<ConfigValue>(ConfigValue::list(element, {}));
+        tool.execution.retry = ToolRetry::Idempotent;
+        tool.inputs = {port("list", list), port("values", list)};
+        for (auto& input : tool.inputs) { input.required = false; input.default_value = empty_list; }
+        tool.inputs.back().binding.cardinality = BindingCardinality::MultipleSources;
+        tool.parameters = {fixed("indices", "Selected indices (in order)", empty),
+            fixed("skip_out_of_range", "Skip out-of-range positions in indices (0-based)", empty),
+            fixed("format", "Item format", std::get<ConfigValue>(ConfigValue::string("{value}"))),
+            fixed("separator", "Separator", std::get<ConfigValue>(ConfigValue::string(",")))};
+        if (element.kind() == TypeKind::Float64) {
+            tool.parameters.push_back(fixed("prefix", "Message prefix", std::get<ConfigValue>(ConfigValue::string(""))));
+        }
+        tool.outputs = {output("text", DataType::string()), output("used_indices", integers), output("used_values", list)};
+        return registration(std::move(tool), format_list);
+    };
 
     return {registration(std::move(calc), arithmetic), registration(std::move(accumulator), accumulate),
-        registration(std::move(logic), conjunction), registration(std::move(branch), condition), registration(std::move(formatter), format_list)};
+        registration(std::move(logic), conjunction), registration(std::move(branch), condition),
+        formatter("visionpro.format.int64_list", "Format integer list", integer),
+        formatter("visionpro.format.float64_list", "Format measurements", DataType::real())};
 }
 } // namespace visionpro::tools

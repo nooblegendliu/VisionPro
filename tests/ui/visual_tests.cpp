@@ -20,12 +20,14 @@
 #include <QFileDialog>
 #include <QGraphicsPathItem>
 #include <QGraphicsPixmapItem>
+#include <QInputDialog>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QStatusBar>
+#include <QSpinBox>
 #include <QScopeGuard>
 #include <QTemporaryDir>
 #include <QTest>
@@ -140,6 +142,7 @@ private slots:
     void edits_and_reloads_shape_members_data();
     void edits_and_reloads_shape_members();
     void fits_newly_bound_calibration_file();
+    void preserves_class_pixels_and_judgement_across_palette_edits();
     void window_previews_and_edits_symbolic_roi();
     void window_displays_images_from_the_selected_run();
     void displays_the_actual_dynamically_selected_group_image_data();
@@ -485,6 +488,147 @@ void VisualTests::fits_newly_bound_calibration_file()
     QVERIFY(select_run_node(*panel->findChild<QTreeWidget*>(QStringLiteral("runNodes")), node.id));
     const auto details = panel->findChild<QPlainTextEdit*>(QStringLiteral("runDetails"))->toPlainText();
     QVERIFY(details.contains(QStringLiteral("Affine · camera (px) → world (mm)")));
+}
+
+void VisualTests::preserves_class_pixels_and_judgement_across_palette_edits()
+{
+    const auto registry = take(app::make_tool_registry());
+    const auto sample = fixture.parent_path() / "s6-inspection";
+    const auto flow = id<WorkflowId>("000000006950"), inspection = id<WorkflowId>("000000006910");
+    const auto classifier = id<NodeId>("000000006952"), judge = id<NodeId>("000000006953");
+    const auto measure = id<NodeId>("000000006920");
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const auto saved = fs::path(temporary.path().toStdWString()) / "palette";
+    EditorWindow window(take(load_solution(sample, registry)).solution(), registry);
+    window.show();
+    window.open_document(sample);
+    QTRY_VERIFY(!window.file_busy());
+    auto* panel = window.findChild<RunPanel*>();
+    auto* image = window.findChild<ImagePanel*>();
+    auto* view = image->findChild<ImageView*>();
+    auto* legend = image->findChild<QTreeWidget*>(QStringLiteral("classLegend"));
+    const auto scene = [&] { return qobject_cast<ControlScene*>(qobject_cast<QGraphicsView*>(window.centralWidget())->scene()); };
+    const auto run_and_show = [&](const WorkflowId& workflow, const NodeId& node) {
+        QVERIFY(scene()->select_workflow(workflow));
+        window.findChild<QAction*>(QStringLiteral("runWorkflow"))->trigger();
+        QTRY_VERIFY_WITH_TIMEOUT(panel->selected_run() && panel->selected_run()->identity().workflow == workflow
+            && panel->findChild<QLabel*>(QStringLiteral("runCleanup"))->text() == QStringLiteral("Cleanup: Quiescent"), 10000);
+        QCOMPARE(take(panel->selected_run()->inspect()).status, ExecutionStatus::Succeeded);
+        QVERIFY(select_run_node(*panel->findChild<QTreeWidget*>(QStringLiteral("runNodes")), node));
+        auto* show = panel->findChild<QPushButton*>(QStringLiteral("showRunImage"));
+        QVERIFY(show->isEnabled());
+        show->click();
+    };
+    const auto pixmap = [&](int z) -> QImage {
+        for (const auto* item : view->scene()->items()) {
+            const auto* layer = dynamic_cast<const QGraphicsPixmapItem*>(item);
+            if (layer && layer->zValue() == z) { return layer->pixmap().toImage(); }
+        }
+        return {};
+    };
+    const auto reference = take(ImageHandle::copy({12, 12, 12, {PixelDepth::UInt8, ChannelOrder::Mono}},
+        std::array<std::byte,144>{}, key<CoordinateSystemId>("workpiece")));
+    take(image->set_frame(reference));
+    QVERIFY(scene()->select_workflow(inspection) && scene()->reveal_node(measure));
+    window.preview_selected_roi();
+    QTRY_VERIFY(!window.file_busy());
+    QVERIFY(image->findChild<QLabel*>(QStringLiteral("imageProvenance"))->text().startsWith(QStringLiteral("Reference ROI")));
+    const auto reference_mask = pixmap(1);
+    QVERIFY(!reference_mask.isNull() && qAlpha(reference_mask.pixel(2,7)) > 0 && qAlpha(reference_mask.pixel(5,9)) == 0);
+    run_and_show(inspection, measure);
+    QVERIFY(image->frame() && image->frame()->format().order == ChannelOrder::BGR);
+    const auto mask = pixmap(1);
+    QVERIFY(!mask.isNull());
+    QList<QPoint> measured;
+    for (int y = 0; y < mask.height(); ++y) {
+        for (int x = 0; x < mask.width(); ++x) { if (qAlpha(mask.pixel(x, y))) { measured.append({x,y}); } }
+    }
+    const QList<QPoint> shifted_members{{5,9},{6,9},{5,10},{6,10}};
+    QCOMPARE(measured, shifted_members);
+
+    QVERIFY(scene()->select_workflow(flow) && scene()->reveal_node(classifier));
+    const auto class_names_button = [&]() -> QPushButton* {
+        for (auto* edit : window.findChildren<QPushButton*>(QStringLiteral("editBinding"))) {
+            if (edit->property("bindingTarget").toString() == QStringLiteral("class_names") && edit->isVisible()) { return edit; }
+        }
+        return nullptr;
+    };
+    QTRY_VERIFY(class_names_button());
+    bool table_edited = false;
+    QTimer::singleShot(0, &window, [&] {
+        auto* binding = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+        if (!binding) { return; }
+        auto* set_source = binding->findChild<QPushButton*>(QStringLiteral("setBindingSource"));
+        if (!set_source) { binding->reject(); return; }
+        QTimer::singleShot(0, binding, [&] {
+            auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+            auto* names = qobject_cast<QInputDialog*>(dialog);
+            if (!names || names->objectName() != QStringLiteral("stringListEditor")) { if (dialog) { dialog->reject(); } return; }
+            names->setTextValue(QStringLiteral("[\"Background\",\"Scratch\",\"Part\"]"));
+            names->accept();
+            table_edited = true;
+        });
+        set_source->click();
+        binding->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Ok)->click();
+    });
+    class_names_button()->click();
+    QVERIFY(table_edited);
+
+    const auto check_business = [&] {
+        const auto run = *panel->selected_run();
+        const auto progress = take(run.inspect());
+        const auto classified = run_result(run, progress, classifier);
+        const auto decision = run_result(run, progress, judge);
+        const auto map = take(read_class_map(std::get<DataValue>(classified.output(key<OutputId>("class_map"))->content)));
+        QVERIFY(image->frame() && *image->frame() == map.pixels.image);
+        const std::array<unsigned,4> labels{0,1,2,1};
+        for (int y = 0; y < 2; ++y) {
+            const auto raw = take(map.pixels.image.row(y));
+            for (int x = 0; x < 2; ++x) {
+                QCOMPARE(std::to_integer<unsigned>(raw[x]), labels[2*y+x]);
+                const auto probe = view->pixel_at(view->mapFromScene(QPointF(x,y)));
+                QVERIFY(probe && probe->samples[0] == labels[2*y+x]);
+            }
+        }
+        const std::array<std::int64_t,3> counts{1,2,1};
+        QCOMPARE(legend->topLevelItemCount(), 3);
+        const std::array<std::string,3> names{"Background", "Scratch", "Part"};
+        for (int i = 0; i < 3; ++i) {
+            QCOMPARE(map.classes.at(i).count, counts[i]);
+            QCOMPARE(map.classes.at(i).name, names[i]);
+            const auto* row = legend->topLevelItem(i);
+            QCOMPARE(row->text(1), QString::fromStdString(map.classes[i].name));
+            QCOMPARE(row->text(2).toLongLong(), counts[i]);
+        }
+        QVERIFY(*std::get<DataValue>(decision.output(key<OutputId>("passed"))->content).as_bool());
+    };
+    run_and_show(flow, classifier);
+    check_business();
+    const QColor before = pixmap(0).pixelColor(1, 0), edited(QStringLiteral("#cf4be2"));
+    QVERIFY(before != edited && scene()->reveal_node(classifier));
+    QTRY_VERIFY(window.findChild<QPushButton*>(QStringLiteral("editClassColor")));
+    QTimer::singleShot(0, &window, [&] {
+        auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+        if (!dialog) { return; }
+        dialog->findChild<QSpinBox*>(QStringLiteral("classColorId"))->setValue(1);
+        dialog->findChild<QLineEdit*>(QStringLiteral("classColorRgb"))->setText(edited.name());
+        dialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Ok)->click();
+    });
+    window.findChild<QPushButton*>(QStringLiteral("editClassColor"))->click();
+    QCOMPARE(pixmap(0).pixelColor(1, 0), edited);
+    check_business();
+    scene()->undoStack().undo();
+    QCOMPARE(pixmap(0).pixelColor(1, 0), before);
+    scene()->undoStack().redo();
+    QCOMPARE(pixmap(0).pixelColor(1, 0), edited);
+    window.transfer_document(saved, SolutionTransfer::SaveAs);
+    QTRY_VERIFY(!window.file_busy());
+    window.open_document(saved);
+    QTRY_VERIFY(!window.file_busy());
+    run_and_show(flow, classifier);
+    QCOMPARE(pixmap(0).pixelColor(1, 0), edited);
+    check_business();
 }
 
 void VisualTests::window_previews_and_edits_symbolic_roi()

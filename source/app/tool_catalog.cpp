@@ -28,6 +28,7 @@ core::Result<core::ToolRegistry> make_tool_registry()
     }
 #else
     registrations.push_back(tools::vision::integer_range_registration(tools::vision::integer_range_descriptor()));
+    registrations.push_back(tools::vision::float_range_registration(tools::vision::float_range_descriptor()));
 #endif
     return core::ToolRegistry::create(registrations);
 }

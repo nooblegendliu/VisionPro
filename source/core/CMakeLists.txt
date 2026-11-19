@@ -10,6 +10,7 @@ add_library(visionpro_core STATIC
     runtime_id.cpp
     text.cpp
     value.cpp
+    class_map.cpp
     tool_descriptor.cpp
     tool_execution.cpp
     tool_registry.cpp

@@ -316,6 +316,9 @@ void EditorWindow::replace_canvas(Solution replacement, bool editable)
     });
     connect(model_.get(), &QtNodes::AbstractGraphModel::modelReset, this, [this] {
         if (!showing_run_image_) { images_->clear_overlays(); }
+        if (auto refreshed = images_->refresh_class_palette(draft()); const auto* failure = std::get_if<Diagnostic>(&refreshed)) {
+            report_error(QString::fromStdString(failure->message));
+        }
         refresh_canvas();
     });
     connect(scene_.get(), &QGraphicsScene::selectionChanged, this, [this] {

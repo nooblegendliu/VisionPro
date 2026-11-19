@@ -171,6 +171,20 @@ bool ControlScene::edit_draft(const QString& label, const DraftEdit& edit)
     }
 }
 
+bool ControlScene::set_class_palette(const core::NodeId& node, workflow::ClassPalette palette)
+{
+    const auto* flow = model_.active_workflow();
+    if (!flow || !find_node(*flow, node)) { return false; }
+    const auto position = model_.position(model_.canvas_id(node));
+    return edit_draft(tr("Change class display color"), [&](workflow::Solution& draft) -> EditResult {
+        auto& nodes = layout_for(draft, flow->id).nodes;
+        const auto found = std::ranges::find(nodes, node, &workflow::NodePlacement::node);
+        if (found == nodes.end()) { nodes.push_back({node, position.x(), position.y(), std::move(palette)}); }
+        else { found->class_palette = std::move(palette); }
+        return std::monostate{};
+    });
+}
+
 void ControlScene::set_editing_enabled(bool enabled)
 {
     editing_enabled_ = enabled;
@@ -285,8 +299,12 @@ bool ControlScene::copy_selected_nodes()
         Clipboard copied{*flow, model_.scope(), std::move(selected), {}};
         copied.placements.reserve(flow->nodes.size());
         for (const auto& node : flow->nodes) {
-            const auto point = model_.position(model_.canvas_id(node.id));
-            copied.placements.push_back({node.id, point.x(), point.y()});
+            if (const auto* saved = find_placement(model_.draft(), flow->id, node.id)) {
+                copied.placements.push_back(*saved);
+            } else {
+                const auto point = model_.position(model_.canvas_id(node.id));
+                copied.placements.push_back({node.id, point.x(), point.y()});
+            }
         }
         clipboard_ = std::move(copied);
         return true;
@@ -318,7 +336,8 @@ bool ControlScene::paste_nodes()
             if (id == fragment.identities.nodes.end()) { continue; }
             const bool root = std::ranges::find(clipboard_->selection, position.node) != clipboard_->selection.end();
             if (root) { roots.push_back(id->second); }
-            placements.push_back({id->second, position.x + (root ? offset : 0.0), position.y + (root ? offset : 0.0)});
+            placements.push_back({id->second, position.x + (root ? offset : 0.0),
+                position.y + (root ? offset : 0.0), position.class_palette});
         }
         flow.nodes.insert(flow.nodes.end(), std::make_move_iterator(fragment.nodes.begin()),
             std::make_move_iterator(fragment.nodes.end()));

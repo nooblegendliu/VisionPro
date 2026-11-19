@@ -36,11 +36,13 @@ set_tests_properties(app.cli_roundtrip app.cli_diagnostics app.cli_external_roun
     PROPERTIES TIMEOUT 60)
 
 if(VISIONPRO_WITH_OPENCV)
-    target_compile_definitions(visionpro_cli_tests PRIVATE VISIONPRO_WITH_OPENCV)
+    target_compile_definitions(visionpro_cli_tests PRIVATE VISIONPRO_WITH_OPENCV
+        VISIONPRO_INSPECTION_DIRECTORY="${PROJECT_SOURCE_DIR}/samples/s6-inspection")
     target_link_libraries(visionpro_cli_tests PRIVATE visionpro_vision_tools visionpro_simulation_tools)
     add_test(NAME app.vision_roundtrip COMMAND visionpro_cli_tests $<TARGET_FILE:visionpro_cli> vision-roundtrip)
     add_test(NAME app.vision_diagnostics COMMAND visionpro_cli_tests $<TARGET_FILE:visionpro_cli> vision-diagnostics)
-    set_tests_properties(app.vision_roundtrip app.vision_diagnostics PROPERTIES TIMEOUT 60)
+    add_test(NAME app.cli_inspection COMMAND visionpro_cli_tests $<TARGET_FILE:visionpro_cli> inspection)
+    set_tests_properties(app.vision_roundtrip app.vision_diagnostics app.cli_inspection PROPERTIES TIMEOUT 60)
 
     add_executable(visionpro_image_summary_tests image_summary_tests.cpp ../../source/app/run_summary.cpp)
     target_include_directories(visionpro_image_summary_tests PRIVATE "${PROJECT_SOURCE_DIR}/source/app")
@@ -50,7 +52,7 @@ if(VISIONPRO_WITH_OPENCV)
     set_tests_properties(app.vision_image_summary PROPERTIES TIMEOUT 30)
     set_tests_properties(app.cli_roundtrip app.cli_diagnostics app.cli_external_roundtrip app.cli_external_diagnostics app.cli_output_failures app.cli_calculations
         app.vision_image_summary app.structured_loops app.shared_package app.cli_shared_workflows app.cli_trigger_replay app.cli_error_recovery
-        app.vision_roundtrip app.vision_diagnostics PROPERTIES
+        app.vision_roundtrip app.vision_diagnostics app.cli_inspection PROPERTIES
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:opencv_core>"
     )
 endif()

@@ -1,6 +1,8 @@
 #include "vision_tools.hpp"
 #include "blob.hpp"
 #include "calibration.hpp"
+#include "class_map_tool.hpp"
+#include "inspection.hpp"
 #include "integer_range.hpp"
 #include "read_file.hpp"
 #include "threshold.hpp"
@@ -166,12 +168,53 @@ ToolDescriptor distance_descriptor()
     tool.outputs = {output("distance_mm", DataType::real(), millimetres)};
     return tool;
 }
+
+ToolDescriptor locate_descriptor()
+{
+    auto tool = descriptor("visionpro.locate.template_translation", "Locate template by translation");
+    tool.execution.retry = ToolRetry::Idempotent;
+    auto score = fixed_parameter("minimum_score", DataType::real());
+    score.required = false;
+    score.constraints.real_range = RealRange{0, 1};
+    score.default_value = std::get<ConfigValue>(ConfigValue::real(0.95));
+    tool.parameters = {fixed_parameter("reference_origin", DataType::point2d(), pixels), std::move(score)};
+    tool.inputs = {input("image", DataType::image(), {BindingSourceKind::RunOutput, BindingSourceKind::PublicInput}, pixels)};
+    tool.resources = {{key<SchemaId>("template"), ResourceKind::Template}};
+    auto position = output("position", DataType::point2d(), pixels);
+    auto transform = output("transform", DataType::transform2d());
+    for (auto* port : {&position, &transform}) {
+        port->required = false;
+        port->allowed_absence = {OutputAbsenceReason::ConditionNotMet};
+    }
+    tool.outputs = {output("matched", DataType::boolean()), output("score", DataType::real()),
+        std::move(position), std::move(transform)};
+    tool.control_outputs = {{key<ControlOutputId>("matched"), "Matched"}, {key<ControlOutputId>("unmatched"), "Unmatched"}};
+    tool.image_formats = {mono8, {PixelDepth::UInt8, ChannelOrder::BGR}};
+    return tool;
+}
+
+ToolDescriptor color_mean_descriptor()
+{
+    auto tool = descriptor("visionpro.measure.color_mean", "Measure ROI color");
+    tool.execution.retry = ToolRetry::Idempotent;
+    tool.parameters = {subscribable_parameter("roi", DataType::region2d(), pixels)};
+    tool.inputs = {input("image", DataType::image(), {BindingSourceKind::RunOutput, BindingSourceKind::PublicInput}, pixels),
+        input("placement", DataType::transform2d(), measurement_sources)};
+    tool.outputs = {output("blue", DataType::real()), output("green", DataType::real()), output("red", DataType::real()),
+        output("effective_roi", DataType::region2d(), pixels), output("roi_mask", DataType::raster_mask(), pixels)};
+    tool.resources = {{key<SchemaId>("mask"), ResourceKind::Mask, false}};
+    tool.region_capabilities = region_capabilities();
+    tool.region_capabilities->valid_empty_output = false;
+    tool.image_formats = {{PixelDepth::UInt8, ChannelOrder::BGR}};
+    return tool;
+}
 } // namespace
 
 std::span<const core::ToolDescriptor> tool_descriptors()
 {
     static const std::array descriptors{read_file_descriptor(), threshold_descriptor(), blob_descriptor(), integer_range_descriptor(),
-        fit_descriptor(), map_point_descriptor(), distance_descriptor()};
+        fit_descriptor(), map_point_descriptor(), distance_descriptor(), locate_descriptor(), color_mean_descriptor(),
+        float_range_descriptor(), class_map_descriptor()};
     return descriptors;
 }
 
@@ -179,7 +222,9 @@ std::vector<core::ToolRegistration> registrations()
 {
     return {read_file_registration(read_file_descriptor()), threshold_registration(threshold_descriptor()),
         blob_registration(blob_descriptor()), integer_range_registration(integer_range_descriptor()),
-        fit_registration(fit_descriptor()), map_point_registration(map_point_descriptor()), distance_registration(distance_descriptor())};
+        fit_registration(fit_descriptor()), map_point_registration(map_point_descriptor()), distance_registration(distance_descriptor()),
+        locate_registration(locate_descriptor()), color_mean_registration(color_mean_descriptor()),
+        float_range_registration(float_range_descriptor()), class_map_registration(class_map_descriptor())};
 }
 
 core::Result<std::monostate> validate_file_frame_origin(const core::Point2D& origin)

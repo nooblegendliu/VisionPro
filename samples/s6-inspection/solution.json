@@ -1,0 +1,2167 @@
+{
+  "format": "visionpro.solution",
+  "format_version": 1,
+  "id": "5ca4f87a-ea1e-4d62-89b0-000000006900",
+  "name": "S6.9 Workpiece inspection",
+  "revision": "1",
+  "coordinates": [
+    {
+      "handedness": "left_handed",
+      "id": "camera",
+      "kind": "image",
+      "origin": {
+        "x": 0.0,
+        "y": 0.0
+      },
+      "unit": "pixel",
+      "x_axis": {
+        "x": 1.0,
+        "y": 0.0
+      },
+      "y_axis": {
+        "x": 0.0,
+        "y": -1.0
+      }
+    },
+    {
+      "handedness": "left_handed",
+      "id": "workpiece",
+      "kind": "image",
+      "origin": {
+        "x": 0.0,
+        "y": 0.0
+      },
+      "unit": "pixel",
+      "x_axis": {
+        "x": 1.0,
+        "y": 0.0
+      },
+      "y_axis": {
+        "x": 0.0,
+        "y": -1.0
+      }
+    }
+  ],
+  "resources": [
+    {
+      "id": "5ca4f87a-ea1e-4d62-89b0-000000006901",
+      "kind": "image",
+      "name": "Shifted workpiece",
+      "location": {
+        "kind": "managed",
+        "revision": "1",
+        "sha256": "c18a102480108532b2e049ae12e9300aaa0d3c1174fa04c878fa2d6c6729bd72",
+        "path": {
+          "base": "solution_directory",
+          "named_root": null,
+          "path": "resources/workpiece.bmp"
+        }
+      }
+    },
+    {
+      "id": "5ca4f87a-ea1e-4d62-89b0-000000006902",
+      "kind": "template",
+      "name": "Reference patch",
+      "location": {
+        "kind": "managed",
+        "revision": "1",
+        "sha256": "95a65cb485179c2ea46f19f137c197248419a5dfba1e8f4f97413899ee6c8a3d",
+        "path": {
+          "base": "solution_directory",
+          "named_root": null,
+          "path": "resources/template.bmp"
+        }
+      }
+    },
+    {
+      "id": "5ca4f87a-ea1e-4d62-89b0-000000006903",
+      "kind": "image",
+      "name": "Label fixture",
+      "location": {
+        "kind": "managed",
+        "revision": "1",
+        "sha256": "2faf931ba4c1a798d3db3af16862660704000608542a3f32fbf67a89a332382d",
+        "path": {
+          "base": "solution_directory",
+          "named_root": null,
+          "path": "resources/classes.bmp"
+        }
+      }
+    }
+  ],
+  "queues": [
+    {
+      "capacity": "16",
+      "id": "5ca4f87a-ea1e-4d62-89b0-000000006904",
+      "message_schema": {
+        "kind": "record",
+        "schema": "visionpro.shared.text",
+        "version": 1,
+        "fields": [
+          {"id": "text", "type": {"kind": "string"}}
+        ]
+      },
+      "name": "Inspection results",
+      "overflow": "reject",
+      "receive": {
+        "batch": "require_exact",
+        "consumers": "single_consumer",
+        "empty": "fail",
+        "maximum_batch_size": "4"
+      }
+    }
+  ],
+  "variables": [],
+  "layouts": [
+    {
+      "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006910",
+      "nodes": [
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000006911",
+          "x": 0,
+          "y": 320
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000006912",
+          "x": 260,
+          "y": 320
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000006920",
+          "x": 540,
+          "y": 0
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000006930",
+          "x": 790,
+          "y": 0
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000006921",
+          "x": 540,
+          "y": 160
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000006931",
+          "x": 790,
+          "y": 160
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000006922",
+          "x": 540,
+          "y": 320
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000006932",
+          "x": 790,
+          "y": 320
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000006923",
+          "x": 540,
+          "y": 480
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000006933",
+          "x": 790,
+          "y": 480
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000006924",
+          "x": 540,
+          "y": 640
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000006934",
+          "x": 790,
+          "y": 640
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000006940",
+          "x": 1040,
+          "y": 320
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000006941",
+          "x": 1290,
+          "y": 320
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000006942",
+          "x": 1540,
+          "y": 220
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000006943",
+          "x": 1790,
+          "y": 220
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000006944",
+          "x": 1540,
+          "y": 420
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000006945",
+          "x": 1790,
+          "y": 420
+        }
+      ]
+    },
+    {
+      "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006950",
+      "nodes": [
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000006951",
+          "x": 0,
+          "y": 0
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000006952",
+          "x": 260,
+          "y": 0
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000006953",
+          "x": 520,
+          "y": 0
+        }
+      ]
+    }
+  ],
+  "workflows": [
+    {
+      "id": "5ca4f87a-ea1e-4d62-89b0-000000006910",
+      "name": "Locate and inspect five regions",
+      "outputs": [],
+      "enabled": true,
+      "entries": [
+        "5ca4f87a-ea1e-4d62-89b0-000000006911"
+      ],
+      "interface": {
+        "id": "s69.flow6910",
+        "inputs": [],
+        "outputs": [],
+        "control_outputs": [],
+        "version": 1
+      },
+      "containment": [],
+      "control_exports": [],
+      "nodes": [
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000006911",
+          "name": "Read camera",
+          "enabled": true,
+          "join": "all_activated",
+          "configuration": {
+            "kind": "tool",
+            "type": "visionpro.image.read_file",
+            "config_version": 1
+          },
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "enum",
+                      "members": [
+                        {
+                          "display_name": "Gray8",
+                          "id": "Gray8"
+                        },
+                        {
+                          "display_name": "Native8",
+                          "id": "Native8"
+                        }
+                      ],
+                      "schema": "visionpro.image.read_file.decode_mode",
+                      "version": 1
+                    },
+                    "value": "Native8"
+                  }
+                }
+              ],
+              "target": {
+                "id": "decode_mode",
+                "kind": "parameter"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "point2d"
+                    },
+                    "value": {
+                      "coordinate_frame": "camera",
+                      "unit": "pixel",
+                      "x": 0,
+                      "y": 0
+                    }
+                  }
+                }
+              ],
+              "target": {
+                "id": "frame_origin",
+                "kind": "parameter"
+              }
+            }
+          ],
+          "resources": [
+            {
+              "slot": "source",
+              "resource": {
+                "id": "5ca4f87a-ea1e-4d62-89b0-000000006901",
+                "kind": "image",
+                "revision": "1"
+              }
+            }
+          ]
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000006912",
+          "name": "Locate workpiece",
+          "enabled": true,
+          "join": "all_activated",
+          "configuration": {
+            "kind": "tool",
+            "type": "visionpro.locate.template_translation",
+            "config_version": 1
+          },
+          "bindings": [
+            {
+              "target": {
+                "id": "image",
+                "kind": "input"
+              },
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000006911",
+                    "output": {
+                      "id": "image",
+                      "kind": "port"
+                    },
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006910",
+                    "selector": []
+                  }
+                }
+              ]
+            },
+            {
+              "target": {
+                "id": "reference_origin",
+                "kind": "parameter"
+              },
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "point2d"
+                    },
+                    "value": {
+                      "coordinate_frame": "workpiece",
+                      "unit": "pixel",
+                      "x": 1,
+                      "y": 1
+                    }
+                  }
+                }
+              ]
+            }
+          ],
+          "resources": [
+            {
+              "slot": "template",
+              "resource": {
+                "id": "5ca4f87a-ea1e-4d62-89b0-000000006902",
+                "kind": "template",
+                "revision": "1"
+              }
+            }
+          ]
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000006920",
+          "name": "Measure lane 1",
+          "enabled": true,
+          "join": "all_activated",
+          "configuration": {
+            "kind": "tool",
+            "type": "visionpro.measure.color_mean",
+            "config_version": 1
+          },
+          "bindings": [
+            {
+              "target": {
+                "id": "image",
+                "kind": "input"
+              },
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000006911",
+                    "output": {
+                      "id": "image",
+                      "kind": "port"
+                    },
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006910",
+                    "selector": []
+                  }
+                }
+              ]
+            },
+            {
+              "target": {
+                "id": "placement",
+                "kind": "input"
+              },
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000006912",
+                    "output": {
+                      "id": "transform",
+                      "kind": "port"
+                    },
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006910",
+                    "selector": []
+                  }
+                }
+              ]
+            },
+            {
+              "target": {
+                "id": "roi",
+                "kind": "parameter"
+              },
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "region2d"
+                    },
+                    "value": {
+                      "id": "5ca4f87a-ea1e-4d62-89b0-000000069500",
+                      "coordinate_frame": "workpiece",
+                      "unit": "pixel",
+                      "source": {
+                        "kind": "primitive",
+                        "coordinate_frame": "workpiece",
+                        "unit": "pixel",
+                        "geometry": {
+                          "kind": "axis_aligned_rect",
+                          "x": 2,
+                          "y": 7,
+                          "width": 2,
+                          "height": 2
+                        },
+                        "local_direction_radians": 0,
+                        "transform": null
+                      },
+                      "exclusions": [],
+                      "empty_policy": "error",
+                      "boundary_policy": "reject",
+                      "fill": null
+                    }
+                  }
+                }
+              ]
+            }
+          ],
+          "resources": []
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000006930",
+          "name": "Judge lane 1",
+          "enabled": true,
+          "join": "all_activated",
+          "configuration": {
+            "kind": "tool",
+            "type": "visionpro.judge.float_range",
+            "config_version": 1
+          },
+          "bindings": [
+            {
+              "target": {
+                "id": "value",
+                "kind": "input"
+              },
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000006920",
+                    "output": {
+                      "id": "blue",
+                      "kind": "port"
+                    },
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006910",
+                    "selector": []
+                  }
+                }
+              ]
+            },
+            {
+              "target": {
+                "id": "minimum",
+                "kind": "parameter"
+              },
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "float64"
+                    },
+                    "value": 10.0
+                  }
+                }
+              ]
+            },
+            {
+              "target": {
+                "id": "maximum",
+                "kind": "parameter"
+              },
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "float64"
+                    },
+                    "value": 40.0
+                  }
+                }
+              ]
+            }
+          ],
+          "resources": []
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000006921",
+          "name": "Measure lane 2",
+          "enabled": true,
+          "join": "all_activated",
+          "configuration": {
+            "kind": "tool",
+            "type": "visionpro.measure.color_mean",
+            "config_version": 1
+          },
+          "bindings": [
+            {
+              "target": {
+                "id": "image",
+                "kind": "input"
+              },
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000006911",
+                    "output": {
+                      "id": "image",
+                      "kind": "port"
+                    },
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006910",
+                    "selector": []
+                  }
+                }
+              ]
+            },
+            {
+              "target": {
+                "id": "placement",
+                "kind": "input"
+              },
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000006912",
+                    "output": {
+                      "id": "transform",
+                      "kind": "port"
+                    },
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006910",
+                    "selector": []
+                  }
+                }
+              ]
+            },
+            {
+              "target": {
+                "id": "roi",
+                "kind": "parameter"
+              },
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "region2d"
+                    },
+                    "value": {
+                      "id": "5ca4f87a-ea1e-4d62-89b0-000000069501",
+                      "coordinate_frame": "workpiece",
+                      "unit": "pixel",
+                      "source": {
+                        "kind": "primitive",
+                        "coordinate_frame": "workpiece",
+                        "unit": "pixel",
+                        "geometry": {
+                          "kind": "axis_aligned_rect",
+                          "x": 7,
+                          "y": 7,
+                          "width": 2,
+                          "height": 2
+                        },
+                        "local_direction_radians": 0,
+                        "transform": null
+                      },
+                      "exclusions": [],
+                      "empty_policy": "error",
+                      "boundary_policy": "reject",
+                      "fill": null
+                    }
+                  }
+                }
+              ]
+            }
+          ],
+          "resources": []
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000006931",
+          "name": "Judge lane 2",
+          "enabled": true,
+          "join": "all_activated",
+          "configuration": {
+            "kind": "tool",
+            "type": "visionpro.judge.float_range",
+            "config_version": 1
+          },
+          "bindings": [
+            {
+              "target": {
+                "id": "value",
+                "kind": "input"
+              },
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000006921",
+                    "output": {
+                      "id": "blue",
+                      "kind": "port"
+                    },
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006910",
+                    "selector": []
+                  }
+                }
+              ]
+            },
+            {
+              "target": {
+                "id": "minimum",
+                "kind": "parameter"
+              },
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "float64"
+                    },
+                    "value": 10.0
+                  }
+                }
+              ]
+            },
+            {
+              "target": {
+                "id": "maximum",
+                "kind": "parameter"
+              },
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "float64"
+                    },
+                    "value": 40.0
+                  }
+                }
+              ]
+            }
+          ],
+          "resources": []
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000006922",
+          "name": "Measure lane 3",
+          "enabled": true,
+          "join": "all_activated",
+          "configuration": {
+            "kind": "tool",
+            "type": "visionpro.measure.color_mean",
+            "config_version": 1
+          },
+          "bindings": [
+            {
+              "target": {
+                "id": "image",
+                "kind": "input"
+              },
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000006911",
+                    "output": {
+                      "id": "image",
+                      "kind": "port"
+                    },
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006910",
+                    "selector": []
+                  }
+                }
+              ]
+            },
+            {
+              "target": {
+                "id": "placement",
+                "kind": "input"
+              },
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000006912",
+                    "output": {
+                      "id": "transform",
+                      "kind": "port"
+                    },
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006910",
+                    "selector": []
+                  }
+                }
+              ]
+            },
+            {
+              "target": {
+                "id": "roi",
+                "kind": "parameter"
+              },
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "region2d"
+                    },
+                    "value": {
+                      "id": "5ca4f87a-ea1e-4d62-89b0-000000069502",
+                      "coordinate_frame": "workpiece",
+                      "unit": "pixel",
+                      "source": {
+                        "kind": "primitive",
+                        "coordinate_frame": "workpiece",
+                        "unit": "pixel",
+                        "geometry": {
+                          "kind": "axis_aligned_rect",
+                          "x": 12,
+                          "y": 7,
+                          "width": 2,
+                          "height": 2
+                        },
+                        "local_direction_radians": 0,
+                        "transform": null
+                      },
+                      "exclusions": [],
+                      "empty_policy": "error",
+                      "boundary_policy": "reject",
+                      "fill": null
+                    }
+                  }
+                }
+              ]
+            }
+          ],
+          "resources": []
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000006932",
+          "name": "Judge lane 3",
+          "enabled": true,
+          "join": "all_activated",
+          "configuration": {
+            "kind": "tool",
+            "type": "visionpro.judge.float_range",
+            "config_version": 1
+          },
+          "bindings": [
+            {
+              "target": {
+                "id": "value",
+                "kind": "input"
+              },
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000006922",
+                    "output": {
+                      "id": "blue",
+                      "kind": "port"
+                    },
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006910",
+                    "selector": []
+                  }
+                }
+              ]
+            },
+            {
+              "target": {
+                "id": "minimum",
+                "kind": "parameter"
+              },
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "float64"
+                    },
+                    "value": 10.0
+                  }
+                }
+              ]
+            },
+            {
+              "target": {
+                "id": "maximum",
+                "kind": "parameter"
+              },
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "float64"
+                    },
+                    "value": 40.0
+                  }
+                }
+              ]
+            }
+          ],
+          "resources": []
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000006923",
+          "name": "Measure lane 4",
+          "enabled": true,
+          "join": "all_activated",
+          "configuration": {
+            "kind": "tool",
+            "type": "visionpro.measure.color_mean",
+            "config_version": 1
+          },
+          "bindings": [
+            {
+              "target": {
+                "id": "image",
+                "kind": "input"
+              },
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000006911",
+                    "output": {
+                      "id": "image",
+                      "kind": "port"
+                    },
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006910",
+                    "selector": []
+                  }
+                }
+              ]
+            },
+            {
+              "target": {
+                "id": "placement",
+                "kind": "input"
+              },
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000006912",
+                    "output": {
+                      "id": "transform",
+                      "kind": "port"
+                    },
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006910",
+                    "selector": []
+                  }
+                }
+              ]
+            },
+            {
+              "target": {
+                "id": "roi",
+                "kind": "parameter"
+              },
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "region2d"
+                    },
+                    "value": {
+                      "id": "5ca4f87a-ea1e-4d62-89b0-000000069503",
+                      "coordinate_frame": "workpiece",
+                      "unit": "pixel",
+                      "source": {
+                        "kind": "primitive",
+                        "coordinate_frame": "workpiece",
+                        "unit": "pixel",
+                        "geometry": {
+                          "kind": "axis_aligned_rect",
+                          "x": 17,
+                          "y": 7,
+                          "width": 2,
+                          "height": 2
+                        },
+                        "local_direction_radians": 0,
+                        "transform": null
+                      },
+                      "exclusions": [],
+                      "empty_policy": "error",
+                      "boundary_policy": "reject",
+                      "fill": null
+                    }
+                  }
+                }
+              ]
+            }
+          ],
+          "resources": []
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000006933",
+          "name": "Judge lane 4",
+          "enabled": true,
+          "join": "all_activated",
+          "configuration": {
+            "kind": "tool",
+            "type": "visionpro.judge.float_range",
+            "config_version": 1
+          },
+          "bindings": [
+            {
+              "target": {
+                "id": "value",
+                "kind": "input"
+              },
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000006923",
+                    "output": {
+                      "id": "blue",
+                      "kind": "port"
+                    },
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006910",
+                    "selector": []
+                  }
+                }
+              ]
+            },
+            {
+              "target": {
+                "id": "minimum",
+                "kind": "parameter"
+              },
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "float64"
+                    },
+                    "value": 10.0
+                  }
+                }
+              ]
+            },
+            {
+              "target": {
+                "id": "maximum",
+                "kind": "parameter"
+              },
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "float64"
+                    },
+                    "value": 40.0
+                  }
+                }
+              ]
+            }
+          ],
+          "resources": []
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000006924",
+          "name": "Measure lane 5",
+          "enabled": true,
+          "join": "all_activated",
+          "configuration": {
+            "kind": "tool",
+            "type": "visionpro.measure.color_mean",
+            "config_version": 1
+          },
+          "bindings": [
+            {
+              "target": {
+                "id": "image",
+                "kind": "input"
+              },
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000006911",
+                    "output": {
+                      "id": "image",
+                      "kind": "port"
+                    },
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006910",
+                    "selector": []
+                  }
+                }
+              ]
+            },
+            {
+              "target": {
+                "id": "placement",
+                "kind": "input"
+              },
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000006912",
+                    "output": {
+                      "id": "transform",
+                      "kind": "port"
+                    },
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006910",
+                    "selector": []
+                  }
+                }
+              ]
+            },
+            {
+              "target": {
+                "id": "roi",
+                "kind": "parameter"
+              },
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "region2d"
+                    },
+                    "value": {
+                      "id": "5ca4f87a-ea1e-4d62-89b0-000000069504",
+                      "coordinate_frame": "workpiece",
+                      "unit": "pixel",
+                      "source": {
+                        "kind": "primitive",
+                        "coordinate_frame": "workpiece",
+                        "unit": "pixel",
+                        "geometry": {
+                          "kind": "axis_aligned_rect",
+                          "x": 22,
+                          "y": 7,
+                          "width": 2,
+                          "height": 2
+                        },
+                        "local_direction_radians": 0,
+                        "transform": null
+                      },
+                      "exclusions": [],
+                      "empty_policy": "error",
+                      "boundary_policy": "reject",
+                      "fill": null
+                    }
+                  }
+                }
+              ]
+            }
+          ],
+          "resources": []
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000006934",
+          "name": "Judge lane 5",
+          "enabled": true,
+          "join": "all_activated",
+          "configuration": {
+            "kind": "tool",
+            "type": "visionpro.judge.float_range",
+            "config_version": 1
+          },
+          "bindings": [
+            {
+              "target": {
+                "id": "value",
+                "kind": "input"
+              },
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000006924",
+                    "output": {
+                      "id": "blue",
+                      "kind": "port"
+                    },
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006910",
+                    "selector": []
+                  }
+                }
+              ]
+            },
+            {
+              "target": {
+                "id": "minimum",
+                "kind": "parameter"
+              },
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "float64"
+                    },
+                    "value": 10.0
+                  }
+                }
+              ]
+            },
+            {
+              "target": {
+                "id": "maximum",
+                "kind": "parameter"
+              },
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "float64"
+                    },
+                    "value": 40.0
+                  }
+                }
+              ]
+            }
+          ],
+          "resources": []
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000006940",
+          "name": "All five pass",
+          "enabled": true,
+          "join": "all_activated",
+          "configuration": {
+            "kind": "tool",
+            "type": "visionpro.logic.and",
+            "config_version": 1
+          },
+          "bindings": [
+            {
+              "target": {
+                "id": "values",
+                "kind": "input"
+              },
+              "accepted_absence": [],
+              "cardinality": "multiple_sources",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000006930",
+                    "output": {
+                      "id": "passed",
+                      "kind": "port"
+                    },
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006910",
+                    "selector": []
+                  }
+                },
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000006931",
+                    "output": {
+                      "id": "passed",
+                      "kind": "port"
+                    },
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006910",
+                    "selector": []
+                  }
+                },
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000006932",
+                    "output": {
+                      "id": "passed",
+                      "kind": "port"
+                    },
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006910",
+                    "selector": []
+                  }
+                },
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000006933",
+                    "output": {
+                      "id": "passed",
+                      "kind": "port"
+                    },
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006910",
+                    "selector": []
+                  }
+                },
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000006934",
+                    "output": {
+                      "id": "passed",
+                      "kind": "port"
+                    },
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006910",
+                    "selector": []
+                  }
+                }
+              ]
+            }
+          ],
+          "resources": []
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000006941",
+          "name": "Select result",
+          "enabled": true,
+          "join": "all_activated",
+          "configuration": {
+            "kind": "tool",
+            "type": "visionpro.logic.condition",
+            "config_version": 1
+          },
+          "bindings": [
+            {
+              "target": {
+                "id": "condition",
+                "kind": "input"
+              },
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000006940",
+                    "output": {
+                      "id": "passed",
+                      "kind": "port"
+                    },
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006910",
+                    "selector": []
+                  }
+                }
+              ]
+            }
+          ],
+          "resources": []
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000006942",
+          "name": "Format OK",
+          "enabled": true,
+          "join": "all_activated",
+          "configuration": {
+            "kind": "tool",
+            "type": "visionpro.format.float64_list",
+            "config_version": 1
+          },
+          "bindings": [
+            {
+              "target": {
+                "id": "values",
+                "kind": "input"
+              },
+              "accepted_absence": [],
+              "cardinality": "multiple_sources",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000006920",
+                    "output": {
+                      "id": "blue",
+                      "kind": "port"
+                    },
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006910",
+                    "selector": []
+                  }
+                },
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000006921",
+                    "output": {
+                      "id": "blue",
+                      "kind": "port"
+                    },
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006910",
+                    "selector": []
+                  }
+                },
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000006922",
+                    "output": {
+                      "id": "blue",
+                      "kind": "port"
+                    },
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006910",
+                    "selector": []
+                  }
+                },
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000006923",
+                    "output": {
+                      "id": "blue",
+                      "kind": "port"
+                    },
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006910",
+                    "selector": []
+                  }
+                },
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000006924",
+                    "output": {
+                      "id": "blue",
+                      "kind": "port"
+                    },
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006910",
+                    "selector": []
+                  }
+                }
+              ]
+            },
+            {
+              "target": {
+                "id": "prefix",
+                "kind": "parameter"
+              },
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "string"
+                    },
+                    "value": "OK B="
+                  }
+                }
+              ]
+            }
+          ],
+          "resources": []
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000006943",
+          "name": "Deliver OK",
+          "enabled": true,
+          "join": "all_activated",
+          "configuration": {
+            "kind": "tool",
+            "type": "visionpro.shared.queue_send_text",
+            "config_version": 1,
+            "shared_targets": [
+              {
+                "kind": "queue",
+                "id": "5ca4f87a-ea1e-4d62-89b0-000000006904"
+              }
+            ]
+          },
+          "bindings": [
+            {
+              "target": {
+                "id": "payload",
+                "kind": "input"
+              },
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000006942",
+                    "output": {
+                      "id": "text",
+                      "kind": "port"
+                    },
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006910",
+                    "selector": []
+                  }
+                }
+              ]
+            },
+            {
+              "target": {
+                "id": "key",
+                "kind": "input"
+              },
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "string"
+                    },
+                    "value": "part-001"
+                  }
+                }
+              ]
+            },
+            {
+              "target": {
+                "id": "domain",
+                "kind": "input"
+              },
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "string"
+                    },
+                    "value": "inspection"
+                  }
+                }
+              ]
+            }
+          ],
+          "resources": []
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000006944",
+          "name": "Format NG",
+          "enabled": true,
+          "join": "all_activated",
+          "configuration": {
+            "kind": "tool",
+            "type": "visionpro.format.float64_list",
+            "config_version": 1
+          },
+          "bindings": [
+            {
+              "target": {
+                "id": "values",
+                "kind": "input"
+              },
+              "accepted_absence": [],
+              "cardinality": "multiple_sources",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000006920",
+                    "output": {
+                      "id": "blue",
+                      "kind": "port"
+                    },
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006910",
+                    "selector": []
+                  }
+                },
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000006921",
+                    "output": {
+                      "id": "blue",
+                      "kind": "port"
+                    },
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006910",
+                    "selector": []
+                  }
+                },
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000006922",
+                    "output": {
+                      "id": "blue",
+                      "kind": "port"
+                    },
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006910",
+                    "selector": []
+                  }
+                },
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000006923",
+                    "output": {
+                      "id": "blue",
+                      "kind": "port"
+                    },
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006910",
+                    "selector": []
+                  }
+                },
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000006924",
+                    "output": {
+                      "id": "blue",
+                      "kind": "port"
+                    },
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006910",
+                    "selector": []
+                  }
+                }
+              ]
+            },
+            {
+              "target": {
+                "id": "prefix",
+                "kind": "parameter"
+              },
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "string"
+                    },
+                    "value": "NG B="
+                  }
+                }
+              ]
+            }
+          ],
+          "resources": []
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000006945",
+          "name": "Deliver NG",
+          "enabled": true,
+          "join": "all_activated",
+          "configuration": {
+            "kind": "tool",
+            "type": "visionpro.shared.queue_send_text",
+            "config_version": 1,
+            "shared_targets": [
+              {
+                "kind": "queue",
+                "id": "5ca4f87a-ea1e-4d62-89b0-000000006904"
+              }
+            ]
+          },
+          "bindings": [
+            {
+              "target": {
+                "id": "payload",
+                "kind": "input"
+              },
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000006944",
+                    "output": {
+                      "id": "text",
+                      "kind": "port"
+                    },
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006910",
+                    "selector": []
+                  }
+                }
+              ]
+            },
+            {
+              "target": {
+                "id": "key",
+                "kind": "input"
+              },
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "string"
+                    },
+                    "value": "part-001"
+                  }
+                }
+              ]
+            },
+            {
+              "target": {
+                "id": "domain",
+                "kind": "input"
+              },
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "string"
+                    },
+                    "value": "inspection"
+                  }
+                }
+              ]
+            }
+          ],
+          "resources": []
+        }
+      ],
+      "control_links": [
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000691000",
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000006911",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000006912",
+          "output": null
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000691001",
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000006912",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000006920",
+          "output": "matched"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000691002",
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000006920",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000006930",
+          "output": null
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000691003",
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000006930",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000006940",
+          "output": null
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000691004",
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000006912",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000006921",
+          "output": "matched"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000691005",
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000006921",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000006931",
+          "output": null
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000691006",
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000006931",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000006940",
+          "output": null
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000691007",
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000006912",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000006922",
+          "output": "matched"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000691008",
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000006922",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000006932",
+          "output": null
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000691009",
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000006932",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000006940",
+          "output": null
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000691010",
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000006912",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000006923",
+          "output": "matched"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000691011",
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000006923",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000006933",
+          "output": null
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000691012",
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000006933",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000006940",
+          "output": null
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000691013",
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000006912",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000006924",
+          "output": "matched"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000691014",
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000006924",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000006934",
+          "output": null
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000691015",
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000006934",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000006940",
+          "output": null
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000691016",
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000006940",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000006941",
+          "output": null
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000691017",
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000006941",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000006942",
+          "output": "true"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000691018",
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000006942",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000006943",
+          "output": null
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000691019",
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000006941",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000006944",
+          "output": "false"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000691020",
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000006944",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000006945",
+          "output": null
+        }
+      ]
+    },
+    {
+      "id": "5ca4f87a-ea1e-4d62-89b0-000000006950",
+      "name": "Classify a 2 by 2 image",
+      "outputs": [],
+      "enabled": true,
+      "entries": [
+        "5ca4f87a-ea1e-4d62-89b0-000000006951"
+      ],
+      "interface": {
+        "id": "s69.flow6950",
+        "inputs": [],
+        "outputs": [],
+        "control_outputs": [],
+        "version": 1
+      },
+      "containment": [],
+      "control_exports": [],
+      "nodes": [
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000006951",
+          "name": "Read camera",
+          "enabled": true,
+          "join": "all_activated",
+          "configuration": {
+            "kind": "tool",
+            "type": "visionpro.image.read_file",
+            "config_version": 1
+          },
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "enum",
+                      "members": [
+                        {
+                          "display_name": "Gray8",
+                          "id": "Gray8"
+                        },
+                        {
+                          "display_name": "Native8",
+                          "id": "Native8"
+                        }
+                      ],
+                      "schema": "visionpro.image.read_file.decode_mode",
+                      "version": 1
+                    },
+                    "value": "Gray8"
+                  }
+                }
+              ],
+              "target": {
+                "id": "decode_mode",
+                "kind": "parameter"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "point2d"
+                    },
+                    "value": {
+                      "coordinate_frame": "camera",
+                      "unit": "pixel",
+                      "x": 0,
+                      "y": 0
+                    }
+                  }
+                }
+              ],
+              "target": {
+                "id": "frame_origin",
+                "kind": "parameter"
+              }
+            }
+          ],
+          "resources": [
+            {
+              "slot": "source",
+              "resource": {
+                "id": "5ca4f87a-ea1e-4d62-89b0-000000006903",
+                "kind": "image",
+                "revision": "1"
+              }
+            }
+          ]
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000006952",
+          "name": "Classify intensity",
+          "enabled": true,
+          "join": "all_activated",
+          "configuration": {
+            "kind": "tool",
+            "type": "visionpro.image.class_map",
+            "config_version": 1
+          },
+          "bindings": [
+            {
+              "target": {
+                "id": "image",
+                "kind": "input"
+              },
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000006951",
+                    "output": {
+                      "id": "image",
+                      "kind": "port"
+                    },
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006950",
+                    "selector": []
+                  }
+                }
+              ]
+            }
+          ],
+          "resources": []
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000006952",
+                    "output": {
+                      "id": "class_map",
+                      "kind": "port"
+                    },
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006950",
+                    "selector": [
+                      {
+                        "kind": "field",
+                        "field": "classes"
+                      },
+                      {
+                        "kind": "element",
+                        "index": "2"
+                      },
+                      {
+                        "kind": "field",
+                        "field": "count"
+                      }
+                    ]
+                  }
+                }
+              ],
+              "target": {
+                "id": "value",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "1"
+                  }
+                }
+              ],
+              "target": {
+                "id": "minimum",
+                "kind": "parameter"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "1"
+                  }
+                }
+              ],
+              "target": {
+                "id": "maximum",
+                "kind": "parameter"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "type": "visionpro.judge.integer_range"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000006953",
+          "join": "all_activated",
+          "name": "Verify class 2 count",
+          "resources": []
+        }
+      ],
+      "control_links": [
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000695000",
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000006951",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000006952",
+          "output": null
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000695001",
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000006952",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000006953",
+          "output": null
+        }
+      ]
+    }
+  ]
+}

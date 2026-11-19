@@ -40,7 +40,8 @@ public:
     enum class DrawingMode { Off, Rectangle, Vertex };
     explicit ImageView(QWidget* parent = nullptr);
 
-    [[nodiscard]] core::Result<std::monostate> set_image(const core::ImageHandle& image);
+    [[nodiscard]] core::Result<std::monostate> set_image(const core::ImageHandle& image, const QList<QRgb>& palette = {});
+    [[nodiscard]] core::Result<std::monostate> recolor_labels(const QList<QRgb>& palette);
     [[nodiscard]] core::Result<std::monostate> set_overlays(
         const std::optional<core::RegionDefinition>& effective_region,
         const std::optional<core::RasterMask>& member_mask,
@@ -79,6 +80,7 @@ private:
     void update_cursor();
 
     std::optional<core::ImageHandle> image_;
+    QImage labels_;
     QGraphicsPixmapItem* image_item_;
     QGraphicsPixmapItem* mask_item_;
     QGraphicsPathItem* inclusion_item_;

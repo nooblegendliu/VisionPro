@@ -293,12 +293,9 @@ bool ControlGraphModel::connectionPossible(ConnectionId connection) const
 
 QPointF ControlGraphModel::position(NodeId node) const
 {
-    const auto layout = std::ranges::find(draft_.layouts, *workflow_id_, &WorkflowLayout::workflow);
-    if (layout != draft_.layouts.end()) {
-        const auto found = std::ranges::find(layout->nodes, *domain_node(node), &NodePlacement::node);
-        if (found != layout->nodes.end() && std::isfinite(found->x) && std::isfinite(found->y)) {
-            return {found->x, found->y};
-        }
+    const auto* saved = find_placement(draft_, *workflow_id_, *domain_node(node));
+    if (saved && std::isfinite(saved->x) && std::isfinite(saved->y)) {
+        return {saved->x, saved->y};
     }
     return nodes_.at(node).default_position;
 }
@@ -474,11 +471,11 @@ bool ControlGraphModel::move_nodes(QUndoStack& history, std::span<const CanvasMo
         if (point == position(node)) { continue; }
         const auto id = *domain_node(node);
         const auto found = std::ranges::find(layout->nodes, id, &NodePlacement::node);
-        const NodePlacement placement{id, point.x(), point.y()};
         if (found == layout->nodes.end()) {
-            layout->nodes.push_back(placement);
+            layout->nodes.push_back({id, point.x(), point.y()});
         } else {
-            *found = placement;
+            found->x = point.x();
+            found->y = point.y();
         }
         changed.push_back(id);
     }

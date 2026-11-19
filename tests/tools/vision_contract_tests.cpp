@@ -42,7 +42,9 @@ const auto& by_id(const Range& items, std::string_view id)
 void schemas()
 {
     const auto tools = vision::tool_descriptors();
-    for (const auto name : {"visionpro.calibration.fit", "visionpro.geometry.map_point", "visionpro.measure.distance"}) {
+    for (const auto name : {"visionpro.calibration.fit", "visionpro.geometry.map_point", "visionpro.measure.distance",
+        "visionpro.locate.template_translation", "visionpro.measure.color_mean", "visionpro.judge.float_range",
+        "visionpro.image.class_map"}) {
         by_id(tools, name);
     }
     const auto registry = take(ToolRegistry::create(vision::registrations()));

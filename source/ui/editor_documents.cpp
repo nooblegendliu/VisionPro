@@ -567,12 +567,17 @@ void EditorWindow::preview_selected_roi()
         report_error(QStringLiteral("The selected ROI has no configured region available for preview."));
         return;
     }
+    const bool reference = tool->type.text() == "visionpro.measure.color_mean";
+    if (reference && region->coordinate_frame != images_->frame()->coordinate_frame()) {
+        show_status(QStringLiteral("Open an image in the ROI reference frame, or choose Show Image on the measurement result to see the located ROI."));
+        return;
+    }
     start_file_task(QStringLiteral("Evaluating ROI…"),
         [image = *images_->frame(), solution, flow = *id, node = node->id, target = parameter->id,
             region = *region, directory = directory_, roots = roots_] {
             return app::preview_roi(image, solution, flow, node, target, region, directory, roots);
         },
-        [this, id = *id, selected](app::RoiPreview preview) {
+        [this, id = *id, selected, reference](app::RoiPreview preview) {
             if (model_->workflow_id() != id || scene_->selected_nodes() != selected) { return; }
             const auto shown = images_->set_overlays(preview.effective_region, preview.mask);
             if (const auto* failure = std::get_if<Diagnostic>(&shown)) {
@@ -580,7 +585,7 @@ void EditorWindow::preview_selected_roi()
                 return;
             }
             showing_run_image_ = false;
-            images_->set_provenance(QStringLiteral("Draft ROI preview"));
+            images_->set_provenance(reference ? QStringLiteral("Reference ROI · before template placement") : QStringLiteral("Draft ROI preview"));
             images_dock_->show();
             images_dock_->raise();
             auto summary = QStringLiteral("ROI contains %1 pixels.").arg(preview.member_count);

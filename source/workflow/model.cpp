@@ -428,6 +428,14 @@ Check validate_global_invariants(const Solution& solution)
     return std::monostate{};
 }
 
+const NodePlacement* find_placement(const Solution& solution, const core::WorkflowId& workflow, const core::NodeId& node) noexcept
+{
+    const auto layout = std::ranges::find(solution.layouts, workflow, &WorkflowLayout::workflow);
+    if (layout == solution.layouts.end()) { return nullptr; }
+    const auto placement = std::ranges::find(layout->nodes, node, &NodePlacement::node);
+    return placement == layout->nodes.end() ? nullptr : &*placement;
+}
+
 Check detail::validate_layouts(const Solution& solution)
 {
     std::set<core::WorkflowId> layouts;

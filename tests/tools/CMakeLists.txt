@@ -24,6 +24,14 @@ add_executable(visionpro_calibration_tests calibration_tests.cpp)
 target_link_libraries(visionpro_calibration_tests PRIVATE visionpro_vision_tools visionpro_build_options)
 add_test(NAME tools.planar_calibration COMMAND visionpro_calibration_tests)
 
+add_executable(visionpro_inspection_tests inspection_tests.cpp)
+target_link_libraries(visionpro_inspection_tests PRIVATE visionpro_vision_tools visionpro_build_options)
+add_test(NAME tools.template_and_color COMMAND visionpro_inspection_tests)
+
+add_executable(visionpro_class_map_tests class_map_tests.cpp)
+target_link_libraries(visionpro_class_map_tests PRIVATE visionpro_vision_tools visionpro_build_options)
+add_test(NAME tools.class_map COMMAND visionpro_class_map_tests)
+
 add_executable(visionpro_image_bridge_tests image_bridge_tests.cpp)
 target_link_libraries(visionpro_image_bridge_tests PRIVATE visionpro_vision_tools opencv_core visionpro_build_options)
 add_test(NAME tools.image_bridge COMMAND visionpro_image_bridge_tests)
@@ -57,7 +65,7 @@ target_link_libraries(visionpro_judgement_tests PRIVATE visionpro_vision_tools v
 add_test(NAME tools.judgement COMMAND visionpro_judgement_tests)
 
 set_tests_properties(tools.opencv_release_smoke tools.vision_contracts tools.planar_calibration tools.image_bridge tools.image_read
-    tools.roi tools.mask tools.roi_runtime tools.threshold tools.blob tools.judgement PROPERTIES
+    tools.roi tools.mask tools.roi_runtime tools.threshold tools.blob tools.judgement tools.template_and_color tools.class_map PROPERTIES
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:opencv_core>"
     TIMEOUT 30
 )

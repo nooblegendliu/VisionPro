@@ -1,4 +1,5 @@
 add_library(visionpro_ui STATIC
+    class_palette.cpp class_palette.hpp
     control_graph_model.cpp control_graph_model.hpp
     control_scene.cpp control_scene.hpp
     editor_window.cpp editor_window.hpp editor_documents.cpp editor_runs.cpp

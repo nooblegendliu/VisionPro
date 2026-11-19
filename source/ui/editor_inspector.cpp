@@ -1,4 +1,6 @@
 #include "editor_inspector.hpp"
+#include "class_palette.hpp"
+#include <visionpro/core/class_map.hpp>
 #include "coordinate_text.hpp"
 #include "control_scene.hpp"
 #include "roi_editor.hpp"
@@ -1525,7 +1527,7 @@ void select_resource(const InspectorContext& context, const WorkflowId& id, cons
     for (const auto& resource : solution.resources) {
         if (resource.kind != slot.kind) { continue; }
         auto pin = old && old->id == resource.id ? old->revision : std::nullopt;
-        if (slot.kind == ResourceKind::Calibration && !pin) {
+        if ((slot.kind == ResourceKind::Calibration || slot.kind == ResourceKind::Template) && !pin) {
             if (const auto* file = std::get_if<ManagedResource>(&resource.location)) { pin = file->revision; }
             if (const auto* file = std::get_if<ExternalFileResource>(&resource.location)) { pin = file->revision; }
         }
@@ -1695,6 +1697,16 @@ void tool_settings(QVBoxLayout& panel, const InspectorContext& context, const Wo
         return;
     }
     if (tool->shared_target) { shared_targets(panel, context, flow, node, *tool->shared_target); }
+    if (std::ranges::any_of(tool->outputs, [](const auto& output) { return output.type == class_map_type(); })) {
+        auto* group = section(panel, QStringLiteral("Display"));
+        auto* layout = new QVBoxLayout(group);
+        layout->addWidget(action(group, QStringLiteral("Edit class color…"), "editClassColor", [context, flow_id = flow.id, id = node.id] {
+            const auto* placement = find_placement(context.model.draft(), flow_id, id);
+            const auto palette = placement ? placement->class_palette : ClassPalette{};
+            auto edited = edit_class_color(context.owner, palette);
+            if (edited && *edited != palette) { context.scene.set_class_palette(id, std::move(*edited)); }
+        }));
+    }
     if (!tool->inputs.empty()) {
         auto* group = section(panel, QStringLiteral("Inputs"));
         auto* form = new QFormLayout(group);

@@ -28,7 +28,8 @@ struct RoiEvaluation {
 [[nodiscard]] core::Result<RoiEvaluation> evaluate_roi(const core::ImageHandle& image,
     const core::RegionDefinition& region, const core::ToolValueTarget& binding,
     std::span<const core::ResolvedRegionInput> regions = {},
-    std::span<const core::InvocationResourceLease> resources = {});
+    std::span<const core::InvocationResourceLease> resources = {},
+    const std::optional<core::Transform2D>& placement = {});
 
 // Evaluate draft geometry with a separately resolved, self-contained configuration source.
 [[nodiscard]] core::Result<RoiEvaluation> evaluate_roi_preview(const core::ImageHandle& image,

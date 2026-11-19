@@ -7,6 +7,7 @@
 #include <visionpro/core/id_factory.hpp>
 #include <visionpro/core/runtime_id_factory.hpp>
 #include <visionpro/core/schema_id_factory.hpp>
+#include <visionpro/core/shared_data.hpp>
 #include <visionpro/infrastructure/subgraph_package.hpp>
 
 #include <QAction>
@@ -21,6 +22,7 @@
 #include <QLineEdit>
 #include <QProcess>
 #include <QPushButton>
+#include <QSpinBox>
 #include <QStatusBar>
 #include <QTemporaryDir>
 #include <QTest>
@@ -463,6 +465,7 @@ private Q_SLOTS:
     void reproduces_saved_shared_workflows();
     void reproduces_saved_reentrant_workflows();
     void reproduces_saved_calibrated_measurement();
+    void reproduces_saved_workpiece_inspection();
 };
 
 namespace {
@@ -764,6 +767,138 @@ void AcceptanceParityTests::reproduces_saved_calibrated_measurement()
         verify(desktop, 16, 14, 6);
         verify(cli, 16, 14, 6);
         QVERIFY(desktop.at("revision") == cli.at("revision") && desktop.at("session") != cli.at("session"));
+    } catch (const std::exception& failure) { QFAIL(failure.what()); }
+}
+
+namespace {
+std::string inspection_id(int number)
+{
+    return "5ca4f87a-ea1e-4d62-89b0-00000000" + std::to_string(number);
+}
+
+void verify_inspection(const json& run, double last_blue, bool all_passed, const std::string& expected_message)
+{
+    require(run.at("status") == "Succeeded", "Inspection failed: " + run.at("diagnostics").dump());
+    const auto call = [&](int n) -> const json& { return named(run.at("nodes"), "id", inspection_id(n)); };
+    const auto& locate = call(6912);
+    const auto& transform = output(locate, "transform");
+    require(output(locate, "matched") == true && transform.at("from") == "workpiece" && transform.at("to") == "camera"
+        && transform.at("matrix") == json::array({1,0,3,0,1,2,0,0,1})
+        && named(locate.at("resources"), "slot", "template").at("revision") == "1", "Incorrect template placement or revision.");
+    for (int lane = 0; lane < 5; ++lane) {
+        const auto& mean = call(6920 + lane);
+        const auto& trace = named(mean.at("bindings"), "target", "placement").at("sources").at(0);
+        require(check_producer(trace, run, mean).at("id") == locate.at("id") && trace.at("output") == "transform",
+            "All five ROIs must use the same localization invocation.");
+        const auto blue = lane == 4 ? last_blue : 10.0 * (lane + 1);
+        require(output(mean, "blue") == blue && output(mean, "green") == 73 && output(mean, "red") == 151
+            && output(mean, "roi_mask").at("member_count") == 4, "Wrong translated ROI, channel order or precision.");
+        const auto passed = lane < 4 || all_passed;
+        require(output(call(6930 + lane), "passed") == passed && call(6930 + lane).at("judgement") == (passed ? "OK" : "NG"),
+            "Incorrect closed-interval judgement.");
+    }
+    const int format = all_passed ? 6942 : 6944;
+    const auto& send = call(format + 1);
+    const auto& order = run.at("call_order");
+    require(output(call(6940), "passed") == all_passed && call(6941).at("selected_outputs") == json::array({all_passed ? "true" : "false"})
+        && std::ranges::count(order, json(inspection_id(6940))) == 1 && std::ranges::count(order, json(inspection_id(format + 1))) == 1
+        && std::ranges::count(order, json(inspection_id(all_passed ? 6945 : 6943))) == 0, "Expected one join and one delivery.");
+    const auto& payload = named(send.at("bindings"), "target", "payload").at("sources").at(0);
+    require(check_producer(payload, run, send).at("id") == inspection_id(format) && output(call(format), "text") == expected_message
+        && !output(send, "message_id").get<std::string>().empty(), "Queued message did not use the five actual measurements.");
+}
+} // namespace
+
+void AcceptanceParityTests::reproduces_saved_workpiece_inspection()
+{
+    try {
+        QTemporaryDir scratch;
+        QVERIFY(scratch.isValid());
+        const auto sample = fs::path(QString::fromUtf8(VISIONPRO_S69_DIRECTORY).toStdU16String());
+        const auto saved = fs::path(scratch.path().toStdU16String()) / "inspection";
+        const auto registry = take(app::make_tool_registry());
+        const auto document = take(load_solution(sample, registry));
+        const auto inspection = uuid<WorkflowId>(inspection_id(6910));
+        EditorWindow window(document.solution(), registry);
+        window.show();
+        window.open_document(sample);
+        wait_for_file(window);
+        window.transfer_document(saved, SolutionTransfer::SaveAs);
+        wait_for_file(window);
+        const auto compare = [&](double blue, bool passed, const std::string& message) {
+            window.open_document(saved);
+            wait_for_file(window);
+            require(scene(window).select_workflow(inspection), "Missing saved inspection workflow.");
+            const auto desktop = complete_editor_run(window, "runWorkflow");
+            const auto cli = run_cli(saved, inspection);
+            require(desktop.at("revision") == cli.at("revision") && desktop.at("session") != cli.at("session"),
+                "Expected separate sessions running the same saved revision.");
+            verify_inspection(desktop, blue, passed, message);
+            verify_inspection(cli, blue, passed, message);
+            const auto shared = take(window.findChild<RunController*>()->shared_preview());
+            require(shared.has_value(), "No shared-data session for the inspection.");
+            const auto queue = take(shared->data->preview(uuid<QueueId>(inspection_id(6904))));
+            const auto text_id = take(SchemaIdFactory::parse<FieldId>("text"));
+            require(queue.enqueued == 1 && queue.messages.size() == 1 && queue.messages.front().payload.field(text_id)
+                && *queue.messages.front().payload.field(text_id)->as_string() == message
+                && queue.messages.front().correlation.key() == "part-001", "Expected exactly one message for this workpiece.");
+        };
+        compare(50, false, "NG B=10,20,30,40,50");
+
+        QVERIFY(scene(window).reveal_node(uuid<NodeId>(inspection_id(6924))));
+        drive_dialog(window, "editRegion", QStringLiteral("roi"), {[](QDialog& dialog) -> QPushButton* {
+            auto* y = dialog.findChild<QLineEdit*>(QStringLiteral("roiY"));
+            if (!y || dialog.objectName() != QStringLiteral("roiEditor")) { return nullptr; }
+            y->setText(QStringLiteral("10"));
+            return ok_button(dialog);
+        }});
+        window.save_document();
+        wait_for_file(window);
+        compare(40.5, false, "NG B=10,20,30,40,40.5");
+
+        QVERIFY(scene(window).reveal_node(uuid<NodeId>(inspection_id(6934))));
+        drive_dialog(window, "editBinding", QStringLiteral("maximum"), {set_source,
+            [](QDialog& dialog) -> QPushButton* {
+                auto* constant = qobject_cast<QInputDialog*>(&dialog);
+                if (!constant) { return nullptr; }
+                constant->setTextValue(QStringLiteral("40.5"));
+                return ok_button(dialog);
+            }, accept_binding});
+        window.save_document();
+        wait_for_file(window);
+        compare(40.5, true, "OK B=10,20,30,40,40.5");
+
+        const auto classify = uuid<WorkflowId>(inspection_id(6950));
+        QVERIFY(scene(window).select_workflow(classify));
+        const auto desktop = complete_editor_run(window, "runWorkflow");
+        const auto cli = run_cli(saved, classify);
+        const auto& map = output(named(cli.at("nodes"), "id", inspection_id(6952)), "class_map");
+        QVERIFY(map == output(named(desktop.at("nodes"), "id", inspection_id(6952)), "class_map"));
+        QVERIFY(map.at("pixels").at("labels") == json::array({json::array({0,1}),json::array({2,1})}));
+        const auto& classes = map.at("classes");
+        QVERIFY(classes.size() == 3 && named(classes, "id", "0").at("count") == "1"
+            && named(classes, "id", "1").at("count") == "2" && named(classes, "id", "2").at("count") == "1");
+        for (const auto* run : {&cli, &desktop}) {
+            QVERIFY(output(named(run->at("nodes"), "id", inspection_id(6953)), "passed") == true);
+        }
+        QVERIFY(scene(window).reveal_node(uuid<NodeId>(inspection_id(6952))));
+        drive_dialog(window, "editClassColor", {}, {[](QDialog& dialog) -> QPushButton* {
+            auto* id = dialog.findChild<QSpinBox*>(QStringLiteral("classColorId"));
+            auto* rgb = dialog.findChild<QLineEdit*>(QStringLiteral("classColorRgb"));
+            if (!id || !rgb) { return nullptr; }
+            id->setValue(1);
+            rgb->setText(QStringLiteral("#dc247a"));
+            return ok_button(dialog);
+        }});
+        window.save_document();
+        wait_for_file(window);
+        window.open_document(saved);
+        wait_for_file(window);
+        QVERIFY(scene(window).select_workflow(classify));
+        for (const auto& rerun : {complete_editor_run(window, "runWorkflow"), run_cli(saved, classify)}) {
+            QVERIFY(map == output(named(rerun.at("nodes"), "id", inspection_id(6952)), "class_map"));
+            QVERIFY(output(named(rerun.at("nodes"), "id", inspection_id(6953)), "passed") == true);
+        }
     } catch (const std::exception& failure) { QFAIL(failure.what()); }
 }
 

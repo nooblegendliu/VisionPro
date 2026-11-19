@@ -199,7 +199,13 @@ Check queue(Command command, const InvocationContextData& call, ToolCompletion& 
     if (command == Command::Send) {
         const auto workpiece = correlation(call);
         if (const auto* failure = std::get_if<Diagnostic>(&workpiece)) { return *failure; }
-        const auto sent = call.shared_data->send(std::get<QueueId>(targets.front()), input(call, "payload"),
+        auto payload = input(call, "payload");
+        if (payload.as_string()) {
+            auto record = DataValue::record(call.configuration.data().tool.shared_target->type, {{key<FieldId>("text"), payload}});
+            if (const auto* failure = std::get_if<Diagnostic>(&record)) { return *failure; }
+            payload = std::get<DataValue>(std::move(record));
+        }
+        const auto sent = call.shared_data->send(std::get<QueueId>(targets.front()), payload,
             std::get<CorrelationId>(workpiece), origin, stop);
         if (const auto* failure = std::get_if<Diagnostic>(&sent)) { return *failure; }
         const auto& message = std::get<QueueMessage>(sent);
@@ -399,10 +405,10 @@ std::vector<core::ToolRegistration> shared_registrations()
         {key<ControlOutputId>("ignored"), "Ignored"}};
     std::vector result{registration(std::move(reader), Command::Read), registration(std::move(writer), Command::Write),
         registration(std::move(many), Command::ReadMany), registration(std::move(join), Command::Join)};
-    const auto add_queue_tools = [&](std::string schema, const DataType& type) {
+    const auto add_queue_tools = [&](std::string schema, const DataType& type, const DataType& payload_input) {
         auto send = descriptor("visionpro.shared.queue_send_" + schema, "Send " + schema);
         send.shared_target = SharedTargetRequirement{SharedTargetKind::Queue, type, false};
-        send.inputs = {port("payload", type), port("domain", string), port("key", string)};
+        send.inputs = {port("payload", payload_input), port("domain", string), port("key", string)};
         send.outputs = {output("sequence", string), output("message_id", string)};
         auto receive = descriptor("visionpro.shared.queue_receive_" + schema, "Receive " + schema);
         receive.shared_target = SharedTargetRequirement{SharedTargetKind::Queue, type, true};
@@ -412,8 +418,9 @@ std::vector<core::ToolRegistration> shared_registrations()
         result.push_back(registration(std::move(send), Command::Send));
         result.push_back(registration(std::move(receive), Command::Receive));
     };
-    add_queue_tools("fragment", fragment);
-    add_queue_tools("dimensions", dimensions);
+    add_queue_tools("fragment", fragment, fragment);
+    add_queue_tools("dimensions", dimensions, dimensions);
+    add_queue_tools("text", record_type("visionpro.shared.text", {{key<FieldId>("text"), string}}), string);
     return result;
 }
 } // namespace visionpro::tools

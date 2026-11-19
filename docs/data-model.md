@@ -1160,6 +1160,14 @@ Blob 包围框与质心来自选中调用的类型化字段。桌面查看按本
 
 `visionpro.geometry.map_point` 检查像素点的来源坐标系、单位和域，输出目标坐标系的毫米点。`visionpro.measure.distance` 接受同一毫米坐标系的两点，输出欧氏距离；重合点距离为零。[版本 1 标定文件示例](../samples/s6-calibration/resources/affine.json)
 
+### 7.6 工件定位、颜色测量与类别图
+
+`visionpro.locate.template_translation` 读取固定修订的 Template 文件，在同格式的 Mono8 或 BGR8 现场图中查找唯一的归一化相关峰值。`reference_origin` 是模板左上角在工件坐标系中的像素点。命中时，`position` 给出该角在现场图中的位置，`transform` 给出工件到现场图的像素平移。低于 `minimum_score` 或最佳位置不唯一时，节点成功执行，判定 NG，走 `unmatched` 出口，位置和变换均为 `NotProduced`。恒定模板产生 `InvalidImage`。
+
+`visionpro.measure.color_mean` 将本轮定位结果绑定到 `placement`，在现场图中对变换后的 ROI 成员求 B、G、R 三个 Float64 均值，并发布目标坐标下的 `effective_roi` 和 `roi_mask`。空成员产生 `EmptyRegion`。五路共用一次调用的变换，分别通过 `visionpro.judge.float_range` 按闭区间判定。Float64 列表格式化保留小数；文本队列以 `visionpro.shared.text` v1 的 `text: String` 字段保存内容。
+
+`visionpro.image.class_map` 从 Mono8 灰度图按升序阈值分段，达到阈值即进入下一类。结果为 `visionpro.image.class_map.result` v1，包含保留坐标和帧来源的只读标签光栅 `pixels` 与类别表 `classes`。表项含唯一 UInt8 范围内的 `id`、非空 `name` 和 Int64 `count`。Record 构造时核对每个像素的 ID 和每项的实际数量，允许声明计数为零的类别。桌面为每个节点保存稀疏 RGB 配置 `layouts[].nodes[].class_palette`，省略时使用默认色。运行端只读取标签和类别表。[领域接口](../include/visionpro/core/class_map.hpp)
+
 ## 8. 运行与结果（C02、C08）
 
 ### 8.1 状态维度

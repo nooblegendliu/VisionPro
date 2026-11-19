@@ -3,6 +3,7 @@
 #include <visionpro/workflow/binding.hpp>
 
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <span>
 #include <string>
@@ -104,7 +105,17 @@ struct Workflow {
     WorkflowAdmission admission{};
     std::optional<WorkflowTrigger> trigger{};
 };
-struct NodePlacement { core::NodeId node; double x; double y; };
+struct DisplayColor {
+    std::uint8_t red, green, blue;
+    bool operator==(const DisplayColor&) const = default;
+};
+using ClassPalette = std::map<std::uint8_t, DisplayColor>;
+struct NodePlacement {
+    core::NodeId node;
+    double x;
+    double y;
+    ClassPalette class_palette{};
+};
 struct WorkflowLayout { core::WorkflowId workflow; std::vector<NodePlacement> nodes; };
 struct Solution {
     core::SolutionId id;
@@ -122,6 +133,8 @@ struct Solution {
 // Borrowed pointers remain valid only while their editable owner is unchanged/alive.
 [[nodiscard]] const Workflow* find_workflow(const Solution& solution, const core::WorkflowId& id) noexcept;
 [[nodiscard]] const Node* find_node(const Workflow& workflow, const core::NodeId& id) noexcept;
+[[nodiscard]] const NodePlacement* find_placement(const Solution& solution, const core::WorkflowId& workflow,
+    const core::NodeId& node) noexcept;
 [[nodiscard]] core::Result<std::vector<core::NodeId>> children(const Workflow& workflow,
     std::optional<core::NodeId> parent = std::nullopt);
 [[nodiscard]] core::Result<std::vector<core::NodeId>> descendants(const Workflow& workflow, const core::NodeId& group);

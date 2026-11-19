@@ -219,21 +219,37 @@ ImageView::ImageView(QWidget* parent)
     drawing_item_->hide();
 }
 
-core::Result<std::monostate> ImageView::set_image(const core::ImageHandle& image)
+core::Result<std::monostate> ImageView::set_image(const core::ImageHandle& image, const QList<QRgb>& palette)
 {
-    auto displayed = to_display_image(image);
+    if (!palette.empty() && (image.format() != mono8 || palette.size() != 256)) {
+        return error(ErrorCode::InvalidImage, "Class display requires Mono8 labels and a 256-color palette.");
+    }
+    auto displayed = palette.empty() ? to_display_image(image) : copy_rows(image, QImage::Format_Indexed8);
     if (const auto* invalid = std::get_if<Diagnostic>(&displayed)) { return *invalid; }
-    auto pixmap = QPixmap::fromImage(std::get<QImage>(std::move(displayed)));
+    auto pixels = std::get<QImage>(std::move(displayed));
+    if (!palette.empty()) { pixels.setColorTable(palette); }
+    auto pixmap = palette.empty() ? QPixmap::fromImage(std::move(pixels)) : QPixmap::fromImage(pixels);
     if (pixmap.isNull()) {
         return error(ErrorCode::InvalidImage, "Qt could not create the display pixmap.");
     }
     image_ = image;
+    labels_ = palette.empty() ? QImage{} : std::move(pixels);
     image_item_->setPixmap(pixmap);
     clear_overlays();
     finish_gesture();
     setSceneRect(image_bounds());
     fit_image();
     emit pixel_changed({});
+    return std::monostate{};
+}
+
+core::Result<std::monostate> ImageView::recolor_labels(const QList<QRgb>& palette)
+{
+    if (labels_.isNull() || palette.size() != 256) { return error(ErrorCode::InvalidImage, "No class raster is displayed."); }
+    labels_.setColorTable(palette);
+    const auto pixmap = QPixmap::fromImage(labels_);
+    if (pixmap.isNull()) { return error(ErrorCode::InvalidImage, "Qt could not recolor the class raster."); }
+    image_item_->setPixmap(pixmap);
     return std::monostate{};
 }
 
@@ -307,6 +323,7 @@ core::Result<std::monostate> ImageView::set_overlays(
 void ImageView::clear_image()
 {
     image_.reset();
+    labels_ = {};
     image_item_->setPixmap({});
     clear_overlays();
     finish_gesture();
@@ -507,7 +524,7 @@ void ImageView::update_pixel(const QPoint& viewport_position)
     }
     const auto& value = pixel->samples;
     description += pixel->order == ChannelOrder::Mono
-        ? tr(" · Gray %1").arg(static_cast<int>(value[0]))
+        ? (labels_.isNull() ? tr(" · Gray %1") : tr(" · Class ID %1")).arg(static_cast<int>(value[0]))
         : tr(" · B %1, G %2, R %3").arg(static_cast<int>(value[0])).arg(static_cast<int>(value[1])).arg(static_cast<int>(value[2]));
     emit pixel_changed(description);
 }

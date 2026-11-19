@@ -293,7 +293,8 @@ void transfer_packages()
     auto draft = source.solution();
     const auto workflow = draft.workflows.front().id;
     const auto node = draft.workflows.front().nodes.front().id;
-    draft.layouts = {{workflow, {{node, 23, -17}}}};
+    const ClassPalette palette{{17, {15, 160, 250}}};
+    draft.layouts = {{workflow, {{node, 23, -17, palette}}}};
     draft.name = "已编辑";
     draft.resources.push_back({id<ResourceId>('3'), "Named external", ResourceKind::Binary, ExternalFileResource{
         {PathBase::NamedRoot, utf8(fixture.external.filename()), root_id}, ResourceReadPolicy::PerInvocation, {}, {}}});
@@ -324,7 +325,8 @@ void transfer_packages()
         && restored.workflows.front().id == workflow && restored.workflows.front().nodes.front().id == node,
         "Save As retains stable identities and persists the draft without incrementing its old revision.");
     check(restored.layouts.front().workflow == workflow && restored.layouts.front().nodes.front().node == node
-        && restored.layouts.front().nodes.front().x == 23 && restored.layouts.front().nodes.front().y == -17,
+        && restored.layouts.front().nodes.front().x == 23 && restored.layouts.front().nodes.front().y == -17
+        && restored.layouts.front().nodes.front().class_palette == palette,
         "Layout round-trips with the same workflow and node identities.");
     const auto relative_to = [&](const ResourcePath& path) { return destination / fs::path(std::u8string(path.path.begin(), path.path.end())); };
     const auto& copied = std::get<ManagedResource>(restored.resources[0].location);
@@ -364,7 +366,8 @@ void transfer_packages()
         && clone.solution().resources.front().id != draft.resources.front().id
         && cloned_node.resources.front().resource.id == clone.solution().resources.front().id,
         "Independent copies allocate identities and remap entries plus resource-slot references.");
-    check(clone.solution().layouts.front().workflow == cloned_flow.id && clone.solution().layouts.front().nodes.front().node == cloned_node.id,
+    check(clone.solution().layouts.front().workflow == cloned_flow.id && clone.solution().layouts.front().nodes.front().node == cloned_node.id
+        && clone.solution().layouts.front().nodes.front().class_palette == palette,
         "Independent copies remap layout identities with the domain objects.");
     auto copied_execution = take(open_solution_execution(clone, fixture.tools));
     output_is(start(copied_execution, cloned_flow.id), 'a');
@@ -736,7 +739,8 @@ void reusable_packages()
     flow.nodes.push_back({group, "Read group", GroupConfiguration{ports, {child}, {{port, {flow.id, child, port, {}}}}, {}}});
     flow.entries = {group};
     flow.containment = {{group, child}};
-    draft.layouts = {{flow.id, {{child, 14, 25}}}};
+    const ClassPalette palette{{255, {128, 0, 255}}};
+    draft.layouts = {{flow.id, {{child, 14, 25, palette}}}};
     const auto directory = fixture.scratch.path / "group-export";
     take(export_subgraph_package(directory, draft, flow.id, group, tools, &source));
     rejected(export_subgraph_package(directory, draft, flow.id, group, tools, &source), ErrorCode::SolutionAlreadyExists,
@@ -790,7 +794,7 @@ void reusable_packages()
     const auto instance_child = instance.entries.at(0);
     check(instance.interface.id == ports.id && instance.interface.version == 3 && instance_child != child
         && instance.outputs.front().source.node == instance_child && instance.outputs.front().source.workflow == target
-        && final.layouts.front().nodes.front().node == instance_child,
+        && final.layouts.front().nodes.front().node == instance_child && final.layouts.front().nodes.front().class_palette == palette,
         "Public Schema/version, body, exported result and layout rebase on the new owning workflow.");
     const auto& bindings = find_node(imported_flow, instance_child)->bindings;
     const auto& outer = std::get<ScopedInputReference>(bindings[0].sources.front());

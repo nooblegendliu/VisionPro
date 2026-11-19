@@ -149,14 +149,14 @@ Result<const SourceTrace*> input_source(const RunNodeProgress& node, const Workf
     return issue(ErrorCode::InputUnavailable, "The selected image has no available source.");
 }
 
-Result<ImageHandle> blob_image(const RunHandle& run, InvocationKey call)
+Result<ImageHandle> traced_input_image(const RunHandle& run, InvocationKey call, std::string_view port)
 {
     const auto inspected = run.inspect();
     if (const auto* failure = std::get_if<Diagnostic>(&inspected)) { return *failure; }
     const auto& progress = std::get<RunProgress>(inspected);
     const auto* flow = find_workflow(run.request().snapshot().solution(), run.identity().workflow);
     if (!flow) { return issue(ErrorCode::UnknownTarget, "The image workflow is absent from the snapshot."); }
-    auto input = std::get<InputId>(SchemaIdFactory::parse<InputId>("binary"));
+    auto input = std::get<InputId>(SchemaIdFactory::parse<InputId>(port));
     FixedSelector path;
     for (std::size_t depth = 0; depth <= progress.groups.size() + progress.iterations.size(); ++depth) {
         const auto node = std::ranges::find(progress.nodes, std::optional{call}, &RunNodeProgress::invocation);
@@ -181,7 +181,7 @@ Result<ImageHandle> blob_image(const RunHandle& run, InvocationKey call)
             return fixed_image(run, input, fixed->origin, path);
         }
         const auto* capture = std::get_if<PublicInputTrace>(&origin);
-        if (!capture) { return issue(ErrorCode::InputUnavailable, "The recorded Blob source cannot provide a display image."); }
+        if (!capture) { return issue(ErrorCode::InputUnavailable, "The recorded input source cannot provide a display image."); }
         if (capture->run != run.identity() || capture->reference.workflow != flow->id || capture->scope != call.scope) {
             return issue(ErrorCode::ResultIdentityMismatch, "The recorded public image is outside this invocation's scope.");
         }
@@ -203,28 +203,30 @@ const OutputSlot* display_output(const NodeResult& result)
     const auto& outputs = result.data().outputs;
     const auto found = std::ranges::find_if(outputs, [](const OutputSlot& output) {
         const auto* value = std::get_if<DataValue>(&output.content);
-        return value && (value->as_image() || value->as_raster_mask());
+        return value && (value->as_image() || value->as_raster_mask() || value->type() == class_map_type());
     });
     return found != outputs.end() ? &*found : nullptr;
 }
 } // namespace
 
 Result<std::monostate> show_run_image(ImagePanel& panel, const RunHandle& run, const InvocationKey& invocation,
-    const std::optional<OutputId>& output)
+    const std::optional<OutputId>& output, const Solution* display_config)
 {
     const auto queried = run.lookup(invocation);
     if (const auto* failure = std::get_if<Diagnostic>(&queried)) { return *failure; }
     const auto& selected = std::get<std::optional<NodeResult>>(queried);
     if (!selected) { return issue(ErrorCode::InputUnavailable, "The selected invocation has no published result."); }
     const auto* tool = run_tool(run, invocation.node);
-    if (version_one_tool(tool, "visionpro.image.blob")) {
+    const bool blob = version_one_tool(tool, "visionpro.image.blob");
+    if (blob || version_one_tool(tool, "visionpro.measure.color_mean")) {
         if (output) {
             const auto value = available_output(selected->output(*output));
             if (const auto* failure = std::get_if<Diagnostic>(&value)) { return *failure; }
         }
-        const auto input = blob_image(run, invocation);
+        const auto input = traced_input_image(run, invocation, blob ? "binary" : "image");
         if (const auto* failure = std::get_if<Diagnostic>(&input)) { return *failure; }
-        return panel.present_blob(std::get<ImageHandle>(input), *selected);
+        return blob ? panel.present_blob(std::get<ImageHandle>(input), *selected)
+            : panel.present_measurement(std::get<ImageHandle>(input), *selected);
     }
 
     const auto* slot = output ? selected->output(*output) : display_output(*selected);
@@ -232,6 +234,14 @@ Result<std::monostate> show_run_image(ImagePanel& panel, const RunHandle& run, c
     const auto value = available_output(slot);
     if (const auto* failure = std::get_if<Diagnostic>(&value)) { return *failure; }
     const auto& data = std::get<DataValue>(value);
+    if (data.type() == class_map_type()) {
+        auto map = read_class_map(data);
+        if (const auto* failure = std::get_if<Diagnostic>(&map)) { return *failure; }
+        const auto& layout = display_config ? *display_config : run.request().snapshot().solution();
+        const auto* placement = find_placement(layout, run.identity().workflow, invocation.node);
+        return panel.present_class_map(std::get<ClassMap>(map), run.identity().workflow, invocation.node,
+            placement ? placement->class_palette : ClassPalette{});
+    }
     if (data.as_image()) {
         const bool threshold = version_one_tool(tool, "visionpro.image.threshold") && slot->id.text() == "binary";
         return panel.present_result(*selected, slot->id, threshold ? &*selected : nullptr, nullptr);

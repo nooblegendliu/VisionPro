@@ -2476,3 +2476,28 @@ $guiBuild = 'out/build/s67-gui'
 & "$guiBuild/source/app/visionpro_cli.exe" run --solution samples/s6-calibration/solution.json --workflow 5ca4f87a-ea1e-4d62-89b0-000000006810
 ctest --test-dir $guiBuild -C Release -R '^tools\.(planar_calibration|vision_contracts|roi|blob)$|^visionpro_(image_view|visual|calibration_parity)_tests$' --output-on-failure --no-tests=error
 ```
+
+### 10.9 S6.9 工件定位、五路测量与类别图
+
+2026-11-19，Windows x64 Release 全量 CTest 通过。启用 Qt 与 OpenCV 时为 **158/158** 项，关闭两者时为 **123/123** 项。桌面验收使用 Qt Widgets 的 offscreen 平台，CLI 验收使用独立进程和固定图像。在临时方案中换入无法匹配的非恒定模板时，只有读图和定位两个节点执行；定位返回 NG，其余测量和投递均未启动。
+
+使用启用 OpenCV 的 Release 构建。桌面打开[工件检测方案](../samples/s6-inspection/solution.json)，另存至新目录并重开。选择 **Locate and inspect five regions → Run Workflow**。在运行结果中查看 **Locate workpiece** 的模板资源、平移矩阵及各 **Measure lane** 的输入来源，选择测量调用可在现场图上查看实际 ROI 掩膜。
+
+| 固定输入或桌面编辑 | 验收值 |
+|---|---|
+| 模板参考左上角 (1,1) px，现场图中在 (4,3) px | 定位输出从 `workpiece` 到 `camera` 的平移 (+3,+2) px，五个 `placement` 来自本轮同一次定位，模板修订 1 |
+| 五个 2×2 ROI，闭区间 [10,40] | B 为 10、20、30、40、50，G 均为 73，R 均为 151。前四路 OK，第五路 NG，逻辑与为 false，队列对 `part-001` 只收到一条 `NG B=10,20,30,40,50` |
+| 将 **Measure lane 5 → Edit ROI…** 的 Y 改为 10，保存重开 | 第五路包含两个 40 和两个 41，均值 40.5，判断 NG。再将 **Judge lane 5** 的 `maximum` 改为 40.5 后，五路全部 OK，队列收到一条 `OK B=10,20,30,40,40.5` |
+| 切换 **Classify a 2 by 2 image → Run Workflow** | 原始标签为 `[[0,1],[2,1]]`，ID 0、1、2 的数量为 1、2、1，对类别 2 数量的判断为 OK |
+
+选择 **Classify intensity → Properties → Display → Edit class color…** 可按类别 ID 改色。保存重载后，桌面按新色显示，独立 CLI 与桌面仍给出相同的原始标签、类别计数和判断。类别表遗漏实际出现的 ID 2 会产生 `MissingField`。CLI 在标签数不超过 256 时还输出逐行的 `pixels.labels`，可直接核对像素位置。
+
+在仓库根目录执行下列命令，运行前将 OpenCV 的 Release DLL 目录加入 `PATH`。将 `$solution` 替换为桌面另存的清单路径即可复现编辑后的结果。
+
+```powershell
+$guiBuild = 'out/build/s67-gui'
+$solution = 'samples/s6-inspection/solution.json'
+& "$guiBuild/source/app/visionpro_cli.exe" run --solution $solution --workflow 5ca4f87a-ea1e-4d62-89b0-000000006910
+& "$guiBuild/source/app/visionpro_cli.exe" run --solution $solution --workflow 5ca4f87a-ea1e-4d62-89b0-000000006950
+ctest --test-dir $guiBuild -C Release -R '^tools\.(template_and_color|class_map|judgement)$|^app\.cli_inspection$|^visionpro_(visual|inspection_parity)_tests$' --output-on-failure --no-tests=error
+```

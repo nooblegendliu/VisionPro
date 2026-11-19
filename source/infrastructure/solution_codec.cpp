@@ -584,13 +584,39 @@ DataQueueDefinition decode_queue(const Reader& reader)
 
 Json encode_placement(const NodePlacement& placement)
 {
-    return {{"node", write_id(placement.node)}, {"x", placement.x}, {"y", placement.y}};
+    Json result{{"node", write_id(placement.node)}, {"x", placement.x}, {"y", placement.y}};
+    if (!placement.class_palette.empty()) {
+        auto entries = Json::array();
+        for (const auto& [id, rgb] : placement.class_palette) {
+            entries.push_back({{"id", id}, {"rgb", Json::array({rgb.red, rgb.green, rgb.blue})}});
+        }
+        result["class_palette"] = std::move(entries);
+    }
+    return result;
 }
 
 NodePlacement decode_placement(const Reader& reader)
 {
-    reader.object({"node", "x", "y"});
-    return {read_id<NodeId>(reader.field("node")), reader.field("x").number(), reader.field("y").number()};
+    reader.object({"node", "x", "y", "class_palette"});
+    NodePlacement placement{read_id<NodeId>(reader.field("node")), reader.field("x").number(), reader.field("y").number()};
+    if (reader.contains("class_palette")) {
+        const auto entries = reader.field("class_palette");
+        const auto byte = [](const Reader& field) {
+            const auto value = field.u32();
+            if (value > 255) { field.fail(ErrorCode::InvalidSolutionManifest, "Expected an integer from 0 to 255."); }
+            return static_cast<std::uint8_t>(value);
+        };
+        for (std::size_t i = 0; i < entries.size(); ++i) {
+            const auto entry = entries.at(i);
+            entry.object({"id", "rgb"});
+            const auto rgb = entry.field("rgb");
+            if (rgb.size() != 3) { rgb.fail(ErrorCode::InvalidSolutionManifest, "A display color needs three RGB components."); }
+            if (!placement.class_palette.emplace(byte(entry.field("id")), DisplayColor{byte(rgb.at(0)), byte(rgb.at(1)), byte(rgb.at(2))}).second) {
+                entry.fail(ErrorCode::InvalidSolutionManifest, "A class ID occurs twice in the display palette.");
+            }
+        }
+    }
+    return placement;
 }
 
 Json encode_layout(const WorkflowLayout& layout)
