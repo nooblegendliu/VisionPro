@@ -467,6 +467,15 @@ Check Validator::add_control_link(const ControlLink& link)
 Check Validator::workflow(const Workflow& flow)
 {
     begin_workflow(flow);
+    if (flow.trigger && flow.trigger->camera) {
+        const auto& camera = *flow.trigger->camera;
+        auto where = location();
+        where.resource = camera.device;
+        for (auto check : {validate_resource_reference({camera.device, ResourceKind::Device, {}}, solution_.resources),
+                register_semantics({MeasurementUnit::Pixel, camera.coordinate_frame})}) {
+            if (failed(check)) { return contextualize(check, where); }
+        }
+    }
     add_scope({});
     if (auto checked = public_interface(flow.interface, location()); failed(checked)) { return checked; }
     for (const auto& node : flow.nodes) {

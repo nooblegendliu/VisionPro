@@ -10,6 +10,13 @@ if(MINGW)
     target_link_options(visionpro_cli_tests PRIVATE -municode)
 endif()
 add_dependencies(visionpro_cli_tests visionpro_cli)
+target_compile_definitions(visionpro_cli_tests PRIVATE VISIONPRO_CAMERA_DIRECTORY="${PROJECT_SOURCE_DIR}/samples/s6-camera")
+add_test(NAME app.cli_camera COMMAND visionpro_cli_tests $<TARGET_FILE:visionpro_cli> camera)
+add_executable(visionpro_camera_stream_tests camera_stream_tests.cpp)
+target_compile_definitions(visionpro_camera_stream_tests PRIVATE VISIONPRO_CAMERA_DIRECTORY="${PROJECT_SOURCE_DIR}/samples/s6-camera")
+target_link_libraries(visionpro_camera_stream_tests PRIVATE visionpro_app_tools visionpro_infrastructure visionpro_build_options)
+add_test(NAME app.camera_stream_lifecycle COMMAND visionpro_camera_stream_tests)
+set_tests_properties(app.cli_camera app.camera_stream_lifecycle PROPERTIES TIMEOUT 45)
 
 add_executable(visionpro_shared_package_tests shared_package_tests.cpp)
 target_compile_definitions(visionpro_shared_package_tests PRIVATE VISIONPRO_SHARED_DIRECTORY="${PROJECT_SOURCE_DIR}/samples/s6-shared")
@@ -52,7 +59,7 @@ if(VISIONPRO_WITH_OPENCV)
     set_tests_properties(app.vision_image_summary PROPERTIES TIMEOUT 30)
     set_tests_properties(app.cli_roundtrip app.cli_diagnostics app.cli_external_roundtrip app.cli_external_diagnostics app.cli_output_failures app.cli_calculations
         app.vision_image_summary app.structured_loops app.shared_package app.cli_shared_workflows app.cli_trigger_replay app.cli_error_recovery
-        app.vision_roundtrip app.vision_diagnostics app.cli_inspection PROPERTIES
+        app.vision_roundtrip app.vision_diagnostics app.cli_inspection app.cli_camera app.camera_stream_lifecycle PROPERTIES
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:opencv_core>"
     )
 endif()

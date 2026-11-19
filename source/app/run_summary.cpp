@@ -662,6 +662,12 @@ json node_json(const RunNodeProgress& node, const std::optional<NodeResult>& res
         trace["selected_outputs"] = array_json(data.selected_control_outputs, id_text<ControlOutputId>);
         trace["outputs"] = array_json(data.outputs, output_json);
         trace["diagnostics"] = diagnostics_json(data.diagnostics);
+        for (const auto& timing : data.timings) {
+            if (timing.source == TimingSource::AdapterReported && timing.scope == TimingScope::ToolModule) {
+                trace["adapter_duration"] = reported_duration(timing.value, timing.unit);
+                trace["host_elapsed_ns"] = data.elapsed ? json(std::to_string(data.elapsed->count())) : json(nullptr);
+            }
+        }
     }
     return trace;
 }
@@ -669,6 +675,19 @@ json node_json(const RunNodeProgress& node, const std::optional<NodeResult>& res
 
 nlohmann::json diagnostics_json(std::span<const core::Diagnostic> diagnostics)
 { return array_json(diagnostics, diagnostic_json); }
+
+nlohmann::json reported_duration(std::optional<double> duration, core::TimingUnit unit)
+{
+    const char* label = "unknown";
+    switch (unit) {
+    case core::TimingUnit::Nanoseconds: label = "ns"; break;
+    case core::TimingUnit::Microseconds: label = "us"; break;
+    case core::TimingUnit::Milliseconds: label = "ms"; break;
+    case core::TimingUnit::Seconds: label = "s"; break;
+    case core::TimingUnit::Unknown: break;
+    }
+    return {{"value", duration ? json(*duration) : json(nullptr)}, {"unit", label}};
+}
 
 core::Result<nlohmann::json> summarize_run(const workflow::RunHandle& handle,
     const workflow::RunProgress& progress, std::span<const core::Diagnostic> load_diagnostics)

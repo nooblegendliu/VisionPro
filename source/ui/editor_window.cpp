@@ -401,6 +401,7 @@ void EditorWindow::refresh_actions()
     const auto selected_run = run_panel_->selected_run();
     cancel_run_->setEnabled(!close_confirmed_ && selected_run && run_controller_->can_cancel(*selected_run));
     arm_trigger_->setEnabled(editable && flow && run_controller_->can_arm_trigger(*flow));
+    run_panel_->set_camera_status(flow ? run_controller_->camera_status(flow->id) : QString{});
     send_frame_->setEnabled(available && flow && run_controller_->can_send_frame(flow->id));
     const bool armed = available && flow && run_controller_->can_stop_trigger(flow->id);
     drain_trigger_->setEnabled(armed);
@@ -596,7 +597,7 @@ void EditorWindow::render_diagnostics()
     }
     if (run_error_) {
         const auto location = diagnostic_location(draft(), run_error_->location);
-        const auto message = QStringLiteral("Run: %1").arg(QString::fromStdString(run_error_->message));
+        const auto message = QStringLiteral("Run: %1").arg(run_diagnostic_text(*run_error_));
         auto* item = new QListWidgetItem(location.isEmpty() ? message : location + QStringLiteral("  —  ") + message, diagnostics_);
         item->setData(Qt::UserRole, -1);
         item->setData(Qt::UserRole + 1, true);

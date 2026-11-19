@@ -9,6 +9,7 @@
 #include <visionpro/core/schema_id_factory.hpp>
 #include <visionpro/core/shared_data.hpp>
 #include <visionpro/infrastructure/subgraph_package.hpp>
+#include <visionpro/infrastructure/camera.hpp>
 
 #include <QAction>
 #include <QApplication>
@@ -20,8 +21,10 @@
 #include <QGraphicsView>
 #include <QInputDialog>
 #include <QLineEdit>
+#include <QLabel>
 #include <QProcess>
 #include <QPushButton>
+#include <QScopeGuard>
 #include <QSpinBox>
 #include <QStatusBar>
 #include <QTemporaryDir>
@@ -293,7 +296,8 @@ json normalize(json report)
     return report;
 }
 
-json run_cli(const fs::path& package, const WorkflowId& workflow, const QStringList& extra = {})
+json run_cli(const fs::path& package, const WorkflowId& workflow, const QStringList& extra = {},
+    const QString& command = QStringLiteral("run"))
 {
     QTemporaryDir io(path_text(package.parent_path() / "cli-XXXXXX"));
     require(io.isValid(), "Could not create a separate CLI working directory.");
@@ -304,7 +308,7 @@ json run_cli(const fs::path& package, const WorkflowId& workflow, const QStringL
     // Read the complete report after exit, including reports larger than a pipe buffer.
     cli.setStandardOutputFile(result_path);
     cli.setStandardErrorFile(diagnostic_path);
-    QStringList args{QStringLiteral("run"), QStringLiteral("--solution"), path_text(package / solution_manifest_name),
+    QStringList args{command, QStringLiteral("--solution"), path_text(package / solution_manifest_name),
         QStringLiteral("--workflow"), QString::fromStdString(workflow.to_string())};
     args.append(extra);
     cli.start(QString::fromUtf8(VISIONPRO_TEST_CLI), args);
@@ -466,6 +470,8 @@ private Q_SLOTS:
     void reproduces_saved_reentrant_workflows();
     void reproduces_saved_calibrated_measurement();
     void reproduces_saved_workpiece_inspection();
+    void configures_and_acquires_saved_camera();
+    void configures_and_arms_saved_camera();
 };
 
 namespace {
@@ -701,6 +707,188 @@ void AcceptanceParityTests::reproduces_saved_reentrant_workflows()
 {
     try { compare_saved_workflows(VISIONPRO_S65_DIRECTORY); }
     catch (const std::exception& failure) { QFAIL(failure.what()); }
+}
+
+namespace {
+void check_camera_frame(const json& run, NodeId node_id, ResourceId source, std::int64_t frame)
+{
+    require(run.at("quiescent") == true && run.at("status") == "Succeeded", "Camera run failed: " + run.at("diagnostics").dump());
+    const auto& node = named(run.at("nodes"), "id", node_id.to_string());
+    const auto& image = output(node, "image");
+    const int expected = frame % 2 == 1 ? 7 : 31;
+    require(image.at("frame").at("source") == source.to_string() && image.at("frame").at("sequence") == std::to_string(frame)
+        && image.at("width") == 2 && image.at("height") == 2 && image.at("current_frame") == "camera"
+        && image.at("samples").at("minimum") == expected && image.at("samples").at("maximum") == expected
+        && !image.at("captured_at_unix_ns").is_null() && output(node, "frame_number") == std::to_string(frame),
+        "Frame identity, time or 2x2 pixel values did not match the simulated camera: " + image.dump());
+}
+}
+
+void AcceptanceParityTests::configures_and_acquires_saved_camera()
+{
+    try {
+        QTemporaryDir scratch;
+        QVERIFY(scratch.isValid());
+        const auto sample = fs::path(VISIONPRO_S610_DIRECTORY);
+        const auto saved = fs::path(scratch.path().toStdU16String()) / "camera acquisition";
+        const auto registry = take(app::make_tool_registry());
+        const auto document = take(load_solution(sample, registry));
+        const auto& flow = document.solution().workflows.front();
+        const auto node_id = flow.entries.front();
+        EditorWindow window(document.solution(), registry);
+        window.show();
+        window.open_document(sample);
+        wait_for_file(window);
+        QVERIFY(scene(window).select_workflow(flow.id));
+        QVERIFY(scene(window).reveal_node(node_id));
+        drive_dialog(window, "newCameraDevice", {}, {[](QDialog& dialog) -> QPushButton* {
+            auto* name = dialog.findChild<QLineEdit*>(QStringLiteral("cameraDeviceName"));
+            auto* adapter = dialog.findChild<QComboBox*>(QStringLiteral("cameraAdapter"));
+            auto* serial = dialog.findChild<QLineEdit*>(QStringLiteral("cameraSerial"));
+            if (!name || !adapter || !serial || adapter->findData(QStringLiteral("visionpro.camera.mvs")) < 0) { return nullptr; }
+            name->setText(QStringLiteral("桌面采集相机"));
+            serial->setText(QStringLiteral("SIM-001"));
+            return ok_button(dialog);
+        }});
+        const auto resource = find_node(*find_workflow(window.draft(), flow.id), node_id)->resources.front().resource.id;
+        QVERIFY(resource != document.solution().resources.front().id);
+        drive_dialog(window, "editBinding", QStringLiteral("timeout_ms"), {set_source, [](QDialog& dialog) -> QPushButton* {
+            auto* value = qobject_cast<QInputDialog*>(&dialog);
+            if (!value) { return nullptr; }
+            value->setTextValue(QStringLiteral("1200"));
+            return ok_button(dialog);
+        }, accept_binding});
+        drive_dialog(window, "editBinding", QStringLiteral("mode"), {set_source, [](QDialog& dialog) -> QPushButton* {
+            auto* choice = dialog.findChild<QComboBox*>(QStringLiteral("choice"));
+            if (!choice) { return nullptr; }
+            const auto index = choice->findText(QStringLiteral("Software"), Qt::MatchContains);
+            if (index < 0) { return nullptr; }
+            choice->setCurrentIndex(index);
+            return ok_button(dialog);
+        }, accept_binding});
+        window.transfer_document(saved, SolutionTransfer::SaveAs);
+        wait_for_file(window);
+        window.open_document(saved);
+        wait_for_file(window);
+        const auto& resources = window.draft().resources;
+        const auto selected = std::ranges::find(resources, resource, &ResourceDefinition::id);
+        QVERIFY(selected != resources.end());
+        QCOMPARE(QString::fromStdString(selected->name), QStringLiteral("桌面采集相机"));
+        QCOMPARE(take(camera_serial(*selected)), "SIM-001");
+        const auto* saved_node = find_node(*find_workflow(window.draft(), flow.id), node_id);
+        QCOMPARE(saved_node->resources.front().resource.id, resource);
+        for (const auto& [parameter, expected] : {std::pair{"mode", "Software"}, {"timeout_ms", "1200"}}) {
+            const auto target = BindingTarget{take(SchemaIdFactory::parse<ParameterId>(parameter))};
+            const auto binding = std::ranges::find(saved_node->bindings, target, &Binding::target);
+            QVERIFY(binding != saved_node->bindings.end());
+            const auto& value = std::get<ConfigValue>(binding->sources.front());
+            QCOMPARE(value.as_enum() ? std::string(value.as_enum()->text()) : std::to_string(*value.as_int64()), expected);
+        }
+        QVERIFY(scene(window).select_workflow(flow.id));
+        const auto desktop = complete_editor_run(window, "runWorkflow");
+        const auto cli = run_cli(saved, flow.id);
+        for (const auto* report : {&desktop, &cli}) {
+            check_camera_frame(*report, node_id, resource, 1);
+            QVERIFY(output(named(report->at("nodes"), "id", node_id.to_string()), "serial") == "SIM-001");
+        }
+    } catch (const std::exception& failure) { QFAIL(failure.what()); }
+}
+
+void AcceptanceParityTests::configures_and_arms_saved_camera()
+{
+    try {
+        QTemporaryDir scratch;
+        QVERIFY(scratch.isValid());
+        const auto sample = fs::path(VISIONPRO_S610_DIRECTORY);
+        const auto saved = fs::path(scratch.path().toStdU16String()) / "trigger camera";
+        const auto registry = take(app::make_tool_registry());
+        const auto document = take(load_solution(sample, registry));
+        const auto& flow = document.solution().workflows.at(1);
+        EditorWindow window(document.solution(), registry);
+        window.show();
+        window.open_document(sample);
+        wait_for_file(window);
+        QVERIFY(scene(window).select_workflow(flow.id));
+        QTRY_VERIFY(inspector_button(window, "editWorkflowTrigger", {})
+            && inspector_button(window, "editWorkflowTrigger", {})->text() == QString::fromUtf8(flow.trigger->source.text()));
+        drive_dialog(window, "editWorkflowTrigger", {}, {[](QDialog& dialog) -> QPushButton* {
+            auto* source = dialog.findChild<QLineEdit*>(QStringLiteral("triggerSource"));
+            auto* input = dialog.findChild<QComboBox*>(QStringLiteral("triggerCameraImage"));
+            auto* frame = dialog.findChild<QComboBox*>(QStringLiteral("triggerCameraCoordinate"));
+            auto* mode = dialog.findChild<QComboBox*>(QStringLiteral("triggerCameraMode"));
+            auto* timeout = dialog.findChild<QSpinBox*>(QStringLiteral("triggerCameraTimeout"));
+            if (!source || !input || !frame || !mode || !timeout || frame->currentText() != QStringLiteral("camera")
+                || mode->currentText() != QStringLiteral("Hardware") || !input->currentText().contains(QStringLiteral("image"))) { return nullptr; }
+            source->setText(QStringLiteral("desktop.camera"));
+            timeout->setValue(3000);
+            return dialog.findChild<QPushButton*>(QStringLiteral("newTriggerCameraDevice"));
+        }, [](QDialog& dialog) -> QPushButton* {
+            auto* name = dialog.findChild<QLineEdit*>(QStringLiteral("cameraDeviceName"));
+            if (!name) { return nullptr; }
+            name->setText(QStringLiteral("桌面触发相机"));
+            return ok_button(dialog);
+        }, [](QDialog& dialog) -> QPushButton* {
+            auto* camera = dialog.findChild<QComboBox*>(QStringLiteral("triggerCameraDevice"));
+            if (!camera || !camera->currentText().contains(QStringLiteral("桌面触发相机"))) { return nullptr; }
+            return ok_button(dialog);
+        }});
+        window.transfer_document(saved, SolutionTransfer::SaveAs);
+        wait_for_file(window);
+        window.open_document(saved);
+        wait_for_file(window);
+        QVERIFY(scene(window).select_workflow(flow.id));
+        const auto* saved_flow = find_workflow(window.draft(), flow.id);
+        QVERIFY(saved_flow && saved_flow->trigger && saved_flow->trigger->camera);
+        const auto device = saved_flow->trigger->camera->device;
+        QVERIFY(device != document.solution().resources.front().id);
+        QCOMPARE(saved_flow->trigger->source.text(), "desktop.camera");
+        QCOMPARE(saved_flow->trigger->camera->timeout_ms, 3000u);
+        const auto camera = simulated_camera();
+        camera->set_periodic_hardware_pulses(false);
+        const auto restore = qScopeGuard([&] { camera->set_connected(true); camera->set_periodic_hardware_pulses(true); });
+        auto& controller = *window.findChild<RunController*>();
+        auto* status = window.findChild<QLabel*>(QStringLiteral("cameraTriggerStatus"));
+        QVERIFY(status);
+        action(window, "armWorkflowTrigger").trigger();
+        QTRY_VERIFY(status->isVisible() && status->text().startsWith(QStringLiteral("Camera armed")));
+        QVERIFY(!window.findChild<QAction*>(QStringLiteral("sendExternalFrame"))->isEnabled());
+        for (std::size_t i = 1; i <= 2; ++i) {
+            QVERIFY(camera->wait_until_armed(std::chrono::steady_clock::now() + std::chrono::seconds(2)));
+            camera->pulse();
+            QTRY_VERIFY(controller.runs().size() == i && controller.can_start());
+        }
+        QTRY_VERIFY(status->text().contains(QStringLiteral("received 2 · accepted 2 · rejected 0 · missing 0 · duplicates 0")));
+        camera->set_connected(false);
+        QTRY_VERIFY(status->text().startsWith(QStringLiteral("Camera stopped · fault")));
+        QCOMPARE(controller.runs().size(), 2u);
+        camera->set_connected(true);
+        action(window, "armWorkflowTrigger").trigger();
+        QTRY_VERIFY(status->text().startsWith(QStringLiteral("Camera armed")));
+        QVERIFY(camera->wait_until_armed(std::chrono::steady_clock::now() + std::chrono::seconds(2)));
+        action(window, "cancelWorkflowTrigger").trigger();
+        camera->pulse();
+        QTRY_VERIFY(status->text().startsWith(QStringLiteral("Camera stopped · received 0 · accepted 0")));
+        QCOMPARE(controller.runs().size(), 2u);
+        const auto& first_input = controller.runs().front().request().inputs();
+        const auto frame_input = std::ranges::find_if(first_input, [](const auto& value) { return value.id.text() == "frame"; });
+        QVERIFY(frame_input != first_input.end() && frame_input->value.as_int64());
+        const auto first = *frame_input->value.as_int64();
+        // A suite may already have used SIM-001. Reproduce its physical sequence in the fresh CLI process.
+        const auto cli = run_cli(saved, flow.id, {QStringLiteral("--camera-frames"), QString::number(first + 1)}, QStringLiteral("trigger"));
+        QVERIFY(cli.at("camera").at("received") == first + 1 && cli.at("camera").at("accepted") == first + 1
+            && cli.at("camera").at("rejected") == 0 && cli.at("camera").at("missing") == 0 && cli.at("camera").at("duplicates") == 0);
+        for (std::size_t i = 0; i != 2; ++i) {
+            const auto number = first + static_cast<std::int64_t>(i);
+            const auto& run = controller.runs().at(i);
+            QVERIFY(run.request().trigger().source.text() == "desktop.camera" && run.request().correlation()
+                && run.request().correlation()->domain().text() == "desktop.camera"
+                && run.request().correlation()->key().ends_with("/" + std::to_string(number)));
+            const auto& event = cli.at("events").at(static_cast<std::size_t>(number - 1));
+            QVERIFY(event.at("frame") == std::to_string(number) && event.at("source") == "desktop.camera");
+            check_camera_frame(take(app::summarize_run(run, take(run.inspect()), {})), flow.entries.front(), device, number);
+            check_camera_frame(event.at("result"), flow.entries.front(), device, number);
+        }
+    } catch (const std::exception& failure) { QFAIL(failure.what()); }
 }
 
 void AcceptanceParityTests::reproduces_saved_calibrated_measurement()

@@ -14,6 +14,7 @@ namespace visionpro::ui {
 
 QString shared_value_text(const core::DataValue& value);
 QString shared_value_text(const core::ConfigValue& value);
+QString run_diagnostic_text(const core::Diagnostic& diagnostic);
 
 class RunPanel final : public QWidget {
     Q_OBJECT
@@ -22,6 +23,7 @@ public:
     explicit RunPanel(QWidget* parent = nullptr);
 
     void update_runs(std::span<const workflow::RunHandle> runs, std::uint64_t dropped);
+    void set_camera_status(const QString& status);
     void clear();
 
     [[nodiscard]] std::optional<workflow::RunHandle> selected_run() const;
@@ -51,6 +53,7 @@ private:
     QLabel* completion_{};
     QLabel* cleanup_{};
     QLabel* notifications_{};
+    QLabel* camera_{};
     QTreeWidget* nodes_{};
     QLabel* judgement_{};
     QComboBox* outputs_{};

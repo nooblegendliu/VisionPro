@@ -99,6 +99,17 @@ core::Result<ExecutionPlan> ExecutionPlan::create(const RunRequest& request, con
             where.input = entry->frame_input;
             return Diagnostic{ErrorCode::InvalidRunRequest, Severity::Error, where, "A triggered run requires its provided frame number."};
         }
+        if (const auto& camera = entry->camera) {
+            const auto* supplied = request.input(camera->image_input);
+            const auto* image = supplied ? supplied->value.as_image() : nullptr;
+            const auto sequence = *frame->value.as_int64();
+            if (!image || supplied->origin != InputOrigin::Provided || !image->frame || sequence < 0
+                || image->frame->source != camera->device || image->frame->sequence != static_cast<std::uint64_t>(sequence)
+                || image->image.coordinate_frame() != camera->coordinate_frame) {
+                where.input = camera->image_input;
+                return Diagnostic{ErrorCode::ResultIdentityMismatch, Severity::Error, where, "Captured pixels, device, coordinates and frame number must describe one camera event."};
+            }
+        }
     }
     if (request.debug_state() == DebugStatePolicy::Active && !capabilities.node_state) {
         return unsupported(where, "Independent access to active state requires state service arbitration.");

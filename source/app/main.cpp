@@ -5,6 +5,7 @@
 #include <visionpro/core/id_factory.hpp>
 #include <visionpro/core/schema_id_factory.hpp>
 #include <visionpro/infrastructure/solution_file.hpp>
+#include <visionpro/infrastructure/mvs_camera.hpp>
 
 #include <windows.h>
 
@@ -39,10 +40,12 @@ public:
 };
 
 constexpr auto usage =
+    "visionpro_cli cameras\n"
     "visionpro_cli run --solution <solution.json> --workflow <uuid> [--group <uuid>] [--input <id>=<value>]... [--root <id>=<directory>]...\n"
     "visionpro_cli save --solution <solution.json> [--root <id>=<directory>]...\n"
     "visionpro_cli trigger --solution <solution.json> --workflow <uuid> [--frame <int64>]... [--stop drain|cancel] [--root <id>=<directory>]...\n"
     "For a continuous entry, use --advance-ms <uint32> repeatedly to advance its controlled clock. Default stop mode is drain.\n"
+    "For a camera entry, use --camera-frames <1..10000> to acquire and submit real frames from the configured device.\n"
     "Use --group to debug one composite Group in isolation. Inputs follow the selected public interface.\n"
     "Built-in tools include simulation, list selection, integer range judgement, calculation, logic and formatting.\n"
     "Shared tools read and write global values, send and receive queued records, and join workpiece measurements.\n"
@@ -88,7 +91,7 @@ template<class T> T number(std::string_view text)
 
 Arguments parse_arguments(std::span<wchar_t*> args)
 {
-    if (args.empty()) { throw UsageError("Choose run, save or trigger. See --help."); }
+    if (args.empty()) { throw UsageError("Choose run, save, trigger or cameras. See --help."); }
     const std::wstring_view command{args.front()};
     Arguments parsed{Command::Run};
     if (command == L"save") { parsed.command = Command::Save; }
@@ -118,6 +121,10 @@ Arguments parse_arguments(std::span<wchar_t*> args)
             parsed.sequence.frames.push_back(number<std::int64_t>(utf8(value)));
         } else if (parsed.command == Command::Trigger && option == L"--advance-ms") {
             parsed.sequence.advances.push_back(std::chrono::milliseconds(number<std::uint32_t>(utf8(value))));
+        } else if (parsed.command == Command::Trigger && option == L"--camera-frames") {
+            const auto count = number<std::uint32_t>(utf8(value));
+            if (parsed.sequence.camera_frames || !count || count > 10000) { throw UsageError("Specify --camera-frames once with a count of 1..10000."); }
+            parsed.sequence.camera_frames = count;
         } else if (parsed.command == Command::Trigger && option == L"--stop") {
             if (parsed.sequence.stop) { throw UsageError("Specify --stop once."); }
             if (value == L"drain") { parsed.sequence.stop = TriggerStopMode::Drain; }
@@ -261,6 +268,23 @@ int execute(std::span<wchar_t*> args)
         return finish_output();
     }
     try {
+        if (!args.empty() && std::wstring_view(args.front()) == L"cameras") {
+            if (args.size() != 1) { throw UsageError("cameras takes no arguments."); }
+            auto inventory = query_mvs_cameras();
+            json mvs{{"available", false}, {"sdk_version", nullptr}, {"devices", json::array()}};
+            if (const auto* failure = std::get_if<Diagnostic>(&inventory)) {
+                if (failure->code != ErrorCode::MissingCapability || failure->external) { return report_failure("camera_inventory", *failure); }
+            } else {
+                const auto& result = std::get<MvsCameraInventory>(inventory);
+                mvs["available"] = true;
+                mvs["sdk_version"] = result.sdk_version;
+                for (const auto& item : result.devices) {
+                    mvs["devices"].push_back({{"serial", item.serial}, {"model", item.model}, {"firmware", item.firmware}, {"transport", item.transport}});
+                }
+            }
+            std::cout << json{{"simulated", {"SIM-001"}}, {"mvs", std::move(mvs)}}.dump(2) << '\n';
+            return finish_output();
+        }
         const auto options = parse_arguments(args);
         auto registered = make_tool_registry();
         if (const auto* failure = std::get_if<Diagnostic>(&registered)) { return report_failure("registry", *failure); }

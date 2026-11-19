@@ -1,6 +1,7 @@
 #pragma once
 
 #include <visionpro/workflow/binding.hpp>
+#include <visionpro/core/camera_mode.hpp>
 
 #include <cstdint>
 #include <map>
@@ -84,11 +85,20 @@ struct WorkflowAdmission {
     bool operator==(const WorkflowAdmission&) const = default;
 };
 enum class TriggerMode { Continuous, External };
+struct CameraTriggerBinding {
+    core::ResourceId device;
+    core::InputId image_input;
+    core::CoordinateSystemId coordinate_frame;
+    core::CameraMode mode;
+    std::uint32_t timeout_ms;
+    bool operator==(const CameraTriggerBinding&) const = default;
+};
 struct WorkflowTrigger {
     TriggerMode mode;
     core::SchemaId source;
     core::InputId frame_input; // The controlled source supplies this Int64 public input for each run.
     std::uint32_t interval_ms{0}; // Positive for continuous ticks, zero for external events.
+    std::optional<CameraTriggerBinding> camera{};
     bool operator==(const WorkflowTrigger&) const = default;
 };
 struct Workflow {

@@ -10,6 +10,7 @@ struct TriggerSequence {
     std::vector<std::int64_t> frames;
     std::vector<std::chrono::milliseconds> advances;
     std::optional<workflow::TriggerStopMode> stop;
+    std::optional<std::uint32_t> camera_frames;
 };
 
 struct TriggerReplay {

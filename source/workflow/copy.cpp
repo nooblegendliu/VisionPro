@@ -393,6 +393,10 @@ Result<SolutionCopy> clone_solution(const Solution& solution, ExternalReferenceP
         const auto original_workflow = workflow.id;
         workflow.id = copier.identities.workflows.at(workflow.id);
         workflow.interface = copier.public_interface(workflow.interface);
+        if (workflow.trigger && workflow.trigger->camera) {
+            auto& device = workflow.trigger->camera->device;
+            device = copier.resource({device, ResourceKind::Device, {}}).id;
+        }
         for (auto& node : workflow.nodes) { node = copier.node(node); }
         for (auto& link : workflow.control_links) {
             link.id = copier.identities.control_links.at(link.id);

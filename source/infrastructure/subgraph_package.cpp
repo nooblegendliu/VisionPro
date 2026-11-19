@@ -352,6 +352,7 @@ void collect_coordinates(Package& package, const Solution& draft, const ToolRegi
     CoordinateUses seen;
     const auto& flow = package.model.workflows.front();
     seen.interface(flow.interface);
+    if (flow.trigger && flow.trigger->camera) { seen.ids.insert(flow.trigger->camera->coordinate_frame); }
     for (const auto& node : flow.nodes) {
         if (const auto* group = std::get_if<GroupConfiguration>(&node.configuration)) { seen.interface(group->interface); }
         else if (const auto* tool = registry.find_descriptor(std::get<ToolConfiguration>(node.configuration).type)) {

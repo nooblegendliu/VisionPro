@@ -489,6 +489,44 @@ void rejected(const CommandResult& result, DWORD exit_code, std::string_view cod
         "Errors preserve the diagnostic code.");
 }
 
+void cameras(const fs::path& executable)
+{
+    ScratchDirectory scratch;
+    const auto package = scratch.path / "camera";
+    fs::copy(VISIONPRO_CAMERA_DIRECTORY, package, fs::copy_options::recursive);
+    const auto manifest = package / "solution.json";
+    const auto single = success(invoke(executable, scratch.path, {L"run", L"--solution", manifest.native(),
+        L"--workflow", L"5ca4f87a-ea1e-4d62-89b0-000000061010"}));
+    const auto& call = single.at("nodes").at(0);
+    check(single.at("quiescent") == true && produced(call, "frame_number") == "1" && produced(call, "serial") == "SIM-001"
+        && produced(call, "image").at("samples").at("minimum") == 7, "Single capture returned the first simulated frame.");
+    const auto stream = success(invoke(executable, scratch.path, {L"trigger", L"--solution", manifest.native(),
+        L"--workflow", L"5ca4f87a-ea1e-4d62-89b0-000000061020", L"--camera-frames", L"2"}));
+    const auto& stats = stream.at("camera");
+    check(stats.at("received") == 2 && stats.at("accepted") == 2 && stats.at("rejected") == 0
+        && stats.at("missing") == 0 && stats.at("duplicates") == 0 && stats.at("closed") == true
+        && stream.at("quiescent") == true, "Two frames drained without loss and the device closed.");
+    const auto& events = stream.at("events");
+    check(events.size() == 2 && events[0].at("correlation") != events[1].at("correlation"), "One workpiece key per frame.");
+    for (int i = 0; i < 2; ++i) {
+        const auto& event = events.at(i);
+        const auto& result = event.at("result");
+        const auto& image = produced(result.at("nodes").at(0), "image");
+        const auto sequence = std::to_string(i + 1);
+        const int sample = i ? 31 : 7;
+        check(result.at("call_order").size() == 1 && event.at("frame") == sequence && event.at("camera").at("device_frame_number") == sequence
+            && image.at("frame").at("sequence") == sequence && image.at("samples").at("minimum") == sample
+            && image.at("samples").at("maximum") == sample, "A hardware event submitted its own retained pixels exactly once.");
+    }
+    rejected(invoke(executable, scratch.path, {L"trigger", L"--solution", manifest.native(),
+        L"--workflow", L"5ca4f87a-ea1e-4d62-89b0-000000061020", L"--frame", L"1"}), 1, "InvalidRunRequest");
+    auto absent = Json::parse(read_file(manifest));
+    absent.at("resources")[0]["location"]["configuration"]["value"][0]["value"]["value"] = "unavailable";
+    write_file(manifest, absent.dump());
+    rejected(invoke(executable, scratch.path, {L"run", L"--solution", manifest.native(),
+        L"--workflow", L"5ca4f87a-ea1e-4d62-89b0-000000061010"}), 1, "ResourceNotFound");
+}
+
 void calculations(const fs::path& executable)
 {
     ScratchDirectory scratch;
@@ -1149,6 +1187,7 @@ int wmain(int argc, wchar_t** argv)
         else if (group == L"external-diagnostics") { diagnostics(cli, PayloadStorage::External); }
         else if (group == L"output-failures") { output_failures(cli); }
         else if (group == L"calculations") { calculations(cli); }
+        else if (group == L"camera") { cameras(cli); }
         else if (group == L"shared") { shared_workflows(cli); }
         else if (group == L"trigger") { trigger_replay(cli); }
         else if (group == L"recovery") { error_recovery(cli); }

@@ -377,7 +377,26 @@ Check validate_workflow_trigger(const Workflow& workflow)
     if (frame->type != core::DataType::integer()) {
         return fail(core::ErrorCode::TypeMismatch, "The trigger frame input must have type Int64.", frame->id);
     }
+    if (const auto& camera = trigger.camera) {
+        if (trigger.mode != TriggerMode::External || camera->timeout_ms == 0 || camera->timeout_ms > 60000) {
+            return fail(core::ErrorCode::ConstraintViolation, "Camera entries require external admission and a timeout of 1..60000 ms.");
+        }
+        switch (camera->mode) {
+        case core::CameraMode::Single: case core::CameraMode::Continuous:
+        case core::CameraMode::Software: case core::CameraMode::Hardware: break;
+        default: return fail(core::ErrorCode::InvalidEnumValue, "Unknown camera acquisition mode.");
+        }
+        const auto image = std::ranges::find(inputs, camera->image_input, &core::InputDescriptor::id);
+        if (image == inputs.end() || image->type != core::DataType::image()) {
+            return fail(core::ErrorCode::TypeMismatch, "A camera entry requires an Image public input.", camera->image_input);
+        }
+        if ((image->semantics.unit != core::MeasurementUnit::Unspecified && image->semantics.unit != core::MeasurementUnit::Pixel)
+            || (image->semantics.coordinate_system && *image->semantics.coordinate_system != camera->coordinate_frame)) {
+            return fail(core::ErrorCode::CoordinateMismatch, "Camera image input must accept the configured pixel frame.", camera->image_input);
+        }
+    }
     for (const auto& input : inputs) {
+        if (trigger.camera && trigger.camera->image_input == input.id) { continue; }
         if (input.id != frame->id && (input.required || !input.default_value)) {
             return fail(core::ErrorCode::MissingRequiredValue, "Other public inputs of a triggered workflow must declare defaults.", input.id);
         }

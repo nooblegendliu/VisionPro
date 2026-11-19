@@ -3,6 +3,7 @@
 #include "run_inputs.hpp"
 
 #include <visionpro/infrastructure/solution_file.hpp>
+#include <visionpro/infrastructure/camera_trigger.hpp>
 #include <visionpro/workflow/trigger_control.hpp>
 
 #include <QChronoTimer>
@@ -41,6 +42,7 @@ public:
     bool can_arm_trigger(const workflow::Workflow& flow) const;
     bool can_send_frame(core::WorkflowId workflow) const;
     bool can_stop_trigger(core::WorkflowId workflow) const;
+    QString camera_status(core::WorkflowId workflow) const;
     core::Result<std::optional<SessionSharedPreview>> shared_preview() const;
     bool can_reset_state(const workflow::NodeTarget& target) const;
     core::Result<std::monostate> reset_state(const workflow::NodeTarget& target);
@@ -78,11 +80,15 @@ private:
     std::shared_ptr<workflow::WorkflowSession> session_;
     struct ArmedTrigger {
         std::shared_ptr<workflow::TriggerControl> control;
+        std::shared_ptr<infrastructure::CameraTriggerStream> camera;
         std::unique_ptr<QChronoTimer> timer; // Only continuous sources have timers.
+        QString camera_fault;
+        QString camera_last_frame;
         bool dispatching{};
         bool stopping{};
     };
     std::map<core::WorkflowId, ArmedTrigger> triggers_;
+    std::map<core::WorkflowId, QString> camera_status_;
     std::uint64_t document_generation_{};
     std::optional<workflow::RunObservation> observation_;
     struct ActiveRun {

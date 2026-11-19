@@ -1,0 +1,399 @@
+{
+  "format": "visionpro.solution",
+  "format_version": 1,
+  "id": "5ca4f87a-ea1e-4d62-89b0-000000061000",
+  "name": "S6.10 相机采集与帧触发",
+  "revision": "1",
+  "coordinates": [
+    {
+      "id": "camera",
+      "kind": "image",
+      "unit": "pixel",
+      "origin": {
+        "x": 0,
+        "y": 0
+      },
+      "x_axis": {
+        "x": 1,
+        "y": 0
+      },
+      "y_axis": {
+        "x": 0,
+        "y": -1
+      },
+      "handedness": "left_handed"
+    }
+  ],
+  "resources": [
+    {
+      "id": "5ca4f87a-ea1e-4d62-89b0-000000061001",
+      "name": "检测相机",
+      "kind": "device",
+      "location": {
+        "kind": "device",
+        "adapter": "visionpro.camera.simulated",
+        "configuration": {
+          "type": {
+            "kind": "record",
+            "schema": "visionpro.camera.device",
+            "version": 1,
+            "fields": [
+              {
+                "id": "serial",
+                "type": {
+                  "kind": "string"
+                }
+              }
+            ]
+          },
+          "value": [
+            {
+              "id": "serial",
+              "value": {
+                "type": {
+                  "kind": "string"
+                },
+                "value": "SIM-001"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "queues": [],
+  "variables": [],
+  "layouts": [
+    {
+      "workflow": "5ca4f87a-ea1e-4d62-89b0-000000061010",
+      "nodes": [
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000061011",
+          "x": 60,
+          "y": 80
+        }
+      ]
+    },
+    {
+      "workflow": "5ca4f87a-ea1e-4d62-89b0-000000061020",
+      "nodes": [
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000061021",
+          "x": 60,
+          "y": 80
+        }
+      ]
+    }
+  ],
+  "workflows": [
+    {
+      "id": "5ca4f87a-ea1e-4d62-89b0-000000061010",
+      "name": "单帧采集",
+      "enabled": true,
+      "interface": {
+        "id": "s610.sample.capture",
+        "version": 1,
+        "inputs": [],
+        "outputs": [
+          {
+            "id": "frame_number",
+            "display_name": "frame_number",
+            "type": {
+              "kind": "int64"
+            },
+            "semantics": {
+              "coordinate_system": null,
+              "unit": "unspecified"
+            },
+            "required": true,
+            "allowed_absence": []
+          },
+          {
+            "id": "image",
+            "display_name": "image",
+            "type": {
+              "kind": "image"
+            },
+            "semantics": {
+              "unit": "pixel",
+              "coordinate_system": "camera"
+            },
+            "required": true,
+            "allowed_absence": []
+          }
+        ],
+        "control_outputs": []
+      },
+      "nodes": [
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000061011",
+          "name": "采集一帧",
+          "configuration": {
+            "kind": "tool",
+            "type": "visionpro.camera.acquire",
+            "config_version": 1
+          },
+          "bindings": [
+            {
+              "target": {
+                "id": "frame_origin",
+                "kind": "parameter"
+              },
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "point2d"
+                    },
+                    "value": {
+                      "coordinate_frame": "camera",
+                      "unit": "pixel",
+                      "x": 0,
+                      "y": 0
+                    }
+                  }
+                }
+              ],
+              "cardinality": "single_source",
+              "accepted_absence": [],
+              "conversion": "exact"
+            }
+          ],
+          "resources": [
+            {
+              "slot": "camera",
+              "resource": {
+                "id": "5ca4f87a-ea1e-4d62-89b0-000000061001",
+                "kind": "device",
+                "revision": null
+              }
+            }
+          ],
+          "enabled": true,
+          "join": "all_activated"
+        }
+      ],
+      "entries": [
+        "5ca4f87a-ea1e-4d62-89b0-000000061011"
+      ],
+      "control_links": [],
+      "control_exports": [],
+      "containment": [],
+      "outputs": [
+        {
+          "output": "frame_number",
+          "source": {
+            "workflow": "5ca4f87a-ea1e-4d62-89b0-000000061010",
+            "node": "5ca4f87a-ea1e-4d62-89b0-000000061011",
+            "output": {
+              "kind": "port",
+              "id": "frame_number"
+            },
+            "selector": []
+          }
+        },
+        {
+          "output": "image",
+          "source": {
+            "workflow": "5ca4f87a-ea1e-4d62-89b0-000000061010",
+            "node": "5ca4f87a-ea1e-4d62-89b0-000000061011",
+            "output": {
+              "kind": "port",
+              "id": "image"
+            },
+            "selector": []
+          }
+        }
+      ]
+    },
+    {
+      "id": "5ca4f87a-ea1e-4d62-89b0-000000061020",
+      "name": "相机触发",
+      "enabled": true,
+      "interface": {
+        "id": "s610.sample.stream",
+        "version": 1,
+        "inputs": [
+          {
+            "id": "frame",
+            "display_name": "发布帧号",
+            "type": {
+              "kind": "int64"
+            },
+            "semantics": {
+              "coordinate_system": null,
+              "unit": "unspecified"
+            },
+            "required": true,
+            "default_value": null,
+            "binding": {
+              "allowed_conversions": [
+                "exact"
+              ],
+              "allowed_sources": [
+                "constant",
+                "run_output",
+                "public_input"
+              ],
+              "cardinality": "single_source",
+              "time": "before_invocation"
+            },
+            "constraints": {
+              "allowed_values": [],
+              "integer_range": null,
+              "max_length": null,
+              "real_range": null
+            }
+          },
+          {
+            "id": "image",
+            "display_name": "触发图像",
+            "type": {
+              "kind": "image"
+            },
+            "semantics": {
+              "unit": "pixel",
+              "coordinate_system": "camera"
+            },
+            "required": true,
+            "default_value": null,
+            "binding": {
+              "allowed_conversions": [
+                "exact"
+              ],
+              "allowed_sources": [
+                "constant",
+                "run_output",
+                "public_input"
+              ],
+              "cardinality": "single_source",
+              "time": "before_invocation"
+            },
+            "constraints": {
+              "allowed_values": [],
+              "integer_range": null,
+              "max_length": null,
+              "real_range": null
+            }
+          }
+        ],
+        "outputs": [
+          {
+            "id": "frame_number",
+            "display_name": "frame_number",
+            "type": {
+              "kind": "int64"
+            },
+            "semantics": {
+              "coordinate_system": null,
+              "unit": "unspecified"
+            },
+            "required": true,
+            "allowed_absence": []
+          },
+          {
+            "id": "image",
+            "display_name": "image",
+            "type": {
+              "kind": "image"
+            },
+            "semantics": {
+              "unit": "pixel",
+              "coordinate_system": "camera"
+            },
+            "required": true,
+            "allowed_absence": []
+          }
+        ],
+        "control_outputs": []
+      },
+      "nodes": [
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000061021",
+          "name": "使用本次触发图像",
+          "configuration": {
+            "kind": "tool",
+            "type": "visionpro.camera.frame",
+            "config_version": 1
+          },
+          "bindings": [
+            {
+              "target": {
+                "id": "image",
+                "kind": "input"
+              },
+              "sources": [
+                {
+                  "kind": "public_input",
+                  "value": {
+                    "group": null,
+                    "input": "image",
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000061020"
+                  }
+                }
+              ],
+              "cardinality": "single_source",
+              "accepted_absence": [],
+              "conversion": "exact"
+            }
+          ],
+          "resources": [],
+          "enabled": true,
+          "join": "all_activated"
+        }
+      ],
+      "entries": [
+        "5ca4f87a-ea1e-4d62-89b0-000000061021"
+      ],
+      "control_links": [],
+      "control_exports": [],
+      "containment": [],
+      "outputs": [
+        {
+          "output": "frame_number",
+          "source": {
+            "workflow": "5ca4f87a-ea1e-4d62-89b0-000000061020",
+            "node": "5ca4f87a-ea1e-4d62-89b0-000000061021",
+            "output": {
+              "kind": "port",
+              "id": "frame_number"
+            },
+            "selector": []
+          }
+        },
+        {
+          "output": "image",
+          "source": {
+            "workflow": "5ca4f87a-ea1e-4d62-89b0-000000061020",
+            "node": "5ca4f87a-ea1e-4d62-89b0-000000061021",
+            "output": {
+              "kind": "port",
+              "id": "image"
+            },
+            "selector": []
+          }
+        }
+      ],
+      "admission": {
+        "max_in_flight": 1,
+        "queue_capacity": 4,
+        "overflow": "reject"
+      },
+      "trigger": {
+        "mode": "external",
+        "source": "s610.camera",
+        "frame_input": "frame",
+        "interval_ms": 0,
+        "camera": {
+          "device": "5ca4f87a-ea1e-4d62-89b0-000000061001",
+          "image_input": "image",
+          "coordinate_frame": "camera",
+          "mode": "hardware",
+          "timeout_ms": 1000
+        }
+      }
+    }
+  ]
+}

@@ -1,3 +1,9 @@
+add_executable(visionpro_camera_tests camera_tests.cpp)
+target_link_libraries(visionpro_camera_tests PRIVATE visionpro_infrastructure visionpro_camera_tools visionpro_build_options Threads::Threads)
+add_test(NAME infrastructure.camera_lease COMMAND visionpro_camera_tests lease)
+add_test(NAME infrastructure.camera_workflow COMMAND visionpro_camera_tests workflow)
+set_tests_properties(infrastructure.camera_lease infrastructure.camera_workflow PROPERTIES TIMEOUT 30)
+
 add_executable(visionpro_solution_roundtrip_tests solution_roundtrip_tests.cpp)
 target_link_libraries(visionpro_solution_roundtrip_tests PRIVATE visionpro_infrastructure visionpro_build_options)
 add_test(NAME infrastructure.solution_roundtrip COMMAND visionpro_solution_roundtrip_tests)
@@ -29,3 +35,15 @@ set_tests_properties(infrastructure.solution_roundtrip infrastructure.file_resou
     infrastructure.file_draft_publication
     infrastructure.external_solution_save_failures infrastructure.external_solution_save_conflict
     infrastructure.solution_transfer infrastructure.subgraph_package PROPERTIES TIMEOUT 30)
+
+if(VISIONPRO_WITH_MVS)
+    add_executable(visionpro_mvs_inventory_tests mvs_inventory_tests.cpp)
+    target_link_libraries(visionpro_mvs_inventory_tests PRIVATE visionpro_infrastructure visionpro_build_options)
+    add_test(NAME infrastructure.mvs_inventory COMMAND visionpro_mvs_inventory_tests)
+    set_tests_properties(infrastructure.mvs_inventory PROPERTIES TIMEOUT 30)
+    add_executable(visionpro_mvs_frame_tests mvs_frame_tests.cpp)
+    target_include_directories(visionpro_mvs_frame_tests PRIVATE "${PROJECT_SOURCE_DIR}/source/infrastructure")
+    target_include_directories(visionpro_mvs_frame_tests SYSTEM PRIVATE "${VISIONPRO_MVS_INCLUDE_DIR}")
+    target_link_libraries(visionpro_mvs_frame_tests PRIVATE visionpro_infrastructure visionpro_build_options)
+    add_test(NAME infrastructure.mvs_frame_copy COMMAND visionpro_mvs_frame_tests)
+endif()

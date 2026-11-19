@@ -40,6 +40,7 @@ struct ControlLinkIdTag;
 struct RegionIdTag;
 struct SolutionSessionIdTag;
 struct MessageIdTag;
+struct CameraStreamIdTag;
 
 } // namespace detail
 
@@ -54,6 +55,7 @@ using ControlLinkId = detail::IdValue<detail::ControlLinkIdTag>;
 using RegionId = detail::IdValue<detail::RegionIdTag>;
 using SolutionSessionId = detail::IdValue<detail::SolutionSessionIdTag>;
 using MessageId = detail::IdValue<detail::MessageIdTag>;
+using CameraStreamId = detail::IdValue<detail::CameraStreamIdTag>;
 
 template <class T>
 concept PersistentId = std::same_as<T, SolutionId> || std::same_as<T, WorkflowId>
@@ -62,6 +64,6 @@ concept PersistentId = std::same_as<T, SolutionId> || std::same_as<T, WorkflowId
     || std::same_as<T, ControlLinkId> || std::same_as<T, RegionId>;
 
 template <class T>
-concept UuidIdentity = PersistentId<T> || std::same_as<T, SolutionSessionId> || std::same_as<T, MessageId>;
+concept UuidIdentity = PersistentId<T> || std::same_as<T, SolutionSessionId> || std::same_as<T, MessageId> || std::same_as<T, CameraStreamId>;
 
 } // namespace visionpro::core

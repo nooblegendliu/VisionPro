@@ -42,6 +42,9 @@ template<> struct EnumNames<workflow::AdmissionOverflow> {
 template<> struct EnumNames<workflow::TriggerMode> {
     static constexpr auto values = std::to_array<std::string_view>({"continuous", "external"});
 };
+template<> struct EnumNames<core::CameraMode> {
+    static constexpr auto values = std::to_array<std::string_view>({"single", "continuous", "software", "hardware"});
+};
 template<> struct EnumNames<workflow::LoopExportMode> {
     static constexpr auto values = std::to_array<std::string_view>({"first", "last", "collect", "sum"});
 };
@@ -521,6 +524,10 @@ Json encode_workflow(const Workflow& flow)
         const auto& trigger = *flow.trigger;
         result["trigger"] = {{"mode", write_enum(trigger.mode)}, {"source", write_id(trigger.source)},
             {"frame_input", write_id(trigger.frame_input)}, {"interval_ms", trigger.interval_ms}};
+        if (const auto& camera = trigger.camera) {
+            result["trigger"]["camera"] = {{"device", write_id(camera->device)}, {"image_input", write_id(camera->image_input)},
+                {"coordinate_frame", write_id(camera->coordinate_frame)}, {"mode", write_enum(camera->mode)}, {"timeout_ms", camera->timeout_ms}};
+        }
     }
     return result;
 }
@@ -538,9 +545,15 @@ Workflow decode_workflow(const Reader& reader)
     std::optional<WorkflowTrigger> trigger;
     if (reader.contains("trigger")) {
         const auto config = reader.field("trigger");
-        config.object({"mode", "source", "frame_input", "interval_ms"});
+        config.object({"mode", "source", "frame_input", "interval_ms", "camera"});
         trigger = WorkflowTrigger{read_enum<TriggerMode>(config.field("mode")), read_id<SchemaId>(config.field("source")),
             read_id<InputId>(config.field("frame_input")), config.field("interval_ms").u32()};
+        if (config.contains("camera")) {
+            const auto camera = config.field("camera");
+            camera.object({"device", "image_input", "coordinate_frame", "mode", "timeout_ms"});
+            trigger->camera = CameraTriggerBinding{read_id<ResourceId>(camera.field("device")), read_id<InputId>(camera.field("image_input")),
+                read_id<CoordinateSystemId>(camera.field("coordinate_frame")), read_enum<CameraMode>(camera.field("mode")), camera.field("timeout_ms").u32()};
+        }
     }
     return {read_id<WorkflowId>(reader.field("id")), std::string{reader.field("name").text()}, decode_interface(reader.field("interface")),
         read_array<Node>(reader.field("nodes"), decode_node), read_array<ControlLink>(reader.field("control_links"), decode_control_link),

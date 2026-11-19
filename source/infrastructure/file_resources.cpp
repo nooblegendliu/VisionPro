@@ -1,5 +1,6 @@
 #include "windows_path.hpp"
 #include <visionpro/infrastructure/file_resources.hpp>
+#include <visionpro/infrastructure/camera.hpp>
 #include <visionpro/workflow/execution_plan.hpp>
 
 #include "managed_cleanup.hpp"
@@ -23,8 +24,8 @@ using namespace core;
 using namespace workflow;
 using Check = Result<std::monostate>;
 
-constexpr std::array file_kinds{ResourceKind::Image, ResourceKind::Mask, ResourceKind::Template,
-    ResourceKind::Calibration, ResourceKind::Binary};
+constexpr std::array resource_kinds{ResourceKind::Image, ResourceKind::Mask, ResourceKind::Template,
+    ResourceKind::Calibration, ResourceKind::Binary, ResourceKind::Device};
 
 Diagnostic error(ErrorCode code, std::string message)
 { return {code, Severity::Error, {}, std::move(message)}; }
@@ -505,6 +506,16 @@ Check verify_selected_resource(const ResourceReference& ref, const Solution& sna
     if (current == snapshot.resources.end()) {
         return error(ErrorCode::ResourceNotFound, "Referenced resource is absent from the run snapshot.");
     }
+    if (ref.kind == ResourceKind::Device) {
+        const auto* before = std::get_if<DeviceResource>(&entry.definition.location);
+        const auto* now = std::get_if<DeviceResource>(&current->location);
+        if (!before || !now || before->adapter != now->adapter || before->configuration != now->configuration) {
+            return error(ErrorCode::ResourceVersionMismatch, "Device configuration differs from the captured snapshot.");
+        }
+        auto serial = camera_serial(*current);
+        if (const auto* failure = std::get_if<Diagnostic>(&serial)) { return *failure; }
+        return std::monostate{};
+    }
     const auto captured_file = file_declaration(entry.definition);
     const auto current_file = file_declaration(*current);
     if (current->kind != ref.kind || captured_file.has_value() != current_file.has_value()
@@ -862,7 +873,7 @@ Result<std::shared_ptr<FileResourceProvider>> FileResourceProvider::create(const
 
 std::span<const Diagnostic> FileResourceProvider::diagnostics() const noexcept { return storage_->diagnostics; }
 
-std::span<const ResourceKind> FileResourceProvider::kinds() const noexcept { return file_kinds; }
+std::span<const ResourceKind> FileResourceProvider::kinds() const noexcept { return resource_kinds; }
 
 Check FileResourceProvider::preflight(const ExecutionPlan& plan) const
 {
@@ -934,6 +945,11 @@ Result<std::shared_ptr<const ResourceLease>> FileResourceProvider::acquire(
         const auto found = find_entry(storage_->entries, binding.resource);
         if (const auto* invalid = std::get_if<Diagnostic>(&found)) { return fail(*invalid); }
         const auto& entry = *std::get<const Entry*>(found);
+        if (binding.resource.kind == ResourceKind::Device) {
+            auto camera = open_camera(entry.definition);
+            if (auto* failure = std::get_if<Diagnostic>(&camera)) { return fail(std::move(*failure)); }
+            return std::shared_ptr<const ResourceLease>(std::get<std::shared_ptr<CameraLease>>(std::move(camera)));
+        }
         const auto file = file_declaration(entry.definition);
         if (!file) { return fail(error(ErrorCode::MissingCapability, "Resource slot does not identify a file resource.")); }
         auto contents = entry.locked ? *entry.locked : read_file(*file, storage_->paths);

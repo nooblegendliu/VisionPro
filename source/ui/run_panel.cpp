@@ -146,6 +146,11 @@ QString diagnostic_text(const Diagnostic& item)
     if (item.location.parameter) { location.append(QStringLiteral("parameter %1").arg(id_text(item.location.parameter))); }
     if (item.location.output) { location.append(QStringLiteral("output %1").arg(id_text(item.location.output))); }
     if (item.location.resource) { location.append(QStringLiteral("resource %1").arg(id_text(item.location.resource))); }
+    if (const auto& raw = item.external) {
+        location.append(QStringLiteral("%1 · %2 · %3 · code %4").arg(id_text(raw->provider), text(raw->operation),
+            raw->provider_domain ? id_text(*raw->provider_domain) : enum_text(raw->domain, std::array{"Unknown", "Call", "Algorithm",
+                "Output", "Resource", "Judgement"})).arg(raw->raw_code));
+    }
     if (const auto& operation = item.operation_key) {
         location.append(QStringLiteral("operation · Session %1 · Run %2 · %3")
             .arg(id_text(operation->session), id_text(operation->key.workflow_run), invocation_text(operation->key)));
@@ -170,8 +175,16 @@ QString value_text(const BasicValue<Domain>& value, bool preview_list = true)
     if (const auto* content = value.as_enum()) { return id_text(*content); }
     if constexpr (Domain == ValueDomain::Data) {
         if (const auto* content = value.as_image()) {
-            return QStringLiteral("Image %1 × %2 · %3").arg(content->image.width()).arg(content->image.height())
+            auto summary = QStringLiteral("Image %1 × %2 · %3").arg(content->image.width()).arg(content->image.height())
                 .arg(id_text(content->image.coordinate_frame()));
+            if (content->frame) {
+                const auto format = content->image.format();
+                summary += QStringLiteral(" · %1 %2 · source %3 · frame %4").arg(
+                    enum_text(format.order, std::array{"Mono", "RGB", "BGR", "RGBA", "BGRA"}),
+                    enum_text(format.depth, std::array{"UInt8", "UInt16", "Float32", "Float64"}),
+                    id_text(content->frame->source)).arg(content->frame->sequence);
+            }
+            return summary;
         }
         if (const auto* content = value.as_raster_mask()) {
             return QStringLiteral("Raster mask %1 × %2 · %3").arg(content->pixels.width()).arg(content->pixels.height())
@@ -260,6 +273,13 @@ QString shared_summary(const Value& value)
 
 QString shared_value_text(const core::DataValue& value) { return shared_summary(value); }
 QString shared_value_text(const core::ConfigValue& value) { return shared_summary(value); }
+QString run_diagnostic_text(const core::Diagnostic& diagnostic) { return diagnostic_text(diagnostic); }
+
+void RunPanel::set_camera_status(const QString& status)
+{
+    set_text(*camera_, status);
+    camera_->setVisible(!status.isEmpty());
+}
 
 RunPanel::RunPanel(QWidget* parent)
     : QWidget(parent)
@@ -278,6 +298,11 @@ RunPanel::RunPanel(QWidget* parent)
     history_row->addWidget(history_, 1);
     notifications_ = panel_label(this, "runNotifications");
     history_row->addWidget(notifications_);
+    camera_ = panel_label(this, "cameraTriggerStatus");
+    camera_->setWordWrap(true);
+    camera_->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    layout->addWidget(camera_);
+    camera_->hide();
 
     identity_ = panel_label(this, "runIdentity");
     identity_->setTextInteractionFlags(Qt::TextSelectableByMouse);

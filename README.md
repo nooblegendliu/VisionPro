@@ -43,6 +43,8 @@ S6.8 支持圆、环、扇环和多边形 ROI，以及 N 点平面标定、像�
 
 S6.9 支持平移模板定位、随工件移动的 ROI 颜色测量、浮点闭区间判断和灰度分段类别图。固定方案从同一次定位取得五路测量，汇合后发送一次结果；类别图可在桌面查看标签、数量并按 ID 调色。[工件检测方案](samples/s6-inspection/solution.json) · [桌面与 CLI 验收](docs/development.md#109-s69-工件定位五路测量与类别图)
 
+S6.10 已接入相机采集节点和相机帧触发入口，支持模拟设备与可选的海康 MVS 后端。一次触发向流程同时交付帧号和只读图像。模拟设备已验证缓冲复用、断连重连和停止后的迟到脉冲。实际 MVS SDK 已完成 GigE/USB 枚举，现场有工业相机后可继续真机验收。[相机样例](samples/s6-camera/solution.json) · [桌面与 CLI 验收](docs/development.md#1010-s610-相机采集与触发)
+
 - 已建立初始目录、开发规则及基础设计文档。
 - 已确定 C++20、Qt、OpenCV、CMake 技术栈。
 - 已建立 `visionpro_core` 静态库，包含身份、配置/运行值、工具元数据、只读图像与裁剪、几何/ROI/掩膜、资源与状态定义及局部校验、结构化诊断和 CTest。
@@ -106,7 +108,7 @@ S3 的任务依赖、26 项验收子范围及退出条件见
 控制模型支持普通节点多前驱/多后继，分叉、汇合和基本条件分支纳入第三阶段无 GUI 验证。
 该阶段可采用单工作线程、每流程一个在途运行、Busy 准入和无自动重试；
 这些是阶段策略，不把模型限制为单链或整个方案全局互斥。
-S6 已支持结构化循环、可取消的迭代间隔、多流程并行及可控触发。真实相机与工业通信按 S6.10、S6.11 推进。
+S6 已支持结构化循环、可取消的迭代间隔、多流程并行、可控事件和相机帧触发。工业通信按 S6.11 推进。
 
 实例寿命与状态寿命分开，累积/首次初始化按声明的状态域管理。
 ROI 包含旋转、继承、排除、栅格掩膜及坐标变换；资源同时支持托管、外部引用和动态来源。
@@ -141,7 +143,7 @@ S3.9 在 Windows x64、MSVC 19.51、CMake/CTest 4.4.0 环境完成 Release 验�
 3. 无 GUI 执行与配置往返验证。S3.1–S3.9 完成，26 项必验子范围全部通过。
 4. 无 GUI 视觉闭环。S4.1–S4.7 已完成，本轮 Release 回归 ON 97 项、OFF 81 项通过。见 [S4 验收范围](docs/s4-acceptance.md#release-回归范围)。
 5. 基础可视化界面。S5.1–S5.6 已完成，GUI/CLI 一致性、生命周期及负载测量见 [S5 验收与交接](docs/s5-acceptance.md)。
-6. S6.1–S6.9 已完成循环与点集、Group 复用、计算与格式化、共享数据与工件汇合、多流程并行与有界重入、连续与外部触发、节点恢复与安全重试、ROI 与标定测量，以及工件定位、五路测量和类别图。下一阶段 S6.10 接入相机采集并验证帧缓冲区的生命周期。[S6 实施与验收计划](docs/s6-plan.md)
+6. S6.1–S6.9 已完成。S6.10 已实现相机采集与帧触发，真实工业相机的采集、外部触发和断连重连留待现场验收。[S6 实施与验收计划](docs/s6-plan.md)
 
 各阶段范围与验收标准见 [requirements.md](docs/requirements.md)。
 先用内存配置、模拟工具和测试图像验证核心，再完成保存加载及真实视觉处理。
@@ -174,6 +176,8 @@ S3.9 在 Windows x64、MSVC 19.51、CMake/CTest 4.4.0 环境完成 Release 验�
 使用 `VISIONPRO_WITH_GUI=ON` 构建 `visionpro_gui`。打开桌面程序后，可从 **File** 新建或打开方案，从 **Tools** 添加节点，选中节点后在 **Properties** 编辑参数、绑定和 Group 边界。[S5.3 构建与编辑复现](docs/development.md#326-s53-release-构建与测试)
 
 同时启用 OpenCV 后，可从 **View** 打开图像文件或方案图像资源，选择视觉节点后使用 **Preview Selected ROI**。在 **Properties → Edit ROI…** 修改区域配置。[S5.4 构建与样例复现](docs/development.md#327-s54-release-构建与测试)
+
+`visionpro_cli cameras` 列出相机，`trigger --camera-frames N` 从方案配置的设备取 N 帧并逐帧提交。默认构建包含模拟相机。安装海康 MVS 开发包后可启用 `VISIONPRO_WITH_MVS=ON` 构建 GigE/USB 适配器。[相机配置与复现命令](docs/development.md#1010-s610-相机采集与触发)
 
 从 **Run** 启动流程或调试选中节点。在 **Run and Results** 选择运行和节点，再点 **Show Image** 查看 Blob 或图像输出。[S5.5 构建与操作复现](docs/development.md#328-s55-release-构建与测试)
 

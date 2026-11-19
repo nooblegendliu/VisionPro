@@ -57,26 +57,35 @@ if(VISIONPRO_WITH_OPENCV)
         visionpro_ui visionpro_app_tools visionpro_visual_preview visionpro_build_options Qt6::Test
     )
     add_test(NAME visionpro_visual_tests COMMAND visionpro_visual_tests -platform offscreen)
+endif()
 
-    add_executable(visionpro_acceptance_parity_tests
-        acceptance_parity_tests.cpp "${PROJECT_SOURCE_DIR}/source/app/run_summary.cpp")
-    set_target_properties(visionpro_acceptance_parity_tests PROPERTIES AUTOMOC ON)
-    target_include_directories(visionpro_acceptance_parity_tests PRIVATE "${PROJECT_SOURCE_DIR}/source/app")
-    target_include_directories(visionpro_acceptance_parity_tests SYSTEM PRIVATE
-        "${PROJECT_SOURCE_DIR}/third_party/nlohmann_json/include")
-    target_compile_definitions(visionpro_acceptance_parity_tests PRIVATE
-        "VISIONPRO_S4_DIRECTORY=\"${PROJECT_SOURCE_DIR}/samples/s4\""
-        "VISIONPRO_S61_DIRECTORY=\"${PROJECT_SOURCE_DIR}/samples/s6-loop\""
-        "VISIONPRO_S62_DIRECTORY=\"${PROJECT_SOURCE_DIR}/samples/s6-group\""
-        "VISIONPRO_S63_DIRECTORY=\"${PROJECT_SOURCE_DIR}/samples/s6-calculation\""
-        "VISIONPRO_S64_DIRECTORY=\"${PROJECT_SOURCE_DIR}/samples/s6-shared\""
-        "VISIONPRO_S65_DIRECTORY=\"${PROJECT_SOURCE_DIR}/samples/s6-concurrency\""
-        "VISIONPRO_S68_DIRECTORY=\"${PROJECT_SOURCE_DIR}/samples/s6-calibration\""
-        "VISIONPRO_S69_DIRECTORY=\"${PROJECT_SOURCE_DIR}/samples/s6-inspection\""
-        "VISIONPRO_TEST_CLI=\"$<TARGET_FILE:visionpro_cli>\"")
-    target_link_libraries(visionpro_acceptance_parity_tests PRIVATE
-        visionpro_ui visionpro_app_tools visionpro_infrastructure visionpro_build_options Qt6::Test)
-    add_dependencies(visionpro_acceptance_parity_tests visionpro_cli)
+add_executable(visionpro_acceptance_parity_tests
+    acceptance_parity_tests.cpp "${PROJECT_SOURCE_DIR}/source/app/run_summary.cpp")
+set_target_properties(visionpro_acceptance_parity_tests PROPERTIES AUTOMOC ON)
+target_include_directories(visionpro_acceptance_parity_tests PRIVATE "${PROJECT_SOURCE_DIR}/source/app")
+target_include_directories(visionpro_acceptance_parity_tests SYSTEM PRIVATE
+    "${PROJECT_SOURCE_DIR}/third_party/nlohmann_json/include")
+target_compile_definitions(visionpro_acceptance_parity_tests PRIVATE
+    "VISIONPRO_S4_DIRECTORY=\"${PROJECT_SOURCE_DIR}/samples/s4\""
+    "VISIONPRO_S61_DIRECTORY=\"${PROJECT_SOURCE_DIR}/samples/s6-loop\""
+    "VISIONPRO_S62_DIRECTORY=\"${PROJECT_SOURCE_DIR}/samples/s6-group\""
+    "VISIONPRO_S63_DIRECTORY=\"${PROJECT_SOURCE_DIR}/samples/s6-calculation\""
+    "VISIONPRO_S64_DIRECTORY=\"${PROJECT_SOURCE_DIR}/samples/s6-shared\""
+    "VISIONPRO_S65_DIRECTORY=\"${PROJECT_SOURCE_DIR}/samples/s6-concurrency\""
+    "VISIONPRO_S68_DIRECTORY=\"${PROJECT_SOURCE_DIR}/samples/s6-calibration\""
+    "VISIONPRO_S69_DIRECTORY=\"${PROJECT_SOURCE_DIR}/samples/s6-inspection\""
+    "VISIONPRO_S610_DIRECTORY=\"${PROJECT_SOURCE_DIR}/samples/s6-camera\""
+    "VISIONPRO_TEST_CLI=\"$<TARGET_FILE:visionpro_cli>\"")
+target_link_libraries(visionpro_acceptance_parity_tests PRIVATE
+    visionpro_ui visionpro_app_tools visionpro_infrastructure visionpro_build_options Qt6::Test)
+add_dependencies(visionpro_acceptance_parity_tests visionpro_cli)
+add_test(NAME visionpro_camera_acquisition_parity_tests COMMAND visionpro_acceptance_parity_tests -platform offscreen
+    configures_and_acquires_saved_camera)
+add_test(NAME visionpro_camera_trigger_parity_tests COMMAND visionpro_acceptance_parity_tests -platform offscreen
+    configures_and_arms_saved_camera)
+list(APPEND ui_tests visionpro_camera_acquisition_parity_tests visionpro_camera_trigger_parity_tests)
+
+if(VISIONPRO_WITH_OPENCV)
     add_test(NAME visionpro_acceptance_parity_tests COMMAND visionpro_acceptance_parity_tests -platform offscreen
         compares_saved_s4_workflows -o acceptance-parity.log,txt)
     add_test(NAME visionpro_loop_parity_tests COMMAND visionpro_acceptance_parity_tests -platform offscreen
@@ -113,7 +122,8 @@ set_tests_properties(${ui_tests} PROPERTIES
 if(VISIONPRO_WITH_OPENCV)
     set_property(TEST visionpro_editor_tests visionpro_inspector_tests visionpro_editor_run_tests visionpro_run_lifecycle_tests visionpro_visual_tests
         visionpro_acceptance_parity_tests visionpro_loop_parity_tests visionpro_group_parity_tests visionpro_calculation_parity_tests visionpro_shared_parity_tests visionpro_concurrency_parity_tests
-        visionpro_calibration_parity_tests visionpro_inspection_parity_tests
+        visionpro_calibration_parity_tests visionpro_inspection_parity_tests visionpro_camera_acquisition_parity_tests
+        visionpro_camera_trigger_parity_tests
         APPEND PROPERTY ENVIRONMENT_MODIFICATION
         "PATH=path_list_prepend:$<TARGET_FILE_DIR:opencv_core>")
 endif()

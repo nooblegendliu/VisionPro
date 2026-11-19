@@ -1,4 +1,5 @@
 #include "editor_inspector.hpp"
+#include "camera_editor.hpp"
 #include "class_palette.hpp"
 #include <visionpro/core/class_map.hpp>
 #include "coordinate_text.hpp"
@@ -1129,8 +1130,9 @@ void edit_trigger(const InspectorContext& context, WorkflowId id)
     auto* form = new QFormLayout;
     auto* mode = new QComboBox(&dialog);
     mode->setObjectName(QStringLiteral("triggerMode"));
-    mode->addItems({QStringLiteral("Manual only"), QStringLiteral("External frames"), QStringLiteral("Continuous clock")});
-    mode->setCurrentIndex(current ? (current->mode == TriggerMode::External ? 1 : 2) : 0);
+    mode->addItems({QStringLiteral("Manual only"), QStringLiteral("External frames"), QStringLiteral("Continuous clock"),
+        QStringLiteral("Camera frames")});
+    mode->setCurrentIndex(current && current->camera ? 3 : current ? (current->mode == TriggerMode::External ? 1 : 2) : 0);
     auto* source = new QLineEdit(current ? id_text(current->source) : QString{}, &dialog);
     source->setObjectName(QStringLiteral("triggerSource"));
     auto* input = new QComboBox(&dialog);
@@ -1149,10 +1151,13 @@ void edit_trigger(const InspectorContext& context, WorkflowId id)
     form->addRow(QStringLiteral("Frame number input"), input);
     form->addRow(QStringLiteral("Interval (ms)"), interval);
     layout->addLayout(form);
+    auto* camera = new CameraTriggerEditor(&dialog, context.model.draft(), *flow);
+    layout->addWidget(camera);
     const auto refresh = [=] {
         source->setEnabled(mode->currentIndex() != 0);
         input->setEnabled(mode->currentIndex() != 0);
         interval->setEnabled(mode->currentIndex() == 2);
+        camera->setVisible(mode->currentIndex() == 3);
     };
     QObject::connect(mode, &QComboBox::currentIndexChanged, &dialog, refresh);
     refresh();
@@ -1169,9 +1174,15 @@ void edit_trigger(const InspectorContext& context, WorkflowId id)
             if (periodic && (!valid || !delay)) { warn(&dialog, QStringLiteral("Enter a positive interval in milliseconds.")); continue; }
             trigger.emplace(WorkflowTrigger{periodic ? TriggerMode::Continuous : TriggerMode::External,
                 std::get<SchemaId>(std::move(parsed)), frame_inputs[static_cast<std::size_t>(input->currentIndex())], periodic ? delay : 0});
+            if (mode->currentIndex() == 3) {
+                auto selected = camera->binding();
+                if (const auto* failure = std::get_if<Diagnostic>(&selected)) { warn(&dialog, qtext(failure->message)); continue; }
+                trigger->camera = std::get<CameraTriggerBinding>(std::move(selected));
+            }
         }
         if (trigger != current) {
-            context.edit_flow(id, QStringLiteral("Change workflow trigger"), [&](Solution&, Workflow& draft) -> Check {
+            context.edit_flow(id, QStringLiteral("Change workflow trigger"), [&](Solution& solution, Workflow& draft) -> Check {
+                if (trigger && trigger->camera && camera->new_device()) { solution.resources.push_back(*camera->new_device()); }
                 draft.trigger = trigger;
                 return std::monostate{};
             });
@@ -1522,10 +1533,12 @@ void select_resource(const InspectorContext& context, const WorkflowId& id, cons
     if (!node) { return; }
     const auto found = std::ranges::find(node->resources, slot.slot, &NodeResourceBinding::slot);
     const auto old = found == node->resources.end() ? std::nullopt : std::optional{found->resource};
+    const auto* config = std::get_if<ToolConfiguration>(&node->configuration);
+    const bool camera = config && config->type.text() == "visionpro.camera.acquire" && slot.kind == ResourceKind::Device;
     Choices<std::optional<ResourceReference>> choices{{QStringLiteral("Unbound"), std::nullopt}};
     std::size_t current = 0;
     for (const auto& resource : solution.resources) {
-        if (resource.kind != slot.kind) { continue; }
+        if (resource.kind != slot.kind || (camera && !is_camera_device(resource))) { continue; }
         auto pin = old && old->id == resource.id ? old->revision : std::nullopt;
         if ((slot.kind == ResourceKind::Calibration || slot.kind == ResourceKind::Template) && !pin) {
             if (const auto* file = std::get_if<ManagedResource>(&resource.location)) { pin = file->revision; }
@@ -1583,6 +1596,28 @@ void resource_row(QFormLayout& form, QWidget* owner, const InspectorContext& con
     if (file_resource_kind(slot.kind) && (!locked_file || context.hash_file)) {
         row->addWidget(action(owner, QStringLiteral("File…"), "chooseExternalResource",
             [context, id = flow.id, selected = node.id, slot] { select_external_file(context, id, selected, slot); }));
+    }
+    const auto* configuration = std::get_if<ToolConfiguration>(&node.configuration);
+    if (configuration && configuration->type.text() == "visionpro.camera.acquire" && slot.kind == ResourceKind::Device) {
+        const auto save_device = [context, id = flow.id, selected = node.id, slot](std::optional<ResourceId> original) {
+            const auto& catalog = context.model.draft().resources;
+            const auto found = original ? std::ranges::find(catalog, *original, &ResourceDefinition::id) : catalog.end();
+            if (original && (found == catalog.end() || !is_camera_device(*found))) { return; }
+            auto edited = edit_camera_device(context.owner, original ? &*found : nullptr);
+            if (!edited) { return; }
+            context.edit_node(id, selected, QStringLiteral("Configure camera device"), [&](Solution& solution, Workflow&, Node& draft) -> Check {
+                const auto entry = std::ranges::find(solution.resources, edited->id, &ResourceDefinition::id);
+                if (entry == solution.resources.end()) { solution.resources.push_back(*edited); }
+                else { *entry = *edited; }
+                write_resource_binding(draft, slot, ResourceReference{edited->id, ResourceKind::Device, {}});
+                return std::monostate{};
+            });
+        };
+        row->addWidget(action(owner, QStringLiteral("New…"), "newCameraDevice", [save_device] { save_device({}); }));
+        if (bound != node.resources.end()) {
+            row->addWidget(action(owner, QStringLiteral("Edit device…"), "editCameraDevice",
+                [save_device, resource = bound->resource.id] { save_device(resource); }));
+        }
     }
     form.addRow(id_text(slot.slot), row);
 }

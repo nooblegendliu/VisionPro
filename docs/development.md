@@ -12,7 +12,7 @@ S2 核心模型与绑定验证的实施规划已于 2026-10-28 确定，按 [§5
 S2.5 静态校验已完成并通过 Release 验证，记录见 [§8.8](#88-s25-实现与验证记录)；
 S2.6 结果访问与绑定解析已完成并通过 Release 验证，记录见 [§8.9](#89-s26-实现与验证记录)；
 S2.7 运行契约与组合验证已完成，Release 48/48 项 CTest 通过；S2 整体验收通过，证据与 S3 交接见 [§8.10](#810-s27-与-s2-整体验收记录)。
-SDK 指南已用于补充契约与用例，未运行厂商 Demo、链接 SDK 或验证设备行为。
+S2 使用 VisionMaster SDK 指南补充契约与用例。S6.10 的海康 MVS 相机 SDK 构建、枚举结果和设备验收条件见 [§10.10](#1010-s610-相机采集与触发)。
 
 2026-11-11 完成 S3.1 执行范围、计划与工具装配，以及 S3.2 最小内存执行闭环。
 Release 验证及交接见 [§8.12](#812-s31-实现与验证记录) 和 [§8.13](#813-s32-实现与验证记录)。
@@ -2501,3 +2501,38 @@ $solution = 'samples/s6-inspection/solution.json'
 & "$guiBuild/source/app/visionpro_cli.exe" run --solution $solution --workflow 5ca4f87a-ea1e-4d62-89b0-000000006950
 ctest --test-dir $guiBuild -C Release -R '^tools\.(template_and_color|class_map|judgement)$|^app\.cli_inspection$|^visionpro_(visual|inspection_parity)_tests$' --output-on-failure --no-tests=error
 ```
+
+### 10.10 S6.10 相机采集与触发
+
+2026-11-19，Windows x64 Release 全量 CTest 通过。启用 Qt、OpenCV 和 MVS 时为 **166/166** 项，关闭三者时为 **127/127** 项。桌面使用 Qt Widgets offscreen 打开、编辑、另存并重开[相机方案](../samples/s6-camera/solution.json)，独立 CLI 从保存后的文件复现单次采集和逐帧触发。两个流程共用设备资源“检测相机”，默认序列号为 `SIM-001`。
+
+| 场景 | 实测结果 |
+|---|---|
+| 单次采集和缓冲复用 | 模拟设备向同一块缓冲交替写入 7、31。第二帧发布并断连后，第一轮保留的 2×2 Mono8 图像四个像素仍均为 7。MVS 帧结构夹具也独立检查了缓冲复用、空指针、格式、载荷长度与丢包标记。 |
+| 模拟软触发和硬触发 | 桌面把单次采集节点改为 Software、超时改为 1200 ms，保存后的方案在两个入口均取得相同图像和帧号。Hardware 模式下两个脉冲触发两轮，每轮只执行一个后继。CLI 记录 `received=2, accepted=2, rejected=0, missing=0, duplicates=0, closed=true`。 |
+| 停止和重连 | 等待硬触发时断连唤醒取帧，旧流停止。重新连接并布防后可取得新帧。等待中取消以及停止后到达的脉冲均未产生额外运行。设备别名在原租约释放前无法占用同一设备。 |
+| 跳号、重复与回绕 | 向模拟触发入口交付 8 个指定的 32 位原始帧号，包含跳号、重复、回绕前的迟到帧和半圈歧义值。5 帧启动流程，3 帧被拒，缺帧计数为 2；另用超过 32 位的原始设备帧号核对顺序。 |
+| 诊断和计时 | 模拟设备的断连、超时、取消和未知错误保留各自的诊断，注入关闭失败时保留原始操作和错误码。一次单次采集的主机调用耗时为 56,900 ns，模拟设备报告 100 µs。另一次硬触发样例的两次主机等待和采集分别为 23,999 µs 和 15,069 µs，设备 tick 为 1、2，频率 100 Hz。主机数值随调度变化。MVS 的设备耗时保留未知。 |
+| 实际 SDK | 本机 x64 MVS SDK 自报 4.7.1.4，GigE/USB 枚举成功，发现 0 台。把方案副本改用 MVS 和不存在的序列号，单次采集及触发 CLI 均返回退出码 1 和 `ResourceNotFound`；触发报告收到 0 帧且成功关闭。 |
+
+在桌面打开样例后，选择 **单帧采集 → 采集一帧 → Properties → Resources**，可用 **New…** 新建相机，或用 **Edit device…** 选择适配器和序列号。MVS 适配器可用 **Scan devices** 枚举。通过 **Run → Run Workflow** 验证采集节点。选择 **相机触发 → Properties → Trigger source → Camera frames** 可编辑设备、Image 输入、坐标系、模式与超时。用 **Run → Arm Workflow Trigger** 开始，用 **Stop Trigger and Drain** 排空，或用 **Stop Trigger and Cancel Runs** 取消。运行面板显示受理、拒绝、缺帧、重复及停止状态。
+
+从仓库根目录在 MSVC x64 开发环境中执行。以下命令复用已按 [§3.28](#328-s55-release-构建与测试) 配好的 Ninja 构建目录。MVS 构建需要开发包，`MVCAM_COMMON_RUNENV` 指向含 `Includes` 与 `Libraries/win64` 的目录。运行前将匹配的 MVS x64、OpenCV Release DLL 目录加入 `PATH`。无 SDK 时使用 `-DVISIONPRO_WITH_MVS=OFF` 可运行模拟相机和 CLI。
+
+```powershell
+$guiBuild = 'out/build/s67-gui'
+$headlessBuild = 'out/build/s67-headless'
+cmake -S . -B $guiBuild -DVISIONPRO_WITH_GUI=ON -DVISIONPRO_WITH_OPENCV=ON -DVISIONPRO_WITH_MVS=ON
+cmake --build $guiBuild --config Release --parallel 6
+cmake -S . -B $headlessBuild -DVISIONPRO_WITH_GUI=OFF -DVISIONPRO_WITH_OPENCV=OFF -DVISIONPRO_WITH_MVS=OFF
+cmake --build $headlessBuild --config Release --parallel 6
+$cli = "$guiBuild/source/app/visionpro_cli.exe"
+$solution = 'samples/s6-camera/solution.json'
+& $cli cameras
+& $cli run --solution $solution --workflow 5ca4f87a-ea1e-4d62-89b0-000000061010
+& $cli trigger --solution $solution --workflow 5ca4f87a-ea1e-4d62-89b0-000000061020 --camera-frames 2 --stop drain
+ctest --test-dir $guiBuild -C Release -R 'camera|mvs_' --output-on-failure --no-tests=error
+ctest --test-dir $headlessBuild -C Release -R 'camera' --output-on-failure --no-tests=error
+```
+
+现场目前没有工业相机。实机验收需记录型号、序列号、驱动与固件版本，选用设备支持的原生 Mono8 或 BGR8Packed 格式，逐项验证 Single、Continuous、Software 和 Line0 硬触发。记录每种模式的帧号、时间来源、收帧与受理计数、缺帧与拒绝、停止状态，并在拔插重连后核对首帧保留及新订阅的触发次数。

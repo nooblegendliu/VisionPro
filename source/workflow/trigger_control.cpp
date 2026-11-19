@@ -39,6 +39,7 @@ struct TriggerControl::Impl {
     const WorkflowId workflow;
     const WorkflowTrigger entry;
     const CorrelationDomainId domain;
+    std::optional<DeviceResource> camera_device{};
     std::mutex mutex;
     std::condition_variable idle;
     bool accepting{true};
@@ -50,6 +51,13 @@ struct TriggerControl::Impl {
     RunRejected stopped() const
     { return {failure(ErrorCode::InvalidState, workflow, "The trigger subscription has stopped.")}; }
 
+    bool same_device(const ResourceDefinition& resource) const
+    {
+        const auto* device = std::get_if<DeviceResource>(&resource.location);
+        return camera_device && device && resource.kind == ResourceKind::Device && resource.id == entry.camera->device
+            && camera_device->adapter == device->adapter && camera_device->configuration == device->configuration;
+    }
+
     void prune_quiescent()
     {
         std::erase_if(accepted, [](const RunHandle& run) {
@@ -59,7 +67,8 @@ struct TriggerControl::Impl {
         });
     }
 
-    RunSubmission submit(const RunTrigger& trigger, std::int64_t frame, const std::optional<CorrelationId>& correlation)
+    RunSubmission submit(const RunTrigger& trigger, std::int64_t frame, const std::optional<CorrelationId>& correlation,
+        const ImageFrame* image)
     try
     {
         const auto owner = session.lock();
@@ -73,8 +82,21 @@ struct TriggerControl::Impl {
         if (!flow || !flow->enabled || flow->trigger != entry) {
             return RunRejected{failure(ErrorCode::InvalidRunRequest, workflow, "The workflow's configured trigger entry has changed.")};
         }
-        auto request = RunRequest::create(*current.active, WorkflowTarget{workflow},
-            {{entry.frame_input, DataValue::integer(frame)}}, trigger, correlation);
+        if (entry.camera.has_value() != (image != nullptr)) {
+            return RunRejected{failure(ErrorCode::InvalidRunRequest, workflow, "Camera trigger entries require a captured image and frame number together.")};
+        }
+        std::vector<RunInput> inputs{{entry.frame_input, DataValue::integer(frame)}};
+        if (image) {
+            const auto& catalog = current.active->solution().resources;
+            const auto resource = std::ranges::find(catalog, entry.camera->device, &ResourceDefinition::id);
+            if (resource == catalog.end() || !same_device(*resource)) {
+                return RunRejected{failure(ErrorCode::ResourceVersionMismatch, workflow, "The armed camera configuration changed. Reopen its stream.")};
+            }
+            auto value = DataValue::image(*image);
+            if (auto* error = std::get_if<Diagnostic>(&value)) { return RunRejected{std::move(*error)}; }
+            inputs.push_back({entry.camera->image_input, std::get<DataValue>(std::move(value))});
+        }
+        auto request = RunRequest::create(*current.active, WorkflowTarget{workflow}, inputs, trigger, correlation);
         if (auto* error = std::get_if<Diagnostic>(&request)) { return RunRejected{std::move(*error)}; }
 
         // Share a single ordering point with stop, without holding the subscription
@@ -98,7 +120,8 @@ struct TriggerControl::Impl {
         return RunRejected{failure(ErrorCode::ExecutionBoundaryFailure, workflow, "Could not prepare the trigger event.")};
     }
 
-    TriggerReceipt dispatch(TriggerKind kind, std::int64_t frame, std::optional<CorrelationId> correlation)
+    TriggerReceipt dispatch(TriggerKind kind, std::int64_t frame, std::optional<CorrelationId> correlation,
+        const ImageFrame* image = nullptr)
     {
         const RunTrigger trigger{kind, entry.source};
         if (!correlation) {
@@ -124,7 +147,7 @@ struct TriggerControl::Impl {
                 if (--self.preparing == 0) { self.idle.notify_all(); }
             }
         } finish{*this};
-        return {trigger, entry.frame_input, frame, correlation, submit(trigger, frame, correlation)};
+        return {trigger, entry.frame_input, frame, correlation, submit(trigger, frame, correlation, image)};
     }
 };
 
@@ -147,12 +170,29 @@ Result<std::shared_ptr<TriggerControl>> TriggerControl::start(std::shared_ptr<Wo
     if (auto* error = std::get_if<Diagnostic>(&validated)) { return std::move(*error); }
     auto domain = SchemaIdFactory::parse<CorrelationDomainId>(flow->trigger->source.text());
     if (auto* error = std::get_if<Diagnostic>(&domain)) { return std::move(*error); }
-    return std::shared_ptr<TriggerControl>(new TriggerControl(std::make_unique<Impl>(session,
-        current.active->identity().session, workflow, *flow->trigger, std::get<CorrelationDomainId>(domain), now)));
+    auto impl = std::make_unique<Impl>(session, current.active->identity().session, workflow, *flow->trigger,
+        std::get<CorrelationDomainId>(domain), now);
+    if (const auto& binding = flow->trigger->camera) {
+        const auto& catalog = current.active->solution().resources;
+        const auto resource = std::ranges::find(catalog, binding->device, &ResourceDefinition::id);
+        if (resource == catalog.end() || !std::holds_alternative<DeviceResource>(resource->location)) {
+            return failure(ErrorCode::InvalidResource, workflow, "Cannot arm a missing or non-device camera resource.");
+        }
+        impl->camera_device = std::get<DeviceResource>(resource->location);
+    }
+    return std::shared_ptr<TriggerControl>(new TriggerControl(std::move(impl)));
 }
 
+bool TriggerControl::matches_camera(WorkflowId workflow, const WorkflowTrigger& entry, const ResourceDefinition& device) const
+{
+    const std::lock_guard lock(impl_->mutex);
+    return impl_->accepting && workflow == impl_->workflow && entry == impl_->entry && impl_->same_device(device);
+}
 TriggerReceipt TriggerControl::external(std::int64_t frame, std::optional<CorrelationId> correlation)
 { return impl_->dispatch(TriggerKind::External, frame, std::move(correlation)); }
+
+TriggerReceipt TriggerControl::camera_frame(std::int64_t number, const ImageFrame& image, CorrelationId correlation)
+{ return impl_->dispatch(TriggerKind::External, number, std::move(correlation), &image); }
 
 std::optional<TriggerReceipt> TriggerControl::tick(Clock::time_point now)
 {

@@ -263,6 +263,7 @@ void RunController::reset_document()
     if (retiring_) { return; }
     ++document_generation_;
     disarm_triggers();
+    camera_status_.clear();
     unsubscribe();
     dropped_ = 0;
     refresh_.stop();
@@ -281,10 +282,19 @@ void RunController::close_session()
         return;
     }
     std::vector<std::shared_ptr<TriggerControl>> retired;
-    for (auto& entry : triggers_) { retired.push_back(std::move(entry.second.control)); }
+    std::vector<std::shared_ptr<CameraTriggerStream>> cameras;
+    for (auto& entry : triggers_) {
+        retired.push_back(std::move(entry.second.control));
+        if (entry.second.camera) { cameras.push_back(std::move(entry.second.camera)); }
+    }
     triggers_.clear(); // Timers are GUI-thread objects.
     auto failure = std::make_shared<std::optional<Diagnostic>>();
-    auto* worker = QThread::create([session = std::exchange(session_, {}), retired = std::move(retired), failure] {
+    auto* worker = QThread::create([session = std::exchange(session_, {}), retired = std::move(retired),
+            cameras = std::move(cameras), failure] {
+        for (const auto& camera : cameras) {
+            auto released = camera->close();
+            if (auto* diagnostic = std::get_if<Diagnostic>(&released)) { *failure = std::move(*diagnostic); }
+        }
         auto closed = session->close();
         if (auto* diagnostic = std::get_if<Diagnostic>(&closed)) { *failure = std::move(*diagnostic); }
         // A disarmed event can still be returning from a resource preflight.

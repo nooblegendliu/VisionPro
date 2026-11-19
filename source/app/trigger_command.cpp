@@ -1,5 +1,6 @@
 #include "trigger_command.hpp"
 #include "run_summary.hpp"
+#include <visionpro/infrastructure/camera_trigger.hpp>
 
 namespace visionpro::app {
 namespace {
@@ -22,6 +23,15 @@ Result<json> event_report(const TriggerReceipt& event, TriggerStopMode stop, std
         {"frame", std::to_string(event.frame)}, {"correlation", nullptr}};
     if (event.correlation) {
         result["correlation"] = {{"domain", event.correlation->domain().text()}, {"key", event.correlation->key()}};
+    }
+    if (const auto& camera = event.camera) {
+        const auto number = [](const std::optional<std::uint64_t>& value) -> json {
+            return value ? json(std::to_string(*value)) : json(nullptr);
+        };
+        result["camera"] = {{"device_frame_number", number(camera->device_frame_number)}, {"device_ticks", number(camera->device_ticks)},
+            {"tick_frequency_hz", number(camera->tick_frequency_hz)}, {"timestamp_source", camera->timestamp_source},
+            {"host_capture_us", camera->capture_duration.count()},
+            {"device_duration", reported_duration(camera->device_duration, camera->device_duration_unit)}};
     }
     if (const auto* rejected = std::get_if<RunRejected>(&event.submission)) {
         result["admission"] = "rejected";
@@ -59,6 +69,10 @@ core::Result<TriggerReplay> replay_triggers(const infrastructure::SolutionDocume
 {
     const auto* flow = find_workflow(document.solution(), workflow);
     if (!flow || !flow->trigger) { return invalid(workflow, "The workflow requires a configured trigger entry."); }
+    if (flow->trigger->camera.has_value() != sequence.camera_frames.has_value()
+        || (sequence.camera_frames && (!sequence.frames.empty() || !sequence.advances.empty()))) {
+        return invalid(workflow, "A camera entry requires --camera-frames and obtains frame numbers from its camera.");
+    }
     if (flow->trigger->mode == TriggerMode::Continuous && !sequence.frames.empty()) {
         return invalid(workflow, "Use --advance-ms for a continuous entry.");
     }
@@ -75,6 +89,23 @@ core::Result<TriggerReplay> replay_triggers(const infrastructure::SolutionDocume
     if (const auto* failure = std::get_if<Diagnostic>(&started)) { return *failure; }
     const auto& control = std::get<std::shared_ptr<TriggerControl>>(started);
     std::vector<TriggerReceipt> events;
+    std::vector<Diagnostic> failures;
+    std::optional<infrastructure::CameraStreamStatistics> camera_stats;
+    bool camera_closed = false;
+    if (sequence.camera_frames) {
+        auto device = infrastructure::CameraTriggerStream::open(document.solution(), workflow, control);
+        if (const auto* failure = std::get_if<Diagnostic>(&device)) { return *failure; }
+        const auto& stream = std::get<std::shared_ptr<infrastructure::CameraTriggerStream>>(device);
+        for (std::uint32_t n = 0; n < *sequence.camera_frames; ++n) {
+            auto event = stream->next();
+            if (auto* failure = std::get_if<Diagnostic>(&event)) { failures.push_back(std::move(*failure)); break; }
+            events.push_back(std::get<TriggerReceipt>(std::move(event)));
+        }
+        auto closed = stream->close();
+        camera_closed = std::holds_alternative<std::monostate>(closed);
+        if (auto* failure = std::get_if<Diagnostic>(&closed)) { failures.push_back(std::move(*failure)); }
+        camera_stats = stream->statistics();
+    }
     for (const auto frame : sequence.frames) { events.push_back(control->external(frame)); }
     for (const auto advance : sequence.advances) {
         if (advance > std::chrono::duration_cast<std::chrono::milliseconds>(Clock::time_point::max() - now)) {
@@ -90,16 +121,21 @@ core::Result<TriggerReplay> replay_triggers(const infrastructure::SolutionDocume
         return invalid(workflow, "Trigger stop did not reach quiescence.");
     }
     json reports = json::array();
-    std::vector<Diagnostic> failures;
     for (const auto& event : events) {
         auto report = event_report(event, mode, failures);
         if (const auto* failure = std::get_if<Diagnostic>(&report)) { return *failure; }
         reports.push_back(std::get<json>(std::move(report)));
     }
     const auto& snapshot = std::get<ConfigSnapshot>(activated);
-    return TriggerReplay{{{"solution", document.solution().id.to_string()}, {"workflow", workflow.to_string()},
+    json report{{"solution", document.solution().id.to_string()}, {"workflow", workflow.to_string()},
         {"session", snapshot.identity().session.to_string()}, {"snapshot", std::to_string(snapshot.identity().snapshot.value())},
         {"stop", mode == TriggerStopMode::Drain ? "drain" : "cancel"}, {"quiescent", true},
-        {"events", std::move(reports)}, {"load_diagnostics", diagnostics_json(document.diagnostics())}}, std::move(failures)};
+        {"events", std::move(reports)}, {"load_diagnostics", diagnostics_json(document.diagnostics())}};
+    if (camera_stats) {
+        report["camera"] = {{"received", camera_stats->received}, {"accepted", camera_stats->accepted},
+            {"rejected", camera_stats->rejected}, {"duplicates", camera_stats->duplicates}, {"missing", camera_stats->missing},
+            {"closed", camera_closed}};
+    }
+    return TriggerReplay{std::move(report), std::move(failures)};
 }
 } // namespace visionpro::app
