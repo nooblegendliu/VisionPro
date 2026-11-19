@@ -90,6 +90,7 @@ enum class ErrorCode : std::uint32_t {
     QueueConsumerConflict = 1814,
     InvalidRunHandle = 1901,
     ExecutionBoundaryFailure = 1902,
+    RunQueueFull = 1903,
     IdGenerationFailed = 2001,
     SolutionIoFailure = 2101,
     InvalidSolutionManifest = 2102,

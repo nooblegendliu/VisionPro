@@ -89,20 +89,20 @@ constexpr std::string_view digest = "ba7816bf8f01cfea414140de5dae2223b00361a3961
 
 class ProbeGate {
 public:
-    void pause_first()
+    void pause_before_read()
     {
-        if (paused_.test_and_set()) { return; }
+        if (arrivals_.fetch_add(1) >= 2) { return; }
         entered_.release();
         if (!resumed_.try_acquire_for(10s)) { throw std::runtime_error("The test did not release the probe."); }
     }
 
     [[nodiscard]] bool await() { return entered_.try_acquire_for(5s); }
-    void release() { resumed_.release(); }
+    void release() { resumed_.release(2); }
 
 private:
-    std::atomic_flag paused_{};
-    std::binary_semaphore entered_{0};
-    std::binary_semaphore resumed_{0};
+    std::atomic<unsigned> arrivals_{0};
+    std::counting_semaphore<2> entered_{0};
+    std::counting_semaphore<2> resumed_{0};
 };
 
 struct ReleaseProbe {
@@ -117,7 +117,7 @@ public:
 protected:
     Result<InvocationStart> begin(std::shared_ptr<const InvocationContext> context, InvocationCompletion) override
     {
-        if (gate_) { gate_->pause_first(); }
+        if (gate_) { gate_->pause_before_read(); }
         std::int64_t byte = 0;
         if (use_file_) {
             const auto& resources = context->data().resources;
@@ -432,6 +432,7 @@ void publication()
         check(gate->await(), "The previous run waits before its file-reading successor.");
         fs::remove(fixture.dynamic);
         const auto admitted = accepted(publish_solution_run(*session, base, source, draft, run));
+        check(gate->await(), "The published workflow reaches its own probe while the old workflow is blocked.");
         const auto active = session->inspect().active;
         check(active && active->same_capture(admitted.request().snapshot())
             && active->solution().name == draft.name && active->solution().revision == source.solution().revision,

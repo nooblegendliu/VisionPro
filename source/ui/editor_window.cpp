@@ -385,11 +385,13 @@ void EditorWindow::refresh_actions()
     import_subgraph_->setEnabled(editable);
     resource_copy_->setEnabled(editable && source_.has_value() && has_resource);
     resource_root_->setEnabled(available);
-    run_workflow_->setEnabled(editable && active && run_controller_->can_start());
-    run_group_->setEnabled(editable && group && !group->loop && run_controller_->can_start());
-    debug_node_->setEnabled(editable && selected_node && !(group && group->loop) && run_controller_->can_start());
+    const bool can_submit = editable && flow && run_controller_->can_submit(*flow);
+    run_workflow_->setEnabled(can_submit);
+    run_group_->setEnabled(can_submit && group && !group->loop);
+    debug_node_->setEnabled(can_submit && selected_node && !(group && group->loop));
     debug_node_->setText(group ? QStringLiteral("Debug Selected Group…") : QStringLiteral("Debug Selected Node…"));
-    cancel_run_->setEnabled(!close_confirmed_ && run_controller_->can_cancel());
+    const auto selected_run = run_panel_->selected_run();
+    cancel_run_->setEnabled(!close_confirmed_ && selected_run && run_controller_->can_cancel(*selected_run));
     reset_state_->setEnabled(editable && selected_node && std::holds_alternative<ToolConfiguration>(selected_node->configuration)
         && run_controller_->can_reset_state({*model_->workflow_id(), selected_node->id}));
     run_limits_->setEnabled(!close_confirmed_);

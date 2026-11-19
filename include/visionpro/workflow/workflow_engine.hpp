@@ -19,7 +19,8 @@ struct WorkflowEngineOptions {
 };
 
 // Session-local submitter for acyclic workflows and independent tool calls.
-// One worker advances ready nodes. Workflow slots last through cleanup.
+// Each workflow has bounded admission. Independent slots can progress in parallel
+// and remain occupied through physical cleanup.
 class WorkflowEngine final : public RunSubmitter {
 public:
     [[nodiscard]] static core::Result<std::unique_ptr<WorkflowEngine>> create(const core::ToolRegistry& registry,

@@ -103,8 +103,9 @@ void EditorWindow::create_run_actions()
         [this] { start_run(DebugStatePolicy::Active); });
     debug_node_ = action(menu, QStringLiteral("Debug Selected Node…"), "debugSelectedNode", [this] { start_run(DebugStatePolicy::Isolated); },
         QKeySequence(Qt::CTRL | Qt::Key_F5));
-    cancel_run_ = action(menu, QStringLiteral("Cancel Run"), "cancelRun", [this] { run_controller_->cancel(); },
-        QKeySequence(Qt::SHIFT | Qt::Key_F5));
+    cancel_run_ = action(menu, QStringLiteral("Cancel Selected Run"), "cancelRun", [this] {
+        if (const auto run = run_panel_->selected_run()) { run_controller_->cancel(*run); }
+    }, QKeySequence(Qt::SHIFT | Qt::Key_F5));
     reset_state_ = action(menu, QStringLiteral("Reset Selected Node State"), "resetSelectedState", [this] {
         const auto flow = model_->workflow_id();
         const auto selected = scene_->selected_nodes();
@@ -182,11 +183,14 @@ void EditorWindow::create_run_dock()
     run_dock_->hide();
     connect(run_dock_, &QDockWidget::visibilityChanged, run_controller_, [this](bool visible) {
         run_controller_->set_observing(visible && !close_confirmed_);
-        if (visible) { run_panel_->update_runs(run_controller_->runs(), run_controller_->dropped()); }
+        if (visible) {
+            run_panel_->update_runs(run_controller_->runs(), run_controller_->dropped());
+            refresh_actions();
+        }
     });
     connect(run_controller_, &RunController::changed, this, [this] {
-        refresh_actions();
         if (run_dock_->isVisible()) { run_panel_->update_runs(run_controller_->runs(), run_controller_->dropped()); }
+        refresh_actions();
         if (close_confirmed_ && !run_controller_->has_session_work()) {
             QTimer::singleShot(0, this, [this] { close(); });
         }
@@ -197,14 +201,15 @@ void EditorWindow::create_run_dock()
         show_status(QString::fromStdString(diagnostic.message));
     });
     connect(run_panel_, &RunPanel::image_requested, this, &EditorWindow::show_selected_run_image);
+    connect(run_panel_, &RunPanel::selected_run_changed, this, &EditorWindow::refresh_actions);
 }
 
 void EditorWindow::start_run(std::optional<DebugStatePolicy> debug)
 {
-    if (busy_ || close_confirmed_ || !writable() || !run_controller_->can_start()) { return; }
+    if (busy_ || close_confirmed_ || !writable()) { return; }
     const auto id = model_->workflow_id();
     const auto* flow = id ? find_workflow(draft(), *id) : nullptr;
-    if (!flow) { return; }
+    if (!flow || !run_controller_->can_submit(*flow)) { return; }
     RunTarget target = WorkflowTarget{flow->id};
     std::span<const InputDescriptor> inputs = flow->interface.inputs;
     std::span<const PixelFormat> formats;

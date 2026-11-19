@@ -424,6 +424,7 @@ void RunPanel::select_history(int row)
         }
         if (retired_row && row < history_->count() - 1) { rebuild_history(); }
         refresh_run();
+        emit selected_run_changed();
     } catch (...) { show_refresh_failure(); }
 }
 
@@ -459,7 +460,8 @@ void RunPanel::refresh_run()
     }
     auto progress = std::get<RunProgress>(std::move(inspected));
     displayed_run_ = run->identity();
-    set_text(*status_, QStringLiteral("Status: %1").arg(status_text(progress.status)));
+    const bool queued = run->admission() == RunAdmission::Queued && progress.status == ExecutionStatus::Pending;
+    set_text(*status_, QStringLiteral("Status: %1").arg(queued ? QStringLiteral("Queued") : status_text(progress.status)));
     const bool pending = progress.status == ExecutionStatus::Pending || progress.status == ExecutionStatus::Running;
     set_text(*completion_, pending ? QStringLiteral("Logical completion: Pending") : QStringLiteral("Logical completion: Complete"));
     set_text(*cleanup_, progress.quiescent ? QStringLiteral("Cleanup: Quiescent") : QStringLiteral("Cleanup: Pending"));

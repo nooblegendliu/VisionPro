@@ -32,6 +32,7 @@ public:
     [[nodiscard]] std::span<const core::NodeId> entries() const noexcept;
     [[nodiscard]] const ValidationIndex& dependencies() const noexcept;
     [[nodiscard]] const PreparedTool* tool(const core::NodeId& node) const noexcept;
+    [[nodiscard]] std::span<const PreparedTool> tools() const noexcept;
     [[nodiscard]] core::Result<std::shared_ptr<core::ToolInstance>> create_instance(const core::NodeId& node) const;
 private:
     struct Storage;

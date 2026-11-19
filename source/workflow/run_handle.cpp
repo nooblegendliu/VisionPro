@@ -54,9 +54,9 @@ template<class T, class F> Result<T> boundary(const RunRequest& request, F&& act
 }
 } // namespace
 
-RunControl::RunControl(const RunRequest& request, core::WorkflowRunId run)
+RunControl::RunControl(const RunRequest& request, core::WorkflowRunId run, RunAdmission admission)
     : request_(request), identity_{request.snapshot().identity(),
-        std::visit([](const auto& target) { return target.workflow; }, request.target()), run} {}
+        std::visit([](const auto& target) { return target.workflow; }, request.target()), run}, admission_(admission) {}
 
 Result<RunHandle> RunHandle::from_accepted(std::shared_ptr<RunControl> control)
 {

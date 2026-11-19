@@ -6,10 +6,16 @@
 #include <map>
 #include <mutex>
 
+namespace visionpro::workflow { class ExecutionPlan; }
+
 namespace visionpro::workflow::detail {
 
 struct StateCell;
+struct StateGeneration;
 using RunStateCells = std::map<core::NodeId, std::shared_ptr<StateCell>>;
+using RunStateBindings = std::map<core::NodeId, std::shared_ptr<StateGeneration>>;
+[[nodiscard]] std::optional<std::uint64_t> serialized_state_generation(
+    const RunStateBindings& bindings, core::NodeId node) noexcept;
 
 class InvocationStateLease final : public core::ToolStateAccess {
 public:
@@ -38,28 +44,20 @@ private:
     bool settled_{false};
 };
 
-// The worker acquires state within its workflow slot. A reset is allowed only
-// while the scheduler holds the admission lock and the workflow has no slot.
+// Admission binds generations in publication order. Workers initialize only
+// reached nodes, against the exact generation retained by their request.
 class NodeStateService final {
 public:
+    [[nodiscard]] core::Result<RunStateBindings> bind(const ExecutionPlan& plan);
     [[nodiscard]] core::Result<std::shared_ptr<InvocationStateLease>> acquire(
-        const core::InvocationContext& context, const Node& node, bool isolated, core::ToolInstance& instance, RunStateCells& run_states);
+        const core::InvocationContext& context, core::ToolInstance& instance,
+        const RunStateBindings& bindings, RunStateCells& run_states);
     [[nodiscard]] core::Result<std::monostate> reset(core::WorkflowId workflow, core::NodeId node);
     void clear() noexcept;
 
 private:
-    struct StateVersion {
-        core::ToolExecutionConfiguration configuration;
-        std::vector<Binding> bindings;
-        std::uint64_t generation;
-        std::shared_ptr<StateCell> session;
-    };
-
-    [[nodiscard]] core::Result<std::shared_ptr<StateCell>> select(
-        const core::InvocationContext& context, const Node& node, bool isolated);
-
     std::mutex mutex_;
-    std::map<std::pair<core::WorkflowId, core::NodeId>, StateVersion> versions_;
+    std::map<std::pair<core::WorkflowId, core::NodeId>, std::shared_ptr<StateGeneration>> versions_;
     std::uint64_t last_generation_{0};
 };
 

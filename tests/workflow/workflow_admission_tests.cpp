@@ -289,7 +289,7 @@ void atomic_admission()
 
     const auto other = accepted(fixture.engine->submit(request(original, 7, '2')));
     check(other.identity().run.value() == active.identity().run.value() + 1, "Busy consumed a workflow run identity.");
-    deadline_expired(other, RunWaitTarget::Completion, ExecutionStatus::Pending);
+    check_output(other, quiescence(other), 5);
 
     fixture.edit_successor(100);
     const auto edited = fixture.capture(fixture.solution);
@@ -298,12 +298,12 @@ void atomic_admission()
     fixture.calls->cleanup.await(1, "The final tool must finish returning before its cleanup gate.");
     busy(fixture.engine->submit(rejected_input), active.identity());
     deadline_expired(active, RunWaitTarget::Quiescence);
-    check(fixture.calls->started == 2 && fixture.calls->cleaned == 1, "Another flow started before physical cleanup.");
+    check(fixture.calls->started == 3 && fixture.calls->cleaned == 2,
+        "Only the active workflow's last invocation should still own its cleanup slot.");
 
     fixture.calls->cleanup.open();
     const auto expected_first = winner == 0 ? 14 : 96;
     check_output(active, quiescence(active), expected_first);
-    check_output(other, quiescence(other), 5);
 
     auto incompatible = fixture.solution;
     ++incompatible.revision;
@@ -358,6 +358,7 @@ void dropped_handle()
 {
     Fixture fixture;
     const auto snapshot = fixture.capture(fixture.solution);
+    auto observation = take(fixture.engine->observe());
     const auto identity = [&] {
         const auto handle = accepted(fixture.engine->submit(request(snapshot, 41)));
         fixture.calls->begin.await(1, "Tool did not start before the client dropped its handle.");
@@ -368,6 +369,12 @@ void dropped_handle()
     fixture.calls->begin.open();
     fixture.calls->cleanup.open();
     check_output(next_flow, quiescence(next_flow), 12);
+    const auto deadline = std::chrono::steady_clock::now() + 5s;
+    for (;;) {
+        const auto observed = observation.wait(deadline);
+        check(observed.event.has_value(), "The run with the dropped handle did not finish cleanup.");
+        if (observed.event->run == identity && observed.event->kind == RunObservationKind::RunQuiescent) { break; }
+    }
     check(fixture.calls->created == 3 && fixture.calls->started == 3 && fixture.calls->cleaned == 3,
         "Dropping the last client handle must let both accepted flows finish.");
     const auto next = accepted(fixture.engine->submit(request(snapshot, 43)));

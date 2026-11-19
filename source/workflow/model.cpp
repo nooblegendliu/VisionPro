@@ -188,6 +188,7 @@ core::Result<Parents> validate_containment(const Workflow& workflow)
 Check validate_workflow_interface_shape(const Workflow& workflow, const Parents& parents)
 {
     if (!valid_name(workflow.name)) { return error(core::ErrorCode::InvalidModel, "Workflow names require nonempty UTF-8 without NUL."); }
+    if (auto checked = validate_workflow_admission(workflow.admission); failed(checked)) { return checked; }
     for (auto checked : {validate_public_interface(workflow.interface), mappings(workflow.interface, workflow.outputs),
         entry_check(workflow, parents, std::nullopt, workflow.entries), control_mappings(workflow.interface, workflow.control_exports)}) {
         if (failed(checked)) { return checked; }
@@ -321,6 +322,17 @@ Check validate_public_interface(const PublicInterface& interface)
         if (!controls.insert(output.id).second || !valid_name(output.display_name)) {
             return contextualize(error(core::ErrorCode::InvalidSchema, "Public control outlets require unique identities and valid names."));
         }
+    }
+    return std::monostate{};
+}
+
+Check validate_workflow_admission(const WorkflowAdmission& admission)
+{
+    if (admission.max_in_flight == 0) {
+        return error(core::ErrorCode::InvalidModel, "A workflow needs at least one in-flight slot.");
+    }
+    if (admission.overflow != AdmissionOverflow::Busy && admission.overflow != AdmissionOverflow::Reject) {
+        return error(core::ErrorCode::InvalidModel, "Unknown workflow admission overflow policy.");
     }
     return std::monostate{};
 }

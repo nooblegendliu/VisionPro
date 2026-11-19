@@ -75,6 +75,7 @@ ErrorCategory error_category(ErrorCode code) noexcept
     case ErrorCode::QueueConsumerConflict:
     case ErrorCode::InvalidRunHandle:
     case ErrorCode::ExecutionBoundaryFailure:
+    case ErrorCode::RunQueueFull:
         return ErrorCategory::Runtime;
     case ErrorCode::InvalidUtf8:
     case ErrorCode::TypeMismatch:
@@ -191,6 +192,7 @@ std::string_view error_code_name(ErrorCode code) noexcept
     case ErrorCode::QueueConsumerConflict: return "QueueConsumerConflict";
     case ErrorCode::InvalidRunHandle: return "InvalidRunHandle";
     case ErrorCode::ExecutionBoundaryFailure: return "ExecutionBoundaryFailure";
+    case ErrorCode::RunQueueFull: return "RunQueueFull";
     case ErrorCode::IdGenerationFailed: return "IdGenerationFailed";
     case ErrorCode::SolutionIoFailure: return "SolutionIoFailure";
     case ErrorCode::InvalidSolutionManifest: return "InvalidSolutionManifest";

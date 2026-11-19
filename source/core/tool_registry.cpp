@@ -67,7 +67,7 @@ bool same_contract(const ToolDescriptor& left, const ToolDescriptor& right)
         return same_target(a, b) && a.subscribable == b.subscribable && a.structural == b.structural;
     };
     const auto same_resource = [](const ResourceRequirement& a, const ResourceRequirement& b) {
-        return a.slot == b.slot && a.kind == b.kind && a.required == b.required;
+        return a.slot == b.slot && a.kind == b.kind && a.required == b.required && a.exclusive == b.exclusive;
     };
     return left.schema.complete == right.schema.complete
         && std::ranges::is_permutation(left.schema.required_capabilities, right.schema.required_capabilities)

@@ -2376,3 +2376,28 @@ $solution = (Resolve-Path 'samples/s6-shared/solution.json').Path
 ctest --test-dir out/build/s64-headless -C Release -R 'workflow\.(shared_data|correlation_join)|tools\.shared_data|app\.(shared_package|cli_shared_workflows)' --output-on-failure
 ctest --test-dir out/build/s64-gui -C Release -R 'visionpro_(inspector|shared_parity)_tests' --output-on-failure
 ```
+
+### 10.5 S6.5 多流程并行与有界重入
+
+2026-11-19 在 Windows x64 完成两套 Release 构建和全量 CTest。启用 Qt 和 OpenCV 的配置通过 **142/142** 项，关闭二者的配置通过 **113/113** 项。并行顺序和独占持有数由能控制同步调用和实际退出的测试工具测得。[并行验收测试](../tests/workflow/concurrency_tests.cpp)
+
+| 场景 | 已验证结果 |
+|---|---|
+| 跨流程并行与资源独占 | A 的同步调用停在屏障时，B 独立完成。另将 A、B 绑定到同一独占资源，A 逻辑完成后继续持有租约，B 等到实际退出才取得租约，峰值为 1。无关流程 C 可在等待期间完成。 |
+| 在途 1、等待 1 | 三个不同输入依次得到立即受理、排队和 `RunQueueFull`。排队轮次保持 Pending，可在第一轮仍被阻塞时单独取消，取消后可再次使用等待名额。容量为 2 的等待队列按进入顺序运行，满时也可配置返回 `RunBusy`。 |
+| 在途 2 与状态隔离 | 两轮输入 10、20 的逐轮状态各自产生 10、20，并保有各自的运行及调用身份。会话累计节点从 0 连续加 1 得到 1、2。改变初值后的新状态代次从 100 独立累计到 102，旧轮仍能在原代次完成。 |
+| 排队后的文件与配置 | 首轮和等待轮共用原快照。修改文件并发布另一目录的提供方后，原等待轮仍使用原参数和目录。SnapshotLocked 读到原字节，PerInvocation 读到原目录下更新后的字节，后续新轮读取新目录。 |
+| 桌面与既有流程 | Qt offscreen 验证桌面并发提交、定点取消、清理后晋升和换方案。另存、重开样例后，独立 CLI 复现两条流程的节点输出和循环作用域。S6.4 的宽高乱序样例仍依次交付 B=(20,2)、A=(10,1)。 |
+
+打开[并行与重入样例](../samples/s6-concurrency/solution.json)，选择「有界重入与每轮累计」。在流程画布的空白处取消节点选择，可在 **Properties → Workflow → Admission** 查看或修改在途上限、等待容量和满载响应。样例为 2 个在途和 1 个等待名额，两次循环之间间隔 2 秒。每次提交可以输入不同的 `delta`，流程结束时「读取本轮加数」输出相应输入。切换到「独立流程与会话累计」运行两次，可在同一桌面会话中看到 1、2。运行面板选中待取消的轮次后使用 **Run → Cancel Selected Run**。
+
+下列命令在仓库根目录执行，Release 配置参数沿用 [§3.28](#328-s55-release-构建与测试)。CLI 每次启动时建立一个新会话。保持同一会话的并发、排队与累计由桌面或下列 CTest 复现。
+
+```powershell
+$cli = 'out/build/s65-headless/source/app/visionpro_cli.exe'
+$solution = (Resolve-Path 'samples/s6-concurrency/solution.json').Path
+& $cli run --solution $solution --workflow '5ca4f87a-ea1e-4d62-89b0-000000006510' --input delta=7
+& $cli run --solution $solution --workflow '5ca4f87a-ea1e-4d62-89b0-000000006520'
+ctest --test-dir out/build/s65-headless -C Release -R 'workflow\.(parallel_dispatch|exclusive_resources|bounded_admission|reentrant_state|queued_file_snapshots|state_acceptance)|app\.cli_shared_workflows' --output-on-failure
+ctest --test-dir out/build/s65-gui -C Release -R 'visionpro_(run_lifecycle|inspector|concurrency_parity)_tests' --output-on-failure
+```

@@ -1,5 +1,6 @@
 #include "node_state_service.hpp"
 #include "runtime_values.hpp"
+#include <visionpro/workflow/execution_plan.hpp>
 
 #include <algorithm>
 #include <stdexcept>
@@ -55,16 +56,38 @@ bool same_configuration(const ToolExecutionConfiguration& previous, std::span<co
     };
     return std::ranges::is_permutation(previous.data().parameters, next.data().parameters, same_parameter)
         && std::ranges::is_permutation(previous.data().resources, next.data().resources, same_resource)
+        && previous.data().shared_targets == next.data().shared_targets
         && std::ranges::is_permutation(previous_bindings, next_bindings, same_binding);
 }
 } // namespace
 
 struct StateCell {
+    StateCell(const NodeStateDefinition& spec, const DataValue& start, NodeStateKey key, WorkflowId flow)
+        : definition(spec), initial(start), record{std::move(key), StateInitialization::NotInitialized, {}, {}}, workflow(flow) {}
     const NodeStateDefinition definition;
     const DataValue initial;
     NodeState record;
     const WorkflowId workflow;
+    std::once_flag initialize_once;
+    std::mutex mutex;
 };
+
+struct StateGeneration {
+    ToolExecutionConfiguration configuration;
+    std::vector<Binding> bindings;
+    std::uint64_t generation;
+    DataValue initial;
+    std::shared_ptr<StateCell> session;
+};
+
+std::optional<std::uint64_t> serialized_state_generation(const RunStateBindings& bindings, NodeId node) noexcept
+{
+    const auto found = bindings.find(node);
+    if (found == bindings.end()) { return {}; }
+    const auto& definition = *found->second->configuration.effective_state();
+    if (definition.concurrency != StateConcurrencyPolicy::Serialized || definition.scope == StateScope::Invocation) { return {}; }
+    return found->second->generation;
+}
 
 InvocationStateLease::InvocationStateLease(ToolInvocationIdentity identity, std::shared_ptr<StateCell> cell)
     : identity_(identity), key_(cell->record.key), cell_(std::move(cell))
@@ -76,6 +99,7 @@ Result<DataValue> InvocationStateLease::read() const
     if (access_ == Access::Closed) {
         return Diagnostic{ErrorCode::InvalidState, Severity::Error, {}, "Tool state access has expired."};
     }
+    const std::lock_guard cell_lock(cell_->mutex);
     return staged_ ? *staged_ : *cell_->record.current_value;
 }
 
@@ -89,6 +113,7 @@ Result<std::monostate> InvocationStateLease::write(const DataValue& value)
         return error(ErrorCode::TypeMismatch, cell_->workflow, key_.node, "State value must match the declared Schema.");
     }
     if (cell_->definition.mutation == StateMutationTiming::DuringComputation) {
+        const std::lock_guard cell_lock(cell_->mutex);
         cell_->record.current_value = value;
     } else {
         staged_ = value;
@@ -113,72 +138,83 @@ void InvocationStateLease::settle(bool succeeded) noexcept
 {
     const std::lock_guard lock(mutex_);
     if (settled_) { return; }
-    if (succeeded && staged_) { cell_->record.current_value = *staged_; }
+    if (succeeded && staged_) {
+        const std::lock_guard cell_lock(cell_->mutex);
+        cell_->record.current_value = *staged_;
+    }
     staged_.reset();
     settled_ = true;
     if (access_ == Access::Closed) { cell_.reset(); }
     else { access_ = Access::Sealed; }
 }
 
-Result<std::shared_ptr<StateCell>> NodeStateService::select(
-    const InvocationContext& context, const Node& node, bool isolated)
+Result<RunStateBindings> NodeStateService::bind(const ExecutionPlan& plan)
 {
-    const auto& configuration = context.data().configuration;
-    const auto& data = configuration.data();
-    const auto& definition = configuration.effective_state();
-    const auto key = std::pair{data.workflow, data.node};
+    const bool isolated = plan.request().debug_state() == DebugStatePolicy::Isolated;
+    const auto& solution = plan.request().snapshot().solution();
     const std::lock_guard lock(mutex_);
-    if (!definition) {
-        if (!isolated) { versions_.erase(key); }
-        return std::shared_ptr<StateCell>{};
+    // Stage the new catalog. A failed or rejected request cannot partially
+    // replace live generations, and admitted older requests retain their cells.
+    auto updated = isolated ? decltype(versions_){} : versions_;
+    auto last = last_generation_;
+    RunStateBindings bindings;
+    for (const auto& tool : plan.tools()) {
+        const auto& configuration = tool.configuration();
+        const auto& data = configuration.data();
+        const auto& spec = configuration.effective_state();
+        const auto key = std::pair{data.workflow, data.node};
+        if (!spec) {
+            updated.erase(key);
+            continue;
+        }
+        const auto& node = *find_node(*find_workflow(solution, data.workflow), data.node);
+        const bool strict = spec->compatibility == StateCompatibilityPolicy::AlwaysNewGeneration;
+        const auto existing = updated.find(key);
+        if (existing != updated.end() && same_specification(existing->second->configuration, configuration)
+            && (!strict || same_configuration(existing->second->configuration, existing->second->bindings, configuration, node.bindings))) {
+            bindings.emplace(data.node, existing->second);
+            continue;
+        }
+        auto initial = materialize_config_value(spec->initial_value);
+        if (const auto* bad = std::get_if<Diagnostic>(&initial)) { return *bad; }
+        const auto next = last ? next_state_generation(last) : Result<std::uint64_t>{std::uint64_t{1}};
+        if (const auto* bad = std::get_if<Diagnostic>(&next)) { return *bad; }
+        last = std::get<std::uint64_t>(next);
+        auto version = std::make_shared<StateGeneration>(StateGeneration{configuration,
+            strict ? node.bindings : std::vector<Binding>{}, last, std::get<DataValue>(std::move(initial)), {}});
+        if (spec->scope == StateScope::SolutionSession) {
+            version->session = std::make_shared<StateCell>(*spec, version->initial,
+                NodeStateKey{data.node, last, SessionStateDomain{data.session}}, data.workflow);
+        }
+        bindings.emplace(data.node, version);
+        updated.insert_or_assign(key, std::move(version));
     }
-    const bool compare_bindings = definition->compatibility == StateCompatibilityPolicy::AlwaysNewGeneration;
-    const auto found = isolated ? versions_.end() : versions_.find(key);
-    const bool compatible = found != versions_.end() && same_specification(found->second.configuration, configuration)
-        && (!compare_bindings || same_configuration(found->second.configuration, found->second.bindings,
-            configuration, node.bindings));
-    if (compatible && found->second.session) { return found->second.session; }
-
-    auto materialized = materialize_config_value(definition->initial_value);
-    if (const auto* failure = std::get_if<Diagnostic>(&materialized)) { return *failure; }
-    if (!compatible) {
-        const auto next = last_generation_ == 0 ? Result<std::uint64_t>{std::uint64_t{1}} : next_state_generation(last_generation_);
-        if (const auto* failure = std::get_if<Diagnostic>(&next)) { return *failure; }
-        last_generation_ = std::get<std::uint64_t>(next);
-    }
-    const auto generation = compatible ? found->second.generation : last_generation_;
-    auto cell = std::make_shared<StateCell>(StateCell{*definition, std::get<DataValue>(std::move(materialized)),
-        {{data.node, generation, domain(definition->scope, context.data().identity)},
-            StateInitialization::NotInitialized, {}, {}}, data.workflow});
-    if (!isolated && !compatible) {
-        versions_.insert_or_assign(key, StateVersion{configuration, compare_bindings ? node.bindings : std::vector<Binding>{},
-            generation, definition->scope == StateScope::SolutionSession ? cell : nullptr});
-    }
-    return cell;
+    if (!isolated) { versions_.swap(updated); }
+    last_generation_ = last;
+    return bindings;
 }
 
 Result<std::shared_ptr<InvocationStateLease>> NodeStateService::acquire(const InvocationContext& context,
-    const Node& node, bool isolated, ToolInstance& instance, RunStateCells& run_states)
+    ToolInstance& instance, const RunStateBindings& bindings, RunStateCells& run_states)
 {
-    const auto& definition = context.data().configuration.effective_state();
-    // Isolated Group debug owns a private session state for the lifetime of this request.
-    const bool per_run = definition && (definition->scope == StateScope::WorkflowRun
-        || (isolated && definition->scope == StateScope::SolutionSession));
-    const auto found = run_states.find(node.id);
-    std::shared_ptr<StateCell> cell;
-    if (per_run && found != run_states.end()) {
-        cell = found->second;
-    } else {
-        auto selected = select(context, node, isolated);
-        if (const auto* failure = std::get_if<Diagnostic>(&selected)) { return *failure; }
-        cell = std::get<std::shared_ptr<StateCell>>(std::move(selected));
-        if (per_run) { run_states.emplace(node.id, cell); }
+    const auto& data = context.data();
+    const auto& definition = data.configuration.effective_state();
+    if (!definition) { return std::shared_ptr<InvocationStateLease>{}; }
+    const auto& configured = data.configuration.data();
+    const auto& version = *bindings.at(configured.node);
+    auto cell = version.session;
+    if (!cell) {
+        const auto cached = run_states.find(configured.node);
+        if (cached != run_states.end()) {
+            cell = cached->second;
+        } else {
+            cell = std::make_shared<StateCell>(*definition, version.initial, NodeStateKey{configured.node,
+                version.generation, domain(definition->scope, data.identity)}, configured.workflow);
+            if (definition->scope == StateScope::WorkflowRun) { run_states.emplace(configured.node, cell); }
+        }
     }
-    if (!cell) { return std::shared_ptr<InvocationStateLease>{}; }
     auto& record = cell->record;
-    if (record.initialization == StateInitialization::NotInitialized) {
-        // The workflow slot prevents another invocation or reset from using
-        // this cell while Init runs. No repository lock crosses tool code.
+    std::call_once(cell->initialize_once, [&] {
         auto initialized = initialize_tool_state(instance, context, cell->initial);
         if (auto* failure = std::get_if<Diagnostic>(&initialized)) {
             record.initialization_error = std::move(*failure);
@@ -187,19 +223,20 @@ Result<std::shared_ptr<InvocationStateLease>> NodeStateService::acquire(const In
             record.current_value = std::get<DataValue>(std::move(initialized));
             record.initialization = StateInitialization::Ready;
         }
-    }
+    });
     if (record.initialization_error) { return *record.initialization_error; }
-    return std::make_shared<InvocationStateLease>(context.data().identity, std::move(cell));
+    return std::make_shared<InvocationStateLease>(data.identity, std::move(cell));
 }
 
 Result<std::monostate> NodeStateService::reset(WorkflowId workflow, NodeId node)
 {
     const std::lock_guard lock(mutex_);
     const auto found = versions_.find({workflow, node});
-    if (found == versions_.end() || !found->second.session) {
+    if (found == versions_.end() || !found->second->session) {
         return error(ErrorCode::InvalidState, workflow, node, "The node has no initialized session state.");
     }
-    auto& cell = *found->second.session;
+    auto& cell = *found->second->session;
+    const std::lock_guard cell_lock(cell.mutex);
     if (cell.definition.reset != StateResetPolicy::DomainStartAndExplicit) {
         return error(ErrorCode::MissingCapability, workflow, node, "The node does not allow explicit state reset.");
     }

@@ -140,6 +140,7 @@ const RunRequest& ExecutionPlan::request() const noexcept { return storage_->req
 const ExecutionCapabilities& ExecutionPlan::capabilities() const noexcept { return storage_->capabilities; }
 std::span<const core::NodeId> ExecutionPlan::entries() const noexcept { return storage_->entries; }
 const ValidationIndex& ExecutionPlan::dependencies() const noexcept { return *storage_->index; }
+std::span<const PreparedTool> ExecutionPlan::tools() const noexcept { return storage_->tools; }
 
 const PreparedTool* ExecutionPlan::tool(const core::NodeId& node) const noexcept
 {

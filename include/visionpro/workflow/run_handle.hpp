@@ -8,6 +8,7 @@ namespace visionpro::workflow {
 enum class RunWaitTarget { Completion, Quiescence };
 enum class RunWaitOutcome { Satisfied, DeadlineExpired };
 enum class RunCancelDisposition { Requested, AlreadyRequested, AlreadyCompleted };
+enum class RunAdmission { Immediate, Queued };
 
 enum class NodeSkipReason { Disabled, UpstreamClosed, FailFast, RunCancelled, RunTimedOut, NotSelected };
 struct RunBindingTrace {
@@ -86,6 +87,7 @@ public:
     RunControl& operator=(const RunControl&) = delete;
     [[nodiscard]] const RunRequest& request() const noexcept { return request_; }
     [[nodiscard]] const RunIdentity& identity() const noexcept { return identity_; }
+    [[nodiscard]] RunAdmission admission() const noexcept { return admission_; }
     [[nodiscard]] virtual core::Result<RunProgress> inspect() const = 0;
     [[nodiscard]] virtual core::Result<RunWaitResult> wait(RunWaitTarget target,
         std::chrono::steady_clock::time_point deadline) = 0;
@@ -93,10 +95,11 @@ public:
     [[nodiscard]] virtual core::Result<std::optional<NodeResult>> lookup(
         const core::InvocationKey& invocation) const = 0;
 protected:
-    RunControl(const RunRequest& request, core::WorkflowRunId run);
+    RunControl(const RunRequest& request, core::WorkflowRunId run, RunAdmission admission = RunAdmission::Immediate);
 private:
     const RunRequest request_;
     const RunIdentity identity_;
+    const RunAdmission admission_;
 };
 
 // Copyable accepted-run view. Destruction neither blocks nor implicitly cancels.
@@ -112,6 +115,8 @@ public:
     [[nodiscard]] static core::Result<RunHandle> from_accepted(std::shared_ptr<RunControl> control);
     [[nodiscard]] const RunRequest& request() const noexcept { return control_->request(); }
     [[nodiscard]] const RunIdentity& identity() const noexcept { return control_->identity(); }
+    // Records whether this request initially occupied a slot or entered the workflow FIFO.
+    [[nodiscard]] RunAdmission admission() const noexcept { return control_->admission(); }
     [[nodiscard]] core::Result<RunProgress> inspect() const;
     [[nodiscard]] core::Result<RunWaitResult> wait(RunWaitTarget target,
         std::chrono::steady_clock::time_point deadline) const;

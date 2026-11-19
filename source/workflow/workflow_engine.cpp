@@ -11,6 +11,7 @@
 #include "observation_hub.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <condition_variable>
 #include <list>
 #include <map>
@@ -144,6 +145,7 @@ public:
     // The scheduler calls these with the event mutex held.
     bool ready() const noexcept { return ready_; }
     void clear() noexcept { ready_ = false; }
+    void schedule() noexcept { ready_ = true; }
 private:
     std::weak_ptr<SchedulerEvents> events_;
     std::map<ToolInvocationIdentity, bool> pending_;
@@ -160,8 +162,8 @@ struct GroupExports {
 class EngineRun final : public RunControl {
 public:
     EngineRun(const RunRequest& request, WorkflowRunId id, detail::ControlSchedule schedule,
-        const std::shared_ptr<SchedulerEvents>& events, const std::shared_ptr<detail::ObservationHub>& observers)
-        : RunControl(request, id), wakeup_(std::make_shared<RunWakeup>(events)), observers_(observers),
+        const std::shared_ptr<SchedulerEvents>& events, const std::shared_ptr<detail::ObservationHub>& observers, RunAdmission admission)
+        : RunControl(request, id, admission), wakeup_(std::make_shared<RunWakeup>(events)), observers_(observers),
           schedule_(std::move(schedule)),
           remaining_(schedule_.nodes().size()), eligible_(remaining_), results_(identity().snapshot.session)
     {
@@ -649,7 +651,85 @@ Result<NodeResult> failed_call(const RunRequest& request, const PreparedInvocati
     return terminal_record(invocation, ToolCompletionStatus::Failed, {call_failure(std::move(diagnostic), request, node)});
 }
 
+// Tickets are ordered only against earlier conflicting uses. A multi-resource
+// request holds all its claims or none, including its serialized state domain.
+class CallArbiter {
+    using StateKey = std::pair<std::uint64_t, std::optional<WorkflowRunId>>;
+    using Key = std::variant<ResourceId, StateKey>;
+    using Claims = std::map<Key, bool>; // true for exclusive access.
+public:
+    class Ticket {
+        friend class CallArbiter;
+    public:
+        ~Ticket() { if (owner_) { owner_->release(*this); } }
+        bool granted() const noexcept { return granted_.load(); }
+        Ticket(const Ticket&) = delete;
+        Ticket& operator=(const Ticket&) = delete;
+    private:
+        Ticket(Claims claims, std::shared_ptr<RunWakeup> wakeup) : claims_(std::move(claims)), wakeup_(std::move(wakeup)) {}
+        CallArbiter* owner_{};
+        Claims claims_;
+        std::shared_ptr<RunWakeup> wakeup_;
+        std::atomic<bool> granted_{false};
+    };
+
+    std::shared_ptr<Ticket> request(const ToolExecutionConfiguration& configuration, const detail::RunStateBindings& states,
+        WorkflowRunId run, const std::shared_ptr<RunWakeup>& wakeup)
+    {
+        const auto& fixed = configuration.data();
+        Claims claims;
+        for (const auto& binding : fixed.resources) {
+            const auto& slot = *std::ranges::find(fixed.tool.resources, binding.slot, &ResourceRequirement::slot);
+            auto& exclusive = claims[binding.resource.id];
+            exclusive |= slot.exclusive || slot.kind == ResourceKind::Device;
+        }
+        if (const auto generation = detail::serialized_state_generation(states, fixed.node)) {
+            claims.emplace(StateKey{*generation, configuration.effective_state()->scope == StateScope::WorkflowRun
+                ? std::optional{run} : std::nullopt}, true);
+        }
+        if (claims.empty()) { return {}; }
+
+        auto ticket = std::shared_ptr<Ticket>(new Ticket(std::move(claims), wakeup));
+        const std::lock_guard lock(mutex_);
+        const auto entry = requests_.insert(requests_.end(), ticket.get());
+        ticket->owner_ = this;
+        ticket->granted_ = available(entry);
+        return ticket;
+    }
+private:
+    using Requests = std::list<Ticket*>;
+    bool available(Requests::const_iterator current) const
+    {
+        const auto& claims = (*current)->claims_;
+        for (auto it = requests_.begin(); it != current; ++it) {
+            for (const auto& [key, exclusive] : (*it)->claims_) {
+                const auto other = claims.find(key);
+                if (other != claims.end() && (exclusive || other->second)) { return false; }
+            }
+        }
+        return true;
+    }
+
+    void release(Ticket& ticket) noexcept
+    {
+        const std::lock_guard lock(mutex_);
+        requests_.remove(&ticket);
+        for (auto it = requests_.begin(); it != requests_.end(); ++it) {
+            if (!(*it)->granted_ && available(it)) {
+                (*it)->granted_ = true;
+                // Publication takes only the scheduler event lock. The scheduler
+                // never enters this arbiter while holding that lock.
+                (*it)->wakeup_->request();
+            }
+        }
+    }
+    std::mutex mutex_;
+    Requests requests_;
+};
+
 struct ActiveCall {
+    // Destroy after the operation, tool state lease and prepared resource leases.
+    std::shared_ptr<CallArbiter::Ticket> access;
     PreparedInvocation invocation;
     std::shared_ptr<detail::InvocationStateLease> state{};
     std::optional<InvocationOperation> operation{};
@@ -695,6 +775,8 @@ struct Work {
     std::optional<std::chrono::steady_clock::time_point> timer;
     std::vector<std::optional<InvocationId>> issued;
     std::map<std::size_t, ActiveCall> active_calls;
+    std::map<std::size_t, std::shared_ptr<CallArbiter::Ticket>> waiting_access;
+    detail::RunStateBindings state_bindings;
     detail::RunStateCells run_states;
 };
 
@@ -749,13 +831,11 @@ void settle_notified(Work& work)
 }
 
 Result<InvocationOperation> launch_call(ActiveCall& call, std::shared_ptr<ToolInstance> instance,
-    const RunRequest& request, detail::NodeStateService& states, Work& work)
+    detail::NodeStateService& states, Work& work)
 {
     auto& invocation = call.invocation;
     const auto& configuration = invocation.context.data().configuration.data();
-    const auto& flow = *find_workflow(invocation.snapshot.solution(), configuration.workflow);
-    const auto& node = *find_node(flow, configuration.node);
-    auto acquired = states.acquire(invocation.context, node, request.debug_state() == DebugStatePolicy::Isolated, *instance, work.run_states);
+    auto acquired = states.acquire(invocation.context, *instance, work.state_bindings, work.run_states);
     if (auto* failure = std::get_if<Diagnostic>(&acquired)) { return std::move(*failure); }
     call.state = std::get<std::shared_ptr<detail::InvocationStateLease>>(std::move(acquired));
     if (call.state || configuration.tool.shared_target || configuration.tool.requires_correlation_join) {
@@ -958,7 +1038,7 @@ bool advance_loops(Work& work)
     return changed;
 }
 
-void start_node(Work& work, std::size_t index, detail::NodeStateService& states)
+void start_node(Work& work, std::size_t index, detail::NodeStateService& states, CallArbiter& arbitration)
 {
     auto& run = *work.run;
     const auto& request = work.plan.request();
@@ -982,9 +1062,16 @@ void start_node(Work& work, std::size_t index, detail::NodeStateService& states)
         return;
     }
     const auto& tool = *prepared_tool;
-    auto* resources = work.resources.get();
-    auto prepared = resources ? tool.prepare(context, attempt, run.results_for_binding(), *resources)
-                              : tool.prepare(context, attempt, run.results_for_binding());
+    auto waiting = work.waiting_access.extract(index);
+    auto access = waiting.empty() ? std::shared_ptr<CallArbiter::Ticket>{} : std::move(waiting.mapped());
+    auto prepared = tool.prepare_when_available(context, attempt, run.results_for_binding(), work.resources.get(), [&] {
+        if (!access) { access = arbitration.request(tool.configuration(), work.state_bindings, run.identity().run, run.wakeup()); }
+        return !access || access->granted();
+    });
+    if (std::holds_alternative<WaitingForAccess>(prepared)) {
+        work.waiting_access.emplace(index, std::move(access));
+        return;
+    }
     auto trace = trace_bindings(prepared);
     if (std::holds_alternative<PendingInvocation>(prepared)) {
         run.wait_for_data(index, std::move(trace));
@@ -1001,7 +1088,7 @@ void start_node(Work& work, std::size_t index, detail::NodeStateService& states)
         run.preparation_failed(index, std::move(*failure), std::move(trace));
         return;
     }
-    const auto [entry, inserted] = work.active_calls.emplace(index, ActiveCall{std::move(*invocation)});
+    const auto [entry, inserted] = work.active_calls.emplace(index, ActiveCall{access, std::move(*invocation)});
     if (!inserted) { throw std::logic_error("The node already owns an active invocation."); }
     auto& call = entry->second;
     const auto identity = call.invocation.context.data().identity;
@@ -1012,7 +1099,7 @@ void start_node(Work& work, std::size_t index, detail::NodeStateService& states)
         work.active_calls.erase(entry);
         return;
     }
-    auto started = launch_call(call, std::get<std::shared_ptr<ToolInstance>>(std::move(created)), request, states, work);
+    auto started = launch_call(call, std::get<std::shared_ptr<ToolInstance>>(std::move(created)), states, work);
     if (auto* failure = std::get_if<Diagnostic>(&started)) {
         auto result = failed_call(request, call.invocation, std::move(*failure));
         static_cast<void>(run.accept_completion(index, call.invocation, call.state.get(), std::move(result)));
@@ -1034,20 +1121,27 @@ void start_node(Work& work, std::size_t index, detail::NodeStateService& states)
     }
 }
 
-WorkStep execute_step(Work& work, detail::NodeStateService& states)
+WorkStep execute_step(Work& work, detail::NodeStateService& states, CallArbiter& arbitration)
 {
     auto& run = *work.run;
     run.begin_step();
     settle_notified(work);
     const bool group_progress = finish_groups(work);
     const bool loop_progress = advance_loops(work);
-    const auto ready = run.take_ready();
-    if (ready) { start_node(work, *ready, states); }
-    if (((!work.loops.empty() || !work.groups.empty()) && !run.stopping() && (ready || loop_progress || group_progress)) || run.has_ready() || (run.stopping() && std::ranges::any_of(work.active_calls,
+    const auto granted = [](const auto& entry) { return entry.second->granted(); };
+    std::optional<std::size_t> ready;
+    if (run.can_continue()) {
+        const auto retry = std::ranges::find_if(work.waiting_access, granted);
+        ready = retry != work.waiting_access.end() ? std::optional{retry->first} : run.take_ready();
+        if (ready) { start_node(work, *ready, states, arbitration); }
+    }
+    if (run.stopping()) { work.waiting_access.clear(); }
+    if (std::ranges::any_of(work.waiting_access, granted)
+        || ((!work.loops.empty() || !work.groups.empty()) && !run.stopping() && (ready || loop_progress || group_progress)) || run.has_ready() || (run.stopping() && std::ranges::any_of(work.active_calls,
         [](const auto& entry) { return entry.second.decision == CallDecision::Waiting; }))) {
         return WorkStep::Ready;
     }
-    if (!work.active_calls.empty() || (!run.stopping() && work.timer)) { return WorkStep::Parked; }
+    if (!work.active_calls.empty() || !work.waiting_access.empty() || (!run.stopping() && work.timer)) { return WorkStep::Parked; }
     if (!run.finished()) { run.blocked(); }
     return WorkStep::Finished;
 }
@@ -1071,8 +1165,7 @@ struct WorkflowEngine::Impl {
         WorkflowEngineOptions options)
         : session(id), registry(tools), default_resources(std::move(provider)),
           default_capabilities(profile(default_resources.get())),
-          history(options.completed_run_limit),
-          worker([this] { work_loop(); }) {}
+          history(options.completed_run_limit) {}
 
     ~Impl() { static_cast<void>(close()); }
 
@@ -1086,12 +1179,24 @@ struct WorkflowEngine::Impl {
             if (!stopping) {
                 stopping = true;
                 if (services) { services->data->stop_waits(); }
-                for (const auto& work : admitted) { work->services->data->stop_waits(); }
+                for (const auto& entry : admitted) {
+                    if (entry.work) { entry.work->services->data->stop_waits(); }
+                }
                 observers->close();
-                events->changed.notify_one();
+                events->changed.notify_all();
             }
         }
-        std::call_once(joined, [this] { worker.join(); });
+        std::call_once(joined, [this] {
+            for (auto& worker : workers) { worker.join(); }
+            states.clear();
+            std::vector<std::shared_ptr<EngineRun>> retained;
+            std::shared_ptr<InvocationResourceProvider> released;
+            {
+                const std::lock_guard lock(events->mutex);
+                retained.swap(history);
+                released.swap(default_resources);
+            }
+        });
         return std::monostate{};
     }
 
@@ -1175,23 +1280,48 @@ struct WorkflowEngine::Impl {
             const auto next = last_admitted ? RuntimeIdFactory::next(*last_admitted)
                                             : RuntimeIdFactory::from_value<WorkflowRunId>(1);
             if (const auto* failure = std::get_if<Diagnostic>(&next)) { return RunRejected{*failure}; }
+            const auto policy = find_workflow(request.snapshot().solution(), workflow)->admission;
+            const auto current = slots.find(workflow);
+            const auto occupied = current == slots.end() ? WorkflowSlots{} : current->second;
+            const auto free = free_slots(occupied, policy);
+            const auto ahead = occupied.waiting - occupied.cleaning;
+            const auto admission = ahead < free ? RunAdmission::Immediate : RunAdmission::Queued;
             auto run = std::make_shared<EngineRun>(request, std::get<WorkflowRunId>(next),
-                std::move(prepared.schedule), events, observers);
+                std::move(prepared.schedule), events, observers, admission);
             auto handle = RunHandle::from_accepted(run);
             if (auto* failure = std::get_if<Diagnostic>(&handle)) { return RunRejected{std::move(*failure)}; }
             auto accepted = std::get<RunHandle>(std::move(handle));
 
-            auto work = std::make_unique<Work>(prepared.plan, run, prepared.resources, prepared.run_services);
-            const auto slot = active.emplace(workflow, run).first;
+            WorkList staged;
+            staged.push_back({run, std::make_unique<Work>(prepared.plan, run, prepared.resources, prepared.run_services)});
+            // Synchronous tool calls may block. Keep one worker per occupied
+            // slot, plus a worker able to retire cancelled FIFO entries.
+            const auto promoted = std::min(free, ahead + 1);
+            const auto needed = total_in_flight + promoted + cleaning_waiters
+                + (admission == RunAdmission::Queued || any_waiting() ? 1 : 0);
+            while (workers.size() < needed) { workers.emplace_back([this] { work_loop(); }); }
+            auto [slot, inserted] = slots.try_emplace(workflow);
             try {
-                admitted.push_back(std::move(work));
+                auto bound = states.bind(prepared.plan);
+                if (auto* failure = std::get_if<Diagnostic>(&bound)) {
+                    if (inserted) { slots.erase(slot); }
+                    return RunRejected{std::move(*failure)};
+                }
+                staged.back().work->state_bindings = std::get<detail::RunStateBindings>(std::move(bound));
             } catch (...) {
-                active.erase(slot);
+                if (inserted) { slots.erase(slot); }
                 throw;
             }
+            // Before promotion, the only event a queued run can receive is
+            // cancellation. Clear its initial scheduling flag to distinguish it.
+            run->wakeup()->clear();
+            admitted.splice(admitted.end(), staged);
+            slot->second.policy = policy;
+            ++slot->second.waiting;
+            promote(workflow, slot->second);
             last_admitted = run->identity().run;
             services = prepared.candidate_services;
-            events->changed.notify_one();
+            events->changed.notify_all();
             return accepted;
         } catch (...) {
             return RunRejected{error(ErrorCode::ExecutionBoundaryFailure, "Workflow admission raised an unexpected exception.", request)};
@@ -1201,7 +1331,7 @@ struct WorkflowEngine::Impl {
     Result<std::monostate> reset_node_state(const NodeTarget& target)
     {
         const std::lock_guard lock(events->mutex);
-        if (stopping || active.contains(target.workflow)) {
+        if (stopping || slots.contains(target.workflow)) {
             DiagnosticLocation location;
             location.workflow = target.workflow;
             location.node = target.node;
@@ -1221,11 +1351,11 @@ struct WorkflowEngine::Impl {
         std::shared_ptr<EngineRun> backend;
         {
             const std::lock_guard lock(events->mutex);
-            const auto in_flight = std::ranges::find_if(active, [&](const auto& slot) {
-                return slot.second->identity().run == run.run;
+            const auto in_flight = std::ranges::find_if(admitted, [&](const auto& entry) {
+                return entry.run->identity().run == run.run;
             });
-            if (in_flight != active.end()) {
-                backend = in_flight->second;
+            if (in_flight != admitted.end()) {
+                backend = in_flight->run;
             } else if (const auto retained = std::ranges::find_if(history, [&](const auto& item) {
                 return item && item->identity().run == run.run;
             }); retained != history.end()) {
@@ -1267,7 +1397,37 @@ struct WorkflowEngine::Impl {
     }
 
 private:
-    using WorkList = std::list<std::unique_ptr<Work>>;
+    struct Entry {
+        std::shared_ptr<EngineRun> run;
+        std::unique_ptr<Work> work;
+        bool has_slot{};
+        bool executing{};
+    };
+    using WorkList = std::list<Entry>;
+    struct WorkflowSlots {
+        WorkflowAdmission policy;
+        std::size_t in_flight{};
+        std::size_t waiting{};
+        std::size_t cleaning{}; // Cancelled FIFO entries still releasing their prepared work.
+    };
+    static std::size_t free_slots(const WorkflowSlots& slots, const WorkflowAdmission& policy)
+    { return policy.max_in_flight - std::min<std::size_t>(policy.max_in_flight, slots.in_flight); }
+
+    bool any_waiting() const
+    { return std::ranges::any_of(slots, [](const auto& item) { return item.second.waiting > item.second.cleaning; }); }
+
+    void promote(WorkflowId workflow, WorkflowSlots& flow)
+    {
+        for (auto& entry : admitted) {
+            if (!flow.waiting || !free_slots(flow, flow.policy)) { break; }
+            if (entry.has_slot || entry.executing || entry.run->identity().workflow != workflow) { continue; }
+            entry.has_slot = true;
+            entry.run->wakeup()->schedule();
+            --flow.waiting;
+            ++flow.in_flight;
+            ++total_in_flight;
+        }
+    }
 
     static ExecutionCapabilities profile(const InvocationResourceProvider* provider)
     {
@@ -1291,8 +1451,21 @@ private:
         if (stopping) {
             return RunRejected{error(ErrorCode::InvalidRunRequest, "The workflow engine is draining accepted work.", request)};
         }
-        const auto slot = active.find(workflow);
-        if (slot != active.end()) { return RunBusy{slot->second->identity()}; }
+        const auto slot = slots.find(workflow);
+        if (slot != slots.end()) {
+            const auto& flow = slot->second;
+            const auto& policy = find_workflow(request.snapshot().solution(), workflow)->admission;
+            const auto free = free_slots(flow, policy);
+            if (flow.waiting - flow.cleaning >= free && flow.waiting - free >= policy.queue_capacity) {
+                if (policy.overflow == AdmissionOverflow::Reject) {
+                    return RunRejected{error(ErrorCode::RunQueueFull, "Workflow in-flight slots and waiting queue are full.", request)};
+                }
+                const auto first = std::ranges::find_if(admitted, [&](const Entry& entry) {
+                    return entry.has_slot && entry.run->identity().workflow == workflow;
+                });
+                return RunBusy{first->run->identity()};
+            }
+        }
         return std::nullopt;
     }
 
@@ -1301,17 +1474,25 @@ private:
         std::unique_lock lock(events->mutex);
         for (;;) {
             const auto now = std::chrono::steady_clock::now();
-            auto next = std::ranges::find_if(admitted, [&](const auto& work) {
-                return work->run->wakeup()->ready() || (work->timer && *work->timer <= now);
-            });
-            if (next != admitted.end()) {
-                (*next)->run->wakeup()->clear();
-                return next;
-            }
             if (stopping && admitted.empty()) { return std::nullopt; }
             std::optional<std::chrono::steady_clock::time_point> deadline;
-            for (const auto& work : admitted) {
-                if (work->timer && (!deadline || *work->timer < *deadline)) { deadline = work->timer; }
+            for (auto entry = admitted.begin(); entry != admitted.end(); ++entry) {
+                if (entry->executing) { continue; }
+                const auto timer = entry->work->timer;
+                if (entry->run->wakeup()->ready() || (timer && *timer <= now)) {
+                    // A cancelled waiter has no runtime slot, but destruction
+                    // of its captured provider may block. Reserve the workers
+                    // needed to keep occupied slots independently runnable.
+                    if (!entry->has_slot) {
+                        if (total_in_flight + cleaning_waiters >= workers.size()) { continue; }
+                        ++slots.at(entry->run->identity().workflow).cleaning;
+                        ++cleaning_waiters;
+                    }
+                    entry->executing = true;
+                    entry->run->wakeup()->clear();
+                    return entry;
+                }
+                if (timer && (!deadline || *timer < *deadline)) { deadline = timer; }
             }
             if (deadline) { events->changed.wait_until(lock, *deadline); }
             else { events->changed.wait(lock); }
@@ -1320,12 +1501,11 @@ private:
 
     void retire(WorkList::iterator entry)
     {
-        const auto run = (*entry)->run;
+        const auto run = entry->run;
         std::unique_ptr<Work> finished;
         {
             const std::lock_guard lock(events->mutex);
-            finished = std::move(*entry);
-            admitted.erase(entry);
+            finished = std::move(entry->work);
         }
         finished.reset(); // Destruction and backend cleanup stay outside scheduler locks.
         std::shared_ptr<EngineRun> evicted;
@@ -1335,8 +1515,19 @@ private:
                 evicted = std::exchange(history[history_cursor], run);
                 if (++history_cursor == history.size()) { history_cursor = 0; }
             }
-            active.erase(run->identity().workflow);
+            const auto workflow = run->identity().workflow;
+            auto slot = slots.find(workflow);
+            if (entry->has_slot) { --slot->second.in_flight; --total_in_flight; }
+            else {
+                --slot->second.waiting;
+                --slot->second.cleaning;
+                --cleaning_waiters;
+            }
+            admitted.erase(entry);
+            promote(workflow, slot->second);
+            if (!slot->second.in_flight && !slot->second.waiting) { slots.erase(slot); }
             run->mark_quiescent();
+            events->changed.notify_all();
         }
     }
 
@@ -1345,9 +1536,9 @@ private:
         worker_engine = this;
         while (const auto ready = take_ready()) {
             const auto entry = *ready;
-            auto& work = **entry;
+            auto& work = *entry->work;
             auto next = WorkStep::Finished;
-            try { next = execute_step(work, states); }
+            try { next = execute_step(work, states, arbitration); }
             catch (...) {
                 work.run->unexpected_failure();
                 if (!work.active_calls.empty()) {
@@ -1361,15 +1552,14 @@ private:
                 }
             }
             if (next == WorkStep::Finished) { retire(entry); }
-            else if (next == WorkStep::Ready) { work.run->wakeup()->request(); }
-        }
-        states.clear();
-        std::shared_ptr<InvocationResourceProvider> released;
-        std::vector<std::shared_ptr<EngineRun>> retained;
-        {
-            const std::lock_guard lock(events->mutex);
-            retained.swap(history);
-            released.swap(default_resources);
+            else {
+                const std::lock_guard lock(events->mutex);
+                entry->executing = false;
+                if (next == WorkStep::Ready) { entry->run->wakeup()->schedule(); }
+                // A completion notification may have arrived while this
+                // entry was running; recheck newly available work and timers.
+                events->changed.notify_all();
+            }
         }
     }
 
@@ -1380,13 +1570,16 @@ private:
     const std::shared_ptr<detail::ObservationHub> observers{std::make_shared<detail::ObservationHub>()};
     bool stopping{false};
     std::optional<WorkflowRunId> last_admitted;
-    std::map<WorkflowId, std::shared_ptr<EngineRun>> active;
+    std::map<WorkflowId, WorkflowSlots> slots;
+    std::size_t total_in_flight{};
+    std::size_t cleaning_waiters{};
     WorkList admitted;
+    CallArbiter arbitration;
     detail::NodeStateService states;
     std::vector<std::shared_ptr<EngineRun>> history;
     std::size_t history_cursor{0};
     std::once_flag joined;
-    std::thread worker;
+    std::vector<std::thread> workers;
 };
 
 WorkflowEngine::WorkflowEngine(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}

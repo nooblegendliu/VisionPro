@@ -104,7 +104,7 @@ public:
     {
         const std::lock_guard lock(mutex_);
         if (draining_) { return false; }
-        pending_ = call;
+        pending_.insert_or_assign(call.identity.invocation.workflow_run, call);
         changed_.notify_all();
         return true;
     }
@@ -112,10 +112,10 @@ public:
     PendingCall await_call(WorkflowRunId run)
     {
         std::unique_lock lock(mutex_);
-        if (!changed_.wait_for(lock, 5s, [&] { return pending_ && pending_->identity.invocation.workflow_run == run; })) {
+        if (!changed_.wait_for(lock, 5s, [&] { return pending_.contains(run); })) {
             throw std::runtime_error("The stateful asynchronous invocation did not start.");
         }
-        return *pending_;
+        return pending_.at(run);
     }
 
     void request_cancel()
@@ -143,20 +143,20 @@ public:
 
     void drain()
     {
-        std::optional<PendingCall> pending;
+        std::map<WorkflowRunId, PendingCall> pending;
         {
             const std::lock_guard lock(mutex_);
             draining_ = true;
             pending.swap(pending_);
         }
-        if (pending) { close(*pending); }
+        for (const auto& [id, call] : pending) { close(call); }
     }
 
 private:
     std::mutex mutex_;
     std::condition_variable changed_;
     std::map<NodeId, Counts> counts_;
-    std::optional<PendingCall> pending_;
+    std::map<WorkflowRunId, PendingCall> pending_;
     unsigned cancellations_{0};
     bool draining_{false};
 };
@@ -693,6 +693,54 @@ void debug_isolation()
 void report_success(const PendingCall& pending)
 { take(pending.completion.complete(success(pending.identity, pending.sample.after))); }
 
+void overlapping_state_generations()
+{
+    Fixture fixture(ToolExecutionMode::Asynchronous);
+    auto node = counter_node(fixture.descriptor, '2', 0, "session");
+    auto solution = counters(fixture.descriptor, {node});
+    auto& workflow = solution.workflows.front();
+    workflow.admission.max_in_flight = 3;
+    const auto original = fixture.capture(solution);
+    const auto first = accepted(fixture.submit(original, 1));
+    const auto holding = fixture.driver->await_call(first.identity().run);
+    const auto second = accepted(fixture.submit(original, 1));
+    report_success(holding);
+    wait_for(first, ExecutionStatus::Succeeded, RunWaitTarget::Completion);
+
+    // This independent generation can finish while the first still owns its
+    // old cell and the second run is entitled to inherit that same cell.
+    workflow.nodes.front().bindings.front().sources.front() = ConfigValue::integer(100);
+    ++solution.revision;
+    const auto revised = fixture.capture(solution);
+    const auto third = accepted(fixture.submit(revised, 1));
+    const auto separate = fixture.driver->await_call(third.identity().run);
+    check(separate.sample.before == 100 && separate.sample.state.generation != holding.sample.state.generation,
+        "A revised state definition can run against its own generation before older cleanup.");
+    report_success(separate);
+    take(separate.completion.mark_exited());
+    expect_total(third, wait_for(third), node.id, 101);
+    check(fixture.driver->counts(node.id).started == 2 && take(second.inspect()).call_order.empty(),
+        "The compatible second invocation cannot start after logical completion but before actual exit.");
+
+    take(holding.completion.mark_exited());
+    wait_for(first);
+    const auto successor = fixture.driver->await_call(second.identity().run);
+    check(successor.sample.state == holding.sample.state && successor.sample.before == 1,
+        "An admitted run retains its original shared generation across an intervening publication.");
+    report_success(successor);
+    take(successor.completion.mark_exited());
+    expect_total(second, wait_for(second), node.id, 2);
+
+    const auto fourth = accepted(fixture.submit(revised, 1));
+    const auto current = fixture.driver->await_call(fourth.identity().run);
+    check(current.sample.state == separate.sample.state && current.sample.before == 101,
+        "Completion of an older admitted snapshot cannot replace the new generation.");
+    report_success(current);
+    take(current.completion.mark_exited());
+    expect_total(fourth, wait_for(fourth), node.id, 102);
+    check_counts(fixture, node.id, 4, 2);
+}
+
 void cancel_while_active(const RunHandle& handle, Fixture& fixture)
 {
     check(take(handle.cancel()) == RunCancelDisposition::Requested, "The client requested cancellation once.");
@@ -810,7 +858,7 @@ int main(int argc, char** argv)
         else if (test == "group-state") { group_state_domains(); }
         else if (test == "enabled-set") { enabled_workflow_requests(); }
         else if (test == "debug") { debug_isolation(); }
-        else if (test == "acceptance") { state_acceptance(); immediate_mutation(); }
+        else if (test == "acceptance") { state_acceptance(); immediate_mutation(); overlapping_state_generations(); }
         else if (test == "publication") { session_publication_preserves_compatible_state(); }
         else { throw std::runtime_error("Unknown state-service test case."); }
         std::cout << test << ": " << checks << " checks passed\n";

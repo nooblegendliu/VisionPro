@@ -7,6 +7,8 @@
 #include <QObject>
 #include <QTimer>
 
+#include <map>
+
 namespace visionpro::ui {
 
 struct RunDocument {
@@ -29,7 +31,7 @@ public:
 
     void start(workflow::Solution draft, RunDocument document, workflow::RunArguments arguments,
         std::vector<RunImageInput> images);
-    void cancel();
+    void cancel(const workflow::RunHandle& run);
     core::Result<std::optional<SessionSharedPreview>> shared_preview() const;
     bool can_reset_state(const workflow::NodeTarget& target) const;
     core::Result<std::monostate> reset_state(const workflow::NodeTarget& target);
@@ -37,8 +39,9 @@ public:
     void set_observing(bool visible);
     void set_limits(std::size_t history, std::size_t notifications);
 
-    bool can_start() const noexcept { return !preparing_ && !retiring_ && !active_; }
-    bool can_cancel() const noexcept;
+    bool can_start() const noexcept { return !preparing_ && !retiring_ && active_.empty(); }
+    bool can_submit(const workflow::Workflow& flow) const noexcept;
+    bool can_cancel(const workflow::RunHandle& run) const noexcept;
     bool has_session_work() const noexcept { return session_ || preparing_ || retiring_; }
     const std::vector<workflow::RunHandle>& runs() const noexcept { return runs_; }
     std::uint64_t dropped() const noexcept { return dropped_; }
@@ -55,14 +58,20 @@ private:
     void subscribe();
     void unsubscribe();
     void trim_history();
+    bool workflow_active(core::WorkflowId workflow) const noexcept;
 
     core::ToolRegistry registry_;
     std::shared_ptr<workflow::WorkflowSession> session_;
     std::optional<workflow::RunObservation> observation_;
-    std::optional<workflow::RunHandle> active_;
+    struct ActiveRun {
+        workflow::RunHandle handle;
+        workflow::ExecutionStatus status{workflow::ExecutionStatus::Pending};
+        bool cancelling{};
+        bool inspection_failed{};
+    };
+    std::map<workflow::RunIdentity, ActiveRun> active_; // Retained until physical quiescence, independently of the panel.
     std::vector<workflow::RunHandle> runs_;
     QTimer refresh_;
-    workflow::ExecutionStatus active_status_{workflow::ExecutionStatus::Pending};
     std::size_t history_limit_{16};
     std::size_t observation_capacity_{32};
     std::uint64_t observation_generation_{0};
@@ -70,8 +79,6 @@ private:
     std::uint64_t dropped_{0};
     bool observing_{false};
     bool preparing_{false};
-    bool cancelling_{false};
-    bool inspection_failed_{false};
     bool retiring_{false};
 };
 

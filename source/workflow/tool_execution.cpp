@@ -200,7 +200,7 @@ InvocationPreparation PreparedTool::prepare(const ResolutionContext& context, co
 
 InvocationPreparation PreparedTool::prepare(const ResolutionContext& context, core::AttemptId attempt,
     const ResultStore& results, std::span<const core::InvocationResourceLease> leases,
-    InvocationResourceProvider* provider) const
+    InvocationResourceProvider* provider, const std::function<bool()>& reserve) const
 {
     const auto& fixed = configuration_.data();
     const auto fail = [&](core::ErrorCode code, std::string message) {
@@ -227,6 +227,7 @@ InvocationPreparation PreparedTool::prepare(const ResolutionContext& context, co
     if (failure) { return InvocationFailure{*failure, std::move(bindings)}; }
     if (unavailable) { return UnavailableInvocation{std::move(bindings)}; }
     if (pending) { return PendingInvocation{std::move(bindings)}; }
+    if (reserve && !reserve()) { return WaitingForAccess{std::move(bindings)}; }
     const auto resource_failure = [&](core::Diagnostic diagnostic) {
         diagnostic.location.solution = snapshot_.solution().id;
         diagnostic.location.workflow = fixed.workflow;
@@ -265,6 +266,12 @@ InvocationPreparation PreparedTool::prepare(const ResolutionContext& context, co
     auto invocation = core::InvocationContext::create(data);
     if (const auto* invalid = std::get_if<core::Diagnostic>(&invocation)) { return InvocationFailure{*invalid, std::move(bindings)}; }
     return PreparedInvocation{snapshot_, std::get<core::InvocationContext>(std::move(invocation)), std::move(bindings)};
+}
+
+InvocationPreparation PreparedTool::prepare_when_available(const ResolutionContext& context, core::AttemptId attempt,
+    const ResultStore& results, InvocationResourceProvider* provider, const std::function<bool()>& reserve) const
+{
+    return prepare(context, attempt, results, {}, provider, reserve);
 }
 
 core::Result<NodeResult> checked_node_result(const PreparedInvocation& invocation, const core::ToolCompletion& completion)

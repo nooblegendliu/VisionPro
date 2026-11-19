@@ -377,6 +377,8 @@ void roundtrip()
     const auto loaded = take(load_solution(first, registry));
     check(loaded.can_save() && fs::equivalent(first, loaded.directory()),
         "A recognized manifest under a Unicode package directory remains saveable.");
+    check(manifest.find("\"admission\"") == std::string::npos && loaded.solution().workflows.front().admission == WorkflowAdmission{},
+        "A v1 workflow without admission settings retains one slot, no waiting and Busy on overflow.");
     check_relations(loaded.solution());
     check_values(loaded.solution(), original);
     check_state_projection(loaded.solution(), registry);
@@ -388,6 +390,22 @@ void roundtrip()
         && reopened.solution().variables.at(1).initial_value == ConfigValue::integer(highest) && factory->calls == 0,
         "Both Int64 boundaries reopen exactly and configuration handling leaves the tool factory unused.");
     loop_roundtrip(original, registry, directories);
+    auto admitting = original;
+    const WorkflowAdmission limits{2, 1, AdmissionOverflow::Reject};
+    admitting.workflows.front().admission = limits;
+    const auto with_admission = directories.package(u8"流程重入");
+    take(write_new_solution(with_admission, admitting));
+    const auto configured = take(load_solution(with_admission, registry));
+    const auto cloned = take(clone_solution(configured.solution(), ExternalReferencePolicy::Preserve));
+    check(configured.can_save() && configured.solution().workflows.front().admission == limits &&
+        cloned.solution.workflows.front().admission == limits, "Workflow admission settings survive save, reload and independent copy.");
+    auto future_policy = read_manifest(with_admission);
+    future_policy.replace(future_policy.find("\"reject\"", future_policy.find("\"admission\"")), 8, "\"future_overflow\"");
+    { std::ofstream out(with_admission / "solution.json", std::ios::binary | std::ios::trunc); out << future_policy; }
+    const auto refused_policy = load_solution(with_admission, registry);
+    const auto* issue = std::get_if<Diagnostic>(&refused_policy);
+    check(issue && issue->code == ErrorCode::UnsupportedSolutionContent && read_manifest(with_admission) == future_policy,
+        "An unknown future workflow overflow response prevents interpretation and preserves the source file.");
     auto dynamic = original;
     auto& flow = dynamic.workflows.front();
     flow.interface.inputs.front().binding.allow_dynamic_index = true;

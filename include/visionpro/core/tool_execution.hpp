@@ -201,6 +201,8 @@ private:
 class ToolInstanceFactory {
 public:
     virtual ~ToolInstanceFactory() = default;
+    // The registry is shared by concurrent runs. Distinct invocations may
+    // call create concurrently and must receive separately owned instances.
     // Each successful call creates an independent instance for this fixed configuration.
     [[nodiscard]] virtual Result<std::shared_ptr<ToolInstance>> create(const ToolExecutionConfiguration& configuration) = 0;
 };

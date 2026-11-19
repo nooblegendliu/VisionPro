@@ -1069,6 +1069,47 @@ std::optional<std::string> rename(QWidget* owner, const QString& title, const QS
     return utf8(value);
 }
 
+void edit_admission(const InspectorContext& context, WorkflowId id, WorkflowAdmission current)
+{
+    QDialog dialog(context.owner);
+    dialog.setWindowTitle(QStringLiteral("Workflow admission"));
+    auto* layout = new QVBoxLayout(&dialog);
+    auto* form = new QFormLayout;
+    auto* in_flight = new QLineEdit(QString::number(current.max_in_flight), &dialog);
+    in_flight->setObjectName(QStringLiteral("maxInFlight"));
+    in_flight->setToolTip(QStringLiteral("Started runs hold their slot until cleanup finishes."));
+    auto* waiting = new QLineEdit(QString::number(current.queue_capacity), &dialog);
+    waiting->setObjectName(QStringLiteral("queueCapacity"));
+    waiting->setToolTip(QStringLiteral("Runs wait in submission order. Use 0 to disable waiting."));
+    auto* overflow = new QComboBox(&dialog);
+    overflow->setObjectName(QStringLiteral("admissionOverflow"));
+    overflow->addItem(QStringLiteral("Return Busy"));
+    overflow->addItem(QStringLiteral("Reject with diagnostic"));
+    overflow->setCurrentIndex(current.overflow == AdmissionOverflow::Busy ? 0 : 1);
+    form->addRow(QStringLiteral("Maximum in-flight runs"), in_flight);
+    form->addRow(QStringLiteral("Waiting queue capacity"), waiting);
+    form->addRow(QStringLiteral("When full"), overflow);
+    layout->addLayout(form);
+    close_buttons(dialog, *layout);
+    while (dialog.exec() == QDialog::Accepted) {
+        bool slots_ok{}, waiting_ok{};
+        const auto max_in_flight = in_flight->text().toUInt(&slots_ok);
+        const auto queue_capacity = waiting->text().toUInt(&waiting_ok);
+        if (!slots_ok || !max_in_flight || !waiting_ok) {
+            warn(&dialog, QStringLiteral("Enter a positive in-flight limit and a nonnegative queue capacity, each up to 4294967295."));
+            continue;
+        }
+        const WorkflowAdmission policy{max_in_flight, queue_capacity,
+            overflow->currentIndex() == 0 ? AdmissionOverflow::Busy : AdmissionOverflow::Reject};
+        if (policy == current) { return; }
+        context.edit_flow(id, QStringLiteral("Change workflow admission"), [&](Solution&, Workflow& draft) -> Check {
+            draft.admission = policy;
+            return std::monostate{};
+        });
+        return;
+    }
+}
+
 void workflow_properties(QVBoxLayout& panel, const InspectorContext& context, const Workflow& flow)
 {
     auto* group = section(panel, QStringLiteral("Workflow"));
@@ -1091,6 +1132,11 @@ void workflow_properties(QVBoxLayout& panel, const InspectorContext& context, co
             return std::monostate{};
         });
     }));
+    const auto policy = flow.admission;
+    const auto summary = QStringLiteral("%1 running · %2 waiting · %3").arg(policy.max_in_flight).arg(policy.queue_capacity)
+        .arg(policy.overflow == AdmissionOverflow::Busy ? QStringLiteral("Busy") : QStringLiteral("Reject"));
+    form->addRow(QStringLiteral("Admission"), action(group, summary, "editWorkflowAdmission",
+        [context, id, policy] { edit_admission(context, id, policy); }));
 }
 
 void move_to_group(const InspectorContext& context, const WorkflowId& id, const NodeId& selected)

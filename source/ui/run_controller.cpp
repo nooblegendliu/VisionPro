@@ -108,15 +108,27 @@ RunController::RunController(ToolRegistry registry, QObject* parent)
     connect(&refresh_, &QTimer::timeout, this, &RunController::refresh_progress);
 }
 
-bool RunController::can_cancel() const noexcept
+bool RunController::workflow_active(WorkflowId workflow) const noexcept
 {
-    return active_ && !cancelling_
-        && (active_status_ == ExecutionStatus::Pending || active_status_ == ExecutionStatus::Running);
+    return std::ranges::any_of(active_, [&](const auto& entry) { return entry.first.workflow == workflow; });
+}
+
+bool RunController::can_submit(const Workflow& flow) const noexcept
+{
+    // Reserve publications one at a time. Accepted work continues independently.
+    return !preparing_ && !retiring_ && (flow.admission != WorkflowAdmission{} || !workflow_active(flow.id));
+}
+
+bool RunController::can_cancel(const RunHandle& run) const noexcept
+{
+    const auto found = active_.find(run.identity());
+    return found != active_.end() && !found->second.cancelling
+        && (found->second.status == ExecutionStatus::Pending || found->second.status == ExecutionStatus::Running);
 }
 
 void RunController::start(Solution draft, RunDocument document, RunArguments arguments, std::vector<RunImageInput> images)
 {
-    if (!can_start()) { return; }
+    if (preparing_ || retiring_) { return; }
     runs_.reserve(runs_.size() + 1);
     if (!session_) {
         // Completed runs are owned by the window's configurable handle history.
@@ -159,16 +171,16 @@ void RunController::start(Solution draft, RunDocument document, RunArguments arg
             subscribe();
         }
         if (const auto* handle = std::get_if<RunHandle>(&admitted.submission)) {
-            active_ = *handle;
+            active_.emplace(handle->identity(), ActiveRun{*handle});
             runs_.push_back(*handle);
-            active_status_ = ExecutionStatus::Pending;
-            cancelling_ = false;
-            inspection_failed_ = false;
             refresh_.start();
         } else if (const auto* rejected = std::get_if<RunRejected>(&admitted.submission)) {
             emit operation_failed(rejected->diagnostic);
         } else {
-            emit operation_failed(issue(ErrorCode::InvalidState, "A run is already active in this session."));
+            const auto& busy = std::get<RunBusy>(admitted.submission);
+            auto failure = issue(ErrorCode::InvalidState, "Workflow is busy (active run " + std::to_string(busy.active.run.value()) + ").");
+            failure.location.workflow = busy.active.workflow;
+            emit operation_failed(failure);
         }
         emit changed();
     });
@@ -178,15 +190,15 @@ void RunController::start(Solution draft, RunDocument document, RunArguments arg
     worker->start();
 }
 
-void RunController::cancel()
+void RunController::cancel(const RunHandle& run)
 {
-    if (!can_cancel()) { return; }
-    auto cancelled = active_->cancel();
+    if (!can_cancel(run)) { return; }
+    auto cancelled = run.cancel();
     if (const auto* failure = std::get_if<Diagnostic>(&cancelled)) {
         emit operation_failed(*failure);
         return;
     }
-    cancelling_ = true;
+    active_.at(run.identity()).cancelling = true;
     emit changed();
 }
 
@@ -205,7 +217,7 @@ Result<std::optional<SessionSharedPreview>> RunController::shared_preview() cons
 
 bool RunController::can_reset_state(const NodeTarget& target) const
 {
-    if (!session_ || !can_start()) { return false; }
+    if (!session_ || preparing_ || retiring_ || workflow_active(target.workflow)) { return false; }
     const auto active = session_->inspect().active;
     const auto* flow = active ? find_workflow(active->solution(), target.workflow) : nullptr;
     const auto* node = flow ? find_node(*flow, target.node) : nullptr;
@@ -230,7 +242,7 @@ bool RunController::can_reset_state(const NodeTarget& target) const
 
 Result<std::monostate> RunController::reset_state(const NodeTarget& target)
 {
-    if (!session_ || !can_start()) { return issue(ErrorCode::InvalidState, "State reset requires an idle active session."); }
+    if (!session_ || preparing_ || retiring_) { return issue(ErrorCode::InvalidState, "State reset requires an active session."); }
     return session_->reset_node_state(target);
 }
 
@@ -240,9 +252,8 @@ void RunController::reset_document()
     unsubscribe();
     dropped_ = 0;
     refresh_.stop();
-    active_.reset();
+    active_.clear();
     runs_.clear();
-    cancelling_ = false;
     retiring_ = session_ || preparing_;
     if (retiring_ && !preparing_) { close_session(); }
     emit changed();
@@ -310,31 +321,36 @@ void RunController::unsubscribe()
 
 void RunController::trim_history()
 {
-    const auto completed = runs_.size() - (active_ ? 1 : 0);
+    const auto completed = runs_.size() - active_.size();
     if (completed > history_limit_) {
-        runs_.erase(runs_.begin(), runs_.begin() + static_cast<std::ptrdiff_t>(completed - history_limit_));
+        auto excess = completed - history_limit_;
+        std::erase_if(runs_, [&](const RunHandle& run) {
+            if (!excess || active_.contains(run.identity())) { return false; }
+            --excess;
+            return true;
+        });
     }
 }
 
 void RunController::refresh_progress()
 {
-    if (!active_) { return; }
-    auto inspected = active_->inspect();
-    if (const auto* progress = std::get_if<RunProgress>(&inspected)) {
-        inspection_failed_ = false;
-        active_status_ = progress->status;
-        if (progress->quiescent) {
-            active_.reset();
-            cancelling_ = false;
-            trim_history();
-            refresh_.stop();
+    std::vector<Diagnostic> failures;
+    for (auto it = active_.begin(); it != active_.end();) {
+        auto& tracked = it->second;
+        auto inspected = tracked.handle.inspect();
+        if (const auto* progress = std::get_if<RunProgress>(&inspected)) {
+            tracked.inspection_failed = false;
+            tracked.status = progress->status;
+            if (progress->quiescent) { it = active_.erase(it); continue; }
+        } else if (!std::exchange(tracked.inspection_failed, true)) {
+            failures.push_back(std::get<Diagnostic>(std::move(inspected)));
         }
-    } else if (!inspection_failed_) {
-        inspection_failed_ = true;
-        emit operation_failed(std::get<Diagnostic>(inspected));
+        ++it;
     }
+    trim_history();
+    if (active_.empty()) { refresh_.stop(); }
     // A single refresh covers the buffered notifications. Inspecting the
-    // admitted handle above also recovers exact progress after overflow or
+    // admitted handles also recovers exact progress after overflow or
     // while the panel is detached.
     if (observation_) {
         for (std::size_t count = 0; count < observation_capacity_; ++count) {
@@ -344,6 +360,7 @@ void RunController::refresh_progress()
             if (next.closed || !next.event) { break; }
         }
     }
+    for (const auto& failure : failures) { emit operation_failed(failure); }
     emit changed();
 }
 

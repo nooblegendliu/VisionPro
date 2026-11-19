@@ -1,0 +1,445 @@
+{
+  "coordinates": [],
+  "format": "visionpro.solution",
+  "format_version": 1,
+  "id": "5ca4f87a-ea1e-4d62-89b0-000000006500",
+  "layouts": [
+    {
+      "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006510",
+      "nodes": [
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000006511",
+          "x": 40.0,
+          "y": 80.0
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000006512",
+          "x": 45.0,
+          "y": 80.0
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000006513",
+          "x": 360.0,
+          "y": 80.0
+        }
+      ]
+    },
+    {
+      "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006520",
+      "nodes": [
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000006521",
+          "x": 40.0,
+          "y": 80.0
+        }
+      ]
+    }
+  ],
+  "name": "S6.5 多流程并行与有界重入",
+  "queues": [],
+  "resources": [],
+  "revision": "1",
+  "variables": [],
+  "workflows": [
+    {
+      "id": "5ca4f87a-ea1e-4d62-89b0-000000006510",
+      "name": "有界重入与每轮累计",
+      "enabled": true,
+      "interface": {
+        "id": "s65.sample.reentry",
+        "version": 1,
+        "inputs": [
+          {
+            "binding": {
+              "allowed_conversions": [
+                "exact"
+              ],
+              "allowed_sources": [
+                "constant",
+                "run_output",
+                "public_input"
+              ],
+              "cardinality": "single_source",
+              "time": "before_invocation"
+            },
+            "constraints": {
+              "allowed_values": [],
+              "integer_range": null,
+              "max_length": null,
+              "real_range": null
+            },
+            "default_value": {
+              "type": {
+                "kind": "int64"
+              },
+              "value": "1"
+            },
+            "display_name": "本轮加数",
+            "id": "delta",
+            "required": false,
+            "semantics": {
+              "coordinate_system": null,
+              "unit": "unspecified"
+            },
+            "type": {
+              "kind": "int64"
+            }
+          }
+        ],
+        "outputs": [],
+        "control_outputs": []
+      },
+      "nodes": [
+        {
+          "bindings": [
+            {
+              "target": {
+                "kind": "input",
+                "id": "start"
+              },
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "0"
+                  }
+                }
+              ],
+              "cardinality": "single_source",
+              "accepted_absence": [],
+              "conversion": "exact"
+            },
+            {
+              "target": {
+                "kind": "input",
+                "id": "end"
+              },
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "2"
+                  }
+                }
+              ],
+              "cardinality": "single_source",
+              "accepted_absence": [],
+              "conversion": "exact"
+            }
+          ],
+          "configuration": {
+            "control_exports": [],
+            "entries": [
+              "5ca4f87a-ea1e-4d62-89b0-000000006512"
+            ],
+            "interface": {
+              "control_outputs": [],
+              "id": "s65.sample.delay",
+              "inputs": [
+                {
+                  "binding": {
+                    "allowed_conversions": [
+                      "exact"
+                    ],
+                    "allowed_sources": [
+                      "constant",
+                      "run_output",
+                      "public_input"
+                    ],
+                    "cardinality": "single_source",
+                    "time": "before_invocation"
+                  },
+                  "constraints": {
+                    "allowed_values": [],
+                    "integer_range": null,
+                    "max_length": null,
+                    "real_range": null
+                  },
+                  "default_value": null,
+                  "display_name": "start",
+                  "id": "start",
+                  "required": true,
+                  "semantics": {
+                    "coordinate_system": null,
+                    "unit": "unspecified"
+                  },
+                  "type": {
+                    "kind": "int64"
+                  }
+                },
+                {
+                  "binding": {
+                    "allowed_conversions": [
+                      "exact"
+                    ],
+                    "allowed_sources": [
+                      "constant",
+                      "run_output",
+                      "public_input"
+                    ],
+                    "cardinality": "single_source",
+                    "time": "before_invocation"
+                  },
+                  "constraints": {
+                    "allowed_values": [],
+                    "integer_range": null,
+                    "max_length": null,
+                    "real_range": null
+                  },
+                  "default_value": null,
+                  "display_name": "end",
+                  "id": "end",
+                  "required": true,
+                  "semantics": {
+                    "coordinate_system": null,
+                    "unit": "unspecified"
+                  },
+                  "type": {
+                    "kind": "int64"
+                  }
+                },
+                {
+                  "binding": {
+                    "allowed_conversions": [
+                      "exact"
+                    ],
+                    "allowed_sources": [
+                      "constant",
+                      "run_output",
+                      "public_input"
+                    ],
+                    "cardinality": "single_source",
+                    "time": "before_invocation"
+                  },
+                  "constraints": {
+                    "allowed_values": [],
+                    "integer_range": null,
+                    "max_length": null,
+                    "real_range": null
+                  },
+                  "default_value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "0"
+                  },
+                  "display_name": "index",
+                  "id": "index",
+                  "required": false,
+                  "semantics": {
+                    "coordinate_system": null,
+                    "unit": "unspecified"
+                  },
+                  "type": {
+                    "kind": "int64"
+                  }
+                }
+              ],
+              "outputs": [],
+              "version": 1
+            },
+            "kind": "loop",
+            "loop": {
+              "break_source": null,
+              "exports": [],
+              "inclusive_end": false,
+              "interval_ms": "2000",
+              "step": "1"
+            },
+            "outputs": []
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000006511",
+          "join": "all_activated",
+          "name": "两次迭代，间隔两秒",
+          "resources": []
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000006512",
+          "name": "逐轮迭代计数",
+          "configuration": {
+            "kind": "tool",
+            "type": "visionpro.calc.int64_accumulate",
+            "config_version": 1
+          },
+          "bindings": [
+            {
+              "target": {
+                "kind": "input",
+                "id": "value"
+              },
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "1"
+                  }
+                }
+              ],
+              "cardinality": "single_source",
+              "accepted_absence": [],
+              "conversion": "exact"
+            }
+          ],
+          "resources": [],
+          "enabled": true,
+          "join": "all_activated"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000006513",
+          "name": "读取本轮加数",
+          "configuration": {
+            "kind": "tool",
+            "type": "visionpro.calc.int64_accumulate",
+            "config_version": 1
+          },
+          "bindings": [
+            {
+              "target": {
+                "kind": "input",
+                "id": "value"
+              },
+              "sources": [
+                {
+                  "kind": "public_input",
+                  "value": {
+                    "group": null,
+                    "input": "delta",
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006510"
+                  }
+                }
+              ],
+              "cardinality": "single_source",
+              "accepted_absence": [],
+              "conversion": "exact"
+            }
+          ],
+          "resources": [],
+          "enabled": true,
+          "join": "all_activated"
+        }
+      ],
+      "entries": [
+        "5ca4f87a-ea1e-4d62-89b0-000000006511"
+      ],
+      "control_links": [
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000006531",
+          "output": null,
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000006511",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000006513"
+        }
+      ],
+      "control_exports": [],
+      "outputs": [],
+      "containment": [
+        {
+          "child": "5ca4f87a-ea1e-4d62-89b0-000000006512",
+          "parent": "5ca4f87a-ea1e-4d62-89b0-000000006511"
+        }
+      ],
+      "admission": {
+        "max_in_flight": 2,
+        "queue_capacity": 1,
+        "overflow": "reject"
+      }
+    },
+    {
+      "id": "5ca4f87a-ea1e-4d62-89b0-000000006520",
+      "name": "独立流程与会话累计",
+      "enabled": true,
+      "interface": {
+        "id": "s65.sample.session",
+        "version": 1,
+        "inputs": [],
+        "outputs": [],
+        "control_outputs": []
+      },
+      "nodes": [
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000006521",
+          "name": "会话累计加一",
+          "configuration": {
+            "kind": "tool",
+            "type": "visionpro.calc.int64_accumulate",
+            "config_version": 1
+          },
+          "bindings": [
+            {
+              "target": {
+                "kind": "input",
+                "id": "value"
+              },
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "1"
+                  }
+                }
+              ],
+              "cardinality": "single_source",
+              "accepted_absence": [],
+              "conversion": "exact"
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "enum",
+                      "members": [
+                        {
+                          "display_name": "PerRun",
+                          "id": "PerRun"
+                        },
+                        {
+                          "display_name": "Session",
+                          "id": "Session"
+                        }
+                      ],
+                      "schema": "visionpro.calc.int64_accumulate.mode",
+                      "version": 1
+                    },
+                    "value": "Session"
+                  }
+                }
+              ],
+              "target": {
+                "id": "mode",
+                "kind": "parameter"
+              }
+            }
+          ],
+          "resources": [],
+          "enabled": true,
+          "join": "all_activated"
+        }
+      ],
+      "entries": [
+        "5ca4f87a-ea1e-4d62-89b0-000000006521"
+      ],
+      "control_links": [],
+      "control_exports": [],
+      "outputs": [],
+      "containment": []
+    }
+  ]
+}

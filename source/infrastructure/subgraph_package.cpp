@@ -103,6 +103,7 @@ Solution extract(const Solution& draft, WorkflowId workflow, std::optional<NodeI
         flow.outputs = config->outputs;
         flow.control_exports = config->control_exports;
         flow.enabled = root.enabled;
+        flow.admission = {}; // A Group's calls run under the importing workflow's admission policy.
         rebase_inputs(flow, group, {});
     }
     Solution model{draft.id, flow.name, draft.format_version, 1, {std::move(flow)}};
@@ -195,6 +196,9 @@ void validate_package(const Package& pack, const Solution& host, const ToolRegis
     if (candidate.workflows.size() != 1 || candidate.format_version != solution_format_version
         || !candidate.variables.empty() || !candidate.queues.empty()) {
         fail(ErrorCode::InvalidModel, "A reusable package must contain exactly one workflow body and no embedded host state.");
+    }
+    if (pack.group && candidate.workflows.front().admission != WorkflowAdmission{}) {
+        fail(ErrorCode::InvalidModel, "A Group package cannot declare workflow admission settings.");
     }
     for (const auto& [id, type] : pack.services.variables) {
         const auto it = std::ranges::find(host.variables, id, &GlobalVariableDefinition::id);

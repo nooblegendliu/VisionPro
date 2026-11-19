@@ -236,6 +236,10 @@ void model_structure()
     invalid(validate_model_shape(changed), "solution display name cannot be empty");
     changed = original; changed.workflows[0].name = std::string("x\0y", 3);
     invalid(validate_model_shape(changed), "workflow names cannot contain NUL");
+    changed = original; changed.workflows[0].admission.max_in_flight = 0;
+    invalid(validate_model_shape(changed), "a workflow must have capacity to start at least one accepted run");
+    changed = original; changed.workflows[0].admission.overflow = static_cast<AdmissionOverflow>(99);
+    invalid(validate_model_shape(changed), "a workflow rejects unknown overflow policies");
     changed = original; changed.workflows[0].nodes[1].name = std::string(1, static_cast<char>(0xff));
     invalid(validate_model_shape(changed), "node names require valid UTF-8");
     changed = original; changed.workflows.push_back(changed.workflows.front());

@@ -36,6 +36,9 @@ template<> struct EnumNames<workflow::MissingReason> {
 template<> struct EnumNames<workflow::JoinPolicy> {
     static constexpr auto values = std::to_array<std::string_view>({"all_activated"});
 };
+template<> struct EnumNames<workflow::AdmissionOverflow> {
+    static constexpr auto values = std::to_array<std::string_view>({"busy", "reject"});
+};
 template<> struct EnumNames<workflow::LoopExportMode> {
     static constexpr auto values = std::to_array<std::string_view>({"first", "last", "collect", "sum"});
 };
@@ -489,21 +492,33 @@ Containment decode_containment(const Reader& reader)
 
 Json encode_workflow(const Workflow& flow)
 {
-    return {{"id", write_id(flow.id)}, {"name", flow.name}, {"interface", encode_interface(flow.interface)},
+    Json result{{"id", write_id(flow.id)}, {"name", flow.name}, {"interface", encode_interface(flow.interface)},
         {"nodes", write_array(flow.nodes, encode_node)}, {"control_links", write_array(flow.control_links, encode_control_link)},
         {"containment", write_array(flow.containment, encode_containment)}, {"entries", write_array(flow.entries, write_id<NodeId>)},
         {"outputs", write_array(flow.outputs, encode_output_mapping)}, {"enabled", flow.enabled},
         {"control_exports", write_array(flow.control_exports, encode_control_mapping)}};
+    if (flow.admission != WorkflowAdmission{}) {
+        result["admission"] = {{"max_in_flight", flow.admission.max_in_flight}, {"queue_capacity", flow.admission.queue_capacity},
+            {"overflow", write_enum(flow.admission.overflow)}};
+    }
+    return result;
 }
 
 Workflow decode_workflow(const Reader& reader)
 {
-    reader.object({"id", "name", "interface", "nodes", "control_links", "containment", "entries", "outputs", "enabled", "control_exports"});
+    reader.object({"id", "name", "interface", "nodes", "control_links", "containment", "entries", "outputs", "enabled", "control_exports", "admission"});
+    WorkflowAdmission admission;
+    if (reader.contains("admission")) {
+        const auto policy = reader.field("admission");
+        policy.object({"max_in_flight", "queue_capacity", "overflow"});
+        admission = {policy.field("max_in_flight").u32(), policy.field("queue_capacity").u32(),
+            read_enum<AdmissionOverflow>(policy.field("overflow"))};
+    }
     return {read_id<WorkflowId>(reader.field("id")), std::string{reader.field("name").text()}, decode_interface(reader.field("interface")),
         read_array<Node>(reader.field("nodes"), decode_node), read_array<ControlLink>(reader.field("control_links"), decode_control_link),
         read_array<Containment>(reader.field("containment"), decode_containment), read_array<NodeId>(reader.field("entries"), read_id<NodeId>),
         read_array<OutputMapping>(reader.field("outputs"), decode_output_mapping), reader.field("enabled").boolean(),
-        read_array<ControlOutputMapping>(reader.field("control_exports"), decode_control_mapping)};
+        read_array<ControlOutputMapping>(reader.field("control_exports"), decode_control_mapping), admission};
 }
 
 Json encode_variable(const GlobalVariableDefinition& variable)

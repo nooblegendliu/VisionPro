@@ -17,6 +17,9 @@ struct ResourceRequirement {
     SchemaId slot;
     ResourceKind kind;
     bool required{true};
+    // Exclusive slots conflict with readers and writers of the same ResourceId.
+    // Device slots always require exclusive access through physical exit.
+    bool exclusive{false};
 };
 
 enum class PathBase { SolutionDirectory, NamedRoot, Absolute };

@@ -2,6 +2,7 @@
 
 #include <visionpro/core/tool_execution.hpp>
 #include <visionpro/workflow/resolver.hpp>
+#include <functional>
 
 namespace visionpro::workflow {
 
@@ -14,17 +15,20 @@ struct PreparedInvocation {
     std::vector<TargetResolution> bindings;
 };
 struct PendingInvocation { std::vector<TargetResolution> bindings; };
+struct WaitingForAccess { std::vector<TargetResolution> bindings; };
 struct UnavailableInvocation { std::vector<TargetResolution> bindings; };
 struct InvocationFailure {
     core::Diagnostic diagnostic;
     std::vector<TargetResolution> bindings;
 };
 using InvocationPreparation = std::variant<PreparedInvocation, PendingInvocation,
-    UnavailableInvocation, InvocationFailure>;
+    UnavailableInvocation, InvocationFailure, WaitingForAccess>;
 
 class InvocationResourceProvider {
 public:
     virtual ~InvocationResourceProvider() = default;
+    // Concurrent runs may share a provider. Exclusive slots are arbitrated by
+    // resource identity before acquire; accesses to other resources may overlap.
     // Resource kinds available to the execution planner.
     [[nodiscard]] virtual std::span<const core::ResourceKind> kinds() const noexcept = 0;
     // Read-only checks for the selected execution scope, before admission.
@@ -54,13 +58,17 @@ public:
         const ResultStore& results, std::span<const core::InvocationResourceLease> leases = {}) const;
     [[nodiscard]] InvocationPreparation prepare(const ResolutionContext& context, core::AttemptId attempt,
         const ResultStore& results, InvocationResourceProvider& provider) const;
+    // Called after bindings resolve and before acquiring leases. A false
+    // reservation parks the call without invoking the resource provider.
+    [[nodiscard]] InvocationPreparation prepare_when_available(const ResolutionContext& context, core::AttemptId attempt,
+        const ResultStore& results, InvocationResourceProvider* provider, const std::function<bool()>& reserve) const;
 private:
     friend class ExecutionPlan;
     [[nodiscard]] static core::Result<PreparedTool> create(BindingResolver resolver,
         core::WorkflowId workflow, core::NodeId node);
     [[nodiscard]] InvocationPreparation prepare(const ResolutionContext& context, core::AttemptId attempt,
         const ResultStore& results, std::span<const core::InvocationResourceLease> leases,
-        InvocationResourceProvider* provider) const;
+        InvocationResourceProvider* provider, const std::function<bool()>& reserve = {}) const;
     PreparedTool(ConfigSnapshot snapshot, BindingResolver resolver, core::ToolExecutionConfiguration configuration)
         : snapshot_(std::move(snapshot)), resolver_(std::move(resolver)), configuration_(std::move(configuration)) {}
     ConfigSnapshot snapshot_;

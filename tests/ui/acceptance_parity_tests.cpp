@@ -460,6 +460,7 @@ private Q_SLOTS:
     void imports_and_runs_blob_groups();
     void reproduces_saved_calculations();
     void reproduces_saved_shared_workflows();
+    void reproduces_saved_reentrant_workflows();
 };
 
 namespace {
@@ -648,6 +649,7 @@ void compare_saved_workflows(const char* directory)
     wait_for_file(window);
     for (const auto& flow : original.solution().workflows) {
         require(scene(window).select_workflow(flow.id), "Could not select the reloaded workflow.");
+        require(find_workflow(window.draft(), flow.id)->admission == flow.admission, "Saved workflow admission settings changed.");
         const auto desktop = complete_editor_run(window, "runWorkflow", {}, !flow.interface.inputs.empty());
         auto cli = run_cli(package, flow.id);
         require(cli.at("status") == "Succeeded" && desktop.at("status") == cli.at("status")
@@ -664,12 +666,15 @@ void compare_saved_workflows(const char* directory)
             }
         }
         match_message_ids(cli, ids);
-        for (const auto& node : flow.nodes) {
-            const auto& a = named(desktop.at("nodes"), "id", node.id.to_string());
-            const auto& b = named(cli.at("nodes"), "id", node.id.to_string());
-            require(a.at("status") == b.at("status") && a.at("judgement") == b.at("judgement")
+        const auto& calls = desktop.at("nodes");
+        require(calls.size() == cli.at("nodes").size(), "Desktop and CLI produced different invocation counts.");
+        for (std::size_t i = 0; i < calls.size(); ++i) {
+            const auto& a = calls.at(i);
+            const auto& b = cli.at("nodes").at(i);
+            require(a.at("id") == b.at("id") && a.at("scope") == b.at("scope")
+                && a.at("status") == b.at("status") && a.at("judgement") == b.at("judgement")
                 && a.at("outputs") == b.at("outputs") && a.at("selected_outputs") == b.at("selected_outputs"),
-                "Desktop and CLI disagree at " + node.name);
+                "Desktop and CLI disagree at node " + a.at("id").get<std::string>());
         }
     }
 }
@@ -684,6 +689,12 @@ void AcceptanceParityTests::reproduces_saved_calculations()
 void AcceptanceParityTests::reproduces_saved_shared_workflows()
 {
     try { compare_saved_workflows(VISIONPRO_S64_DIRECTORY); }
+    catch (const std::exception& failure) { QFAIL(failure.what()); }
+}
+
+void AcceptanceParityTests::reproduces_saved_reentrant_workflows()
+{
+    try { compare_saved_workflows(VISIONPRO_S65_DIRECTORY); }
     catch (const std::exception& failure) { QFAIL(failure.what()); }
 }
 

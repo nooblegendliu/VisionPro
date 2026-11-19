@@ -32,6 +32,7 @@ public:
 
 signals:
     void image_requested();
+    void selected_run_changed();
 
 private:
     void rebuild_history();

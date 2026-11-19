@@ -68,6 +68,13 @@ struct ControlLink {
     core::NodeId target;
 };
 struct Containment { core::NodeId parent; core::NodeId child; };
+enum class AdmissionOverflow { Busy, Reject };
+struct WorkflowAdmission {
+    std::uint32_t max_in_flight{1}; // A started run occupies a slot through physical cleanup.
+    std::uint32_t queue_capacity{0}; // Accepted FIFO waiters, separate from started runs.
+    AdmissionOverflow overflow{AdmissionOverflow::Busy};
+    bool operator==(const WorkflowAdmission&) const = default;
+};
 struct Workflow {
     core::WorkflowId id;
     std::string name;
@@ -79,6 +86,7 @@ struct Workflow {
     std::vector<OutputMapping> outputs;
     bool enabled{true};
     std::vector<ControlOutputMapping> control_exports;
+    WorkflowAdmission admission{};
 };
 struct NodePlacement { core::NodeId node; double x; double y; };
 struct WorkflowLayout { core::WorkflowId workflow; std::vector<NodePlacement> nodes; };
@@ -102,6 +110,7 @@ struct Solution {
     std::optional<core::NodeId> parent = std::nullopt);
 [[nodiscard]] core::Result<std::vector<core::NodeId>> descendants(const Workflow& workflow, const core::NodeId& group);
 [[nodiscard]] core::Result<std::monostate> validate_public_interface(const PublicInterface& interface);
+[[nodiscard]] core::Result<std::monostate> validate_workflow_admission(const WorkflowAdmission& admission);
 // Solution envelope, stable identities and the shared definition catalogs.
 [[nodiscard]] core::Result<std::monostate> validate_global_invariants(const Solution& solution);
 // Local shape, identity and containment checks only. Not proof of executability:

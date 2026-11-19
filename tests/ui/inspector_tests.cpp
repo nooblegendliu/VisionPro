@@ -159,6 +159,7 @@ private Q_SLOTS:
     void edits_and_reloads_dynamic_indices_and_format_options();
     void resets_only_the_selected_session_accumulator();
     void edits_shared_targets_and_previews_without_consuming();
+    void edits_and_reloads_workflow_admission();
 };
 
 ControlScene& scene(EditorWindow& window)
@@ -177,6 +178,45 @@ NodeResult result_for(const RunHandle& run, const NodeId& node)
     const auto found = std::ranges::find(progress.nodes, node, &RunNodeProgress::node);
     if (found == progress.nodes.end() || !found->invocation) { throw std::runtime_error("Missing invocation"); }
     return take(run.lookup(*found->invocation)).value();
+}
+
+void InspectorTests::edits_and_reloads_workflow_admission()
+{
+    const auto catalog = take(app::make_tool_registry());
+    EditorWindow window(canvas_example(), catalog);
+    window.show();
+    auto& inspector = properties(window);
+    auto* edit = inspector.findChild<QPushButton*>(QStringLiteral("editWorkflowAdmission"));
+    QVERIFY(edit && edit->text().contains(QStringLiteral("1 running · 0 waiting · Busy")));
+    const auto changed = exercise_dialog(inspector, *edit, {[](QDialog& dialog) -> QPushButton* {
+        auto* in_flight = dialog.findChild<QLineEdit*>(QStringLiteral("maxInFlight"));
+        auto* capacity = dialog.findChild<QLineEdit*>(QStringLiteral("queueCapacity"));
+        auto* overflow = dialog.findChild<QComboBox*>(QStringLiteral("admissionOverflow"));
+        if (!in_flight || !capacity || !overflow) { return nullptr; }
+        in_flight->setText(QStringLiteral("2"));
+        capacity->setText(QStringLiteral("3"));
+        overflow->setCurrentIndex(1);
+        return accept_button(dialog);
+    }});
+    QVERIFY2(changed.isEmpty(), qPrintable(changed));
+    const WorkflowAdmission configured{2, 3, AdmissionOverflow::Reject};
+    QVERIFY(window.draft().workflows.front().admission == configured);
+    auto& history = scene(window).undoStack();
+    history.undo();
+    QVERIFY(window.draft().workflows.front().admission == WorkflowAdmission{});
+    history.redo();
+    QVERIFY(window.draft().workflows.front().admission == configured);
+
+    QTemporaryDir scratch;
+    QVERIFY(scratch.isValid());
+    const auto directory = std::filesystem::path(scratch.path().toStdWString()) / L"admission";
+    window.transfer_document(directory, infrastructure::SolutionTransfer::SaveAs);
+    QTRY_VERIFY(!window.file_busy() && std::filesystem::exists(directory / "solution.json"));
+    EditorWindow reopened(canvas_example(), catalog);
+    reopened.open_document(directory);
+    QTRY_VERIFY(!reopened.file_busy() && reopened.draft().workflows.front().admission == configured);
+    const auto* saved = properties(reopened).findChild<QPushButton*>(QStringLiteral("editWorkflowAdmission"));
+    QVERIFY(saved && saved->text().contains(QStringLiteral("2 running · 3 waiting · Reject")));
 }
 
 void InspectorTests::edits_shared_targets_and_previews_without_consuming()

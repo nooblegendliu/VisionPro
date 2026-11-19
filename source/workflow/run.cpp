@@ -51,6 +51,9 @@ Result<RunRequest> RunRequest::create(const ConfigSnapshot& snapshot, RunTarget 
     if (!workflow || !workflow->enabled) {
         return contextualize(error(ErrorCode::InvalidRunRequest, "Request workflow is absent or disabled in this snapshot."));
     }
+    if (auto checked = validate_workflow_admission(workflow->admission); auto* failure = std::get_if<Diagnostic>(&checked)) {
+        return contextualize(std::move(*failure));
+    }
     const PublicInterface* public_interface = &workflow->interface;
     const std::vector<core::InputDescriptor>* schema = &public_interface->inputs;
     if (const auto* node_target = std::get_if<NodeTarget>(&target)) {

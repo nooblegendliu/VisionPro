@@ -8,6 +8,7 @@
 #include <visionpro/core/schema_id_factory.hpp>
 
 #include <QAction>
+#include <QComboBox>
 #include <QCryptographicHash>
 #include <QDockWidget>
 #include <QFile>
@@ -253,10 +254,83 @@ class RunLifecycleTests final : public QObject {
 
 private slots:
     void cancel_with_slow_panel_and_resume_after_hiding();
+    void admits_multiple_runs_and_cancels_only_the_selected_identity();
     void replace_and_close_with_pending_physical_exit();
     void edits_preserve_running_capture_and_displayed_image();
     void late_completion_after_window_destruction();
 };
+
+void RunLifecycleTests::admits_multiple_runs_and_cancels_only_the_selected_identity()
+{
+    auto draft = solution_for('1');
+    draft.workflows.front().admission = {2, 1, AdmissionOverflow::Reject};
+    auto other = solution_for('2').workflows.front();
+    other.name = "Independent flow";
+    other.nodes.front().id = uuid<NodeId>('2');
+    other.entries = {other.nodes.front().id};
+    draft.workflows.push_back(other);
+    auto driver = std::make_shared<Driver>();
+    EditorWindow window(std::move(draft), registry_for(driver));
+    const DrainOnExit drain{*driver};
+    auto& controller = control<RunController>(window, "runController");
+    auto& panel = control<RunPanel>(window, "runPanel");
+    auto& start = control<QAction>(window, "runWorkflow");
+    auto& cancel = control<QAction>(window, "cancelRun");
+    auto& history = control<QComboBox>(window, "runHistory");
+    auto& status = control<QLabel>(window, "runStatus");
+    controller.set_limits(0, 4);
+    window.show();
+    start.trigger();
+    QTRY_VERIFY(controller.runs().size() == 1 && driver->call(0) && start.isEnabled());
+    const auto first = controller.runs().front();
+    start.trigger();
+    QTRY_VERIFY(controller.runs().size() == 2 && driver->call(1) && start.isEnabled());
+    const auto second = controller.runs().back();
+    start.trigger();
+    QTRY_VERIFY(controller.runs().size() == 3 && start.isEnabled());
+    const auto queued = controller.runs().back();
+    QVERIFY(queued.admission() == RunAdmission::Queued && !driver->call(2));
+    QTRY_COMPARE(status.text(), QStringLiteral("Status: Queued"));
+    std::optional<Diagnostic> refusal;
+    connect(&controller, &RunController::operation_failed, &window, [&](const Diagnostic& issue) { refusal = issue; });
+    start.trigger();
+    QTRY_VERIFY(refusal && refusal->code == ErrorCode::RunQueueFull);
+    QCOMPARE(controller.runs().size(), 3u);
+
+    auto* view = qobject_cast<QGraphicsView*>(window.centralWidget());
+    auto* scene = qobject_cast<ControlScene*>(view->scene());
+    QVERIFY(scene && scene->select_workflow(other.id) && start.isEnabled());
+    start.trigger();
+    QTRY_VERIFY(controller.runs().size() == 4 && driver->call(2));
+    const auto independent = controller.runs().back();
+    QVERIFY(independent.identity().workflow == other.id && !start.isEnabled());
+    const auto other_call = *driver->call(2);
+    take(other_call.completion.complete(succeeded(other_call)));
+    take(other_call.completion.mark_exited());
+    QTRY_VERIFY(controller.runs().size() == 3 && start.isEnabled());
+    QVERIFY(take(independent.inspect()).status == ExecutionStatus::Succeeded);
+    QVERIFY(take(first.inspect()).status == ExecutionStatus::Running && take(second.inspect()).status == ExecutionStatus::Running);
+
+    // History limit zero still displays every pending/running/cleaning handle.
+    history.setCurrentIndex(3);
+    QVERIFY(panel.selected_run() && panel.selected_run()->identity() == first.identity() && cancel.isEnabled());
+    cancel.trigger();
+    QTRY_VERIFY(take(first.inspect()).status == ExecutionStatus::Cancelled);
+    QVERIFY(!take(first.inspect()).quiescent && take(second.inspect()).status == ExecutionStatus::Running);
+    QVERIFY(take(queued.inspect()).status == ExecutionStatus::Pending && !driver->call(3));
+    release(*driver->call(0));
+    QTRY_VERIFY(driver->call(3) && controller.runs().size() == 2);
+    QVERIFY(driver->call(3)->identity.invocation.workflow_run == queued.identity().run);
+    QVERIFY(!cancel.isEnabled() && panel.selected_run()->identity() == first.identity());
+    for (const auto index : {1u, 3u}) {
+        const auto call = *driver->call(index);
+        take(call.completion.complete(succeeded(call)));
+        take(call.completion.mark_exited());
+    }
+    QTRY_VERIFY(controller.can_start() && controller.runs().empty());
+    QVERIFY(take(second.inspect()).status == ExecutionStatus::Succeeded && take(queued.inspect()).status == ExecutionStatus::Succeeded);
+    QCOMPARE(driver->cancellations.load(), 1u);
+}
 
 void RunLifecycleTests::cancel_with_slow_panel_and_resume_after_hiding()
 {
@@ -332,7 +406,9 @@ void RunLifecycleTests::replace_and_close_with_pending_physical_exit()
     const fs::path directory(scratch.path().toStdWString());
     take(write_new_solution(directory, replacement));
     auto driver = std::make_shared<Driver>();
-    EditorWindow window(solution_for('1'), registry_for(driver));
+    auto original = solution_for('1');
+    original.workflows.front().admission.max_in_flight = 2;
+    EditorWindow window(std::move(original), registry_for(driver));
     const DrainOnExit drain{*driver};
     auto& controller = control<RunController>(window, "runController");
     auto& panel = control<RunPanel>(window, "runPanel");
@@ -343,6 +419,10 @@ void RunLifecycleTests::replace_and_close_with_pending_physical_exit()
     QTRY_VERIFY(controller.runs().size() == 1 && driver->call(0));
     const auto first = controller.runs().front();
     const auto old_call = *driver->call(0);
+    start.trigger();
+    QTRY_VERIFY(controller.runs().size() == 2 && driver->call(1));
+    const auto sibling = controller.runs().back();
+    const auto sibling_call = *driver->call(1);
 
     window.open_document(directory);
     QTRY_VERIFY(!window.file_busy() && window.draft().id == replacement.id);
@@ -355,13 +435,19 @@ void RunLifecycleTests::replace_and_close_with_pending_physical_exit()
     QVERIFY(!panel.selected_run() && identity.text().isEmpty());
 
     take(old_call.completion.mark_exited());
+    QVERIFY(await(first, RunWaitTarget::Quiescence).progress.quiescent);
+    take(sibling_call.completion.complete(succeeded(sibling_call)));
+    QVERIFY(await(sibling, RunWaitTarget::Completion).progress.status == ExecutionStatus::Succeeded);
+    QCoreApplication::processEvents();
+    QVERIFY(!start.isEnabled() && !panel.selected_run());
+    take(sibling_call.completion.mark_exited());
     QTRY_VERIFY(start.isEnabled());
-    QVERIFY(take(first.inspect()).quiescent);
+    QVERIFY(take(sibling.inspect()).quiescent);
     QVERIFY(!panel.selected_run());
     start.trigger();
-    QTRY_VERIFY(controller.runs().size() == 1 && driver->call(1));
+    QTRY_VERIFY(controller.runs().size() == 1 && driver->call(2));
     const auto second = controller.runs().front();
-    const auto new_call = *driver->call(1);
+    const auto new_call = *driver->call(2);
     QVERIFY(second.identity().snapshot.session != first.identity().snapshot.session);
     QVERIFY(panel.selected_run() && panel.selected_run()->identity() == second.identity());
     QVERIFY(identity.text().contains(QString::fromStdString(second.identity().snapshot.session.to_string())));
