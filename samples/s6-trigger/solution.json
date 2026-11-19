@@ -1,0 +1,285 @@
+{
+  "coordinates": [],
+  "format": "visionpro.solution",
+  "format_version": 1,
+  "id": "5ca4f87a-ea1e-4d62-89b0-000000006600",
+  "layouts": [
+    {
+      "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006610",
+      "nodes": [
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000006611",
+          "x": 60.0,
+          "y": 80.0
+        }
+      ]
+    },
+    {
+      "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006620",
+      "nodes": [
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000006621",
+          "x": 60.0,
+          "y": 80.0
+        }
+      ]
+    }
+  ],
+  "name": "S6.6 受控外部事件与连续时钟",
+  "queues": [],
+  "resources": [],
+  "revision": "1",
+  "variables": [],
+  "workflows": [
+    {
+      "id": "5ca4f87a-ea1e-4d62-89b0-000000006610",
+      "name": "外部帧号",
+      "enabled": true,
+      "interface": {
+        "id": "s66.sample.external",
+        "version": 1,
+        "inputs": [
+          {
+            "binding": {
+              "allowed_conversions": [
+                "exact"
+              ],
+              "allowed_sources": [
+                "constant",
+                "run_output",
+                "public_input"
+              ],
+              "cardinality": "single_source",
+              "time": "before_invocation"
+            },
+            "constraints": {
+              "allowed_values": [],
+              "integer_range": null,
+              "max_length": null,
+              "real_range": null
+            },
+            "default_value": null,
+            "display_name": "输入帧号",
+            "id": "frame",
+            "required": true,
+            "semantics": {
+              "coordinate_system": null,
+              "unit": "unspecified"
+            },
+            "type": {
+              "kind": "int64"
+            }
+          }
+        ],
+        "outputs": [
+          {
+            "id": "frame",
+            "display_name": "本轮帧号",
+            "type": {
+              "kind": "int64"
+            },
+            "semantics": {
+              "coordinate_system": null,
+              "unit": "unspecified"
+            },
+            "required": true,
+            "allowed_absence": []
+          }
+        ],
+        "control_outputs": []
+      },
+      "nodes": [
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000006611",
+          "name": "本轮帧号累计",
+          "configuration": {
+            "kind": "tool",
+            "type": "visionpro.calc.int64_accumulate",
+            "config_version": 1
+          },
+          "bindings": [
+            {
+              "target": {
+                "kind": "input",
+                "id": "value"
+              },
+              "sources": [
+                {
+                  "kind": "public_input",
+                  "value": {
+                    "group": null,
+                    "input": "frame",
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006610"
+                  }
+                }
+              ],
+              "cardinality": "single_source",
+              "accepted_absence": [],
+              "conversion": "exact"
+            }
+          ],
+          "resources": [],
+          "enabled": true,
+          "join": "all_activated"
+        }
+      ],
+      "entries": [
+        "5ca4f87a-ea1e-4d62-89b0-000000006611"
+      ],
+      "control_links": [],
+      "control_exports": [],
+      "containment": [],
+      "outputs": [
+        {
+          "output": "frame",
+          "source": {
+            "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006610",
+            "node": "5ca4f87a-ea1e-4d62-89b0-000000006611",
+            "output": {
+              "kind": "port",
+              "id": "value"
+            },
+            "selector": []
+          }
+        }
+      ],
+      "admission": {
+        "max_in_flight": 1,
+        "queue_capacity": 2,
+        "overflow": "reject"
+      },
+      "trigger": {
+        "mode": "external",
+        "source": "s66.controlled.external",
+        "frame_input": "frame",
+        "interval_ms": 0
+      }
+    },
+    {
+      "id": "5ca4f87a-ea1e-4d62-89b0-000000006620",
+      "name": "连续帧号",
+      "enabled": true,
+      "interface": {
+        "id": "s66.sample.continuous",
+        "version": 1,
+        "inputs": [
+          {
+            "binding": {
+              "allowed_conversions": [
+                "exact"
+              ],
+              "allowed_sources": [
+                "constant",
+                "run_output",
+                "public_input"
+              ],
+              "cardinality": "single_source",
+              "time": "before_invocation"
+            },
+            "constraints": {
+              "allowed_values": [],
+              "integer_range": null,
+              "max_length": null,
+              "real_range": null
+            },
+            "default_value": null,
+            "display_name": "输入帧号",
+            "id": "frame",
+            "required": true,
+            "semantics": {
+              "coordinate_system": null,
+              "unit": "unspecified"
+            },
+            "type": {
+              "kind": "int64"
+            }
+          }
+        ],
+        "outputs": [
+          {
+            "id": "frame",
+            "display_name": "本轮帧号",
+            "type": {
+              "kind": "int64"
+            },
+            "semantics": {
+              "coordinate_system": null,
+              "unit": "unspecified"
+            },
+            "required": true,
+            "allowed_absence": []
+          }
+        ],
+        "control_outputs": []
+      },
+      "nodes": [
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000006621",
+          "name": "本轮帧号累计",
+          "configuration": {
+            "kind": "tool",
+            "type": "visionpro.calc.int64_accumulate",
+            "config_version": 1
+          },
+          "bindings": [
+            {
+              "target": {
+                "kind": "input",
+                "id": "value"
+              },
+              "sources": [
+                {
+                  "kind": "public_input",
+                  "value": {
+                    "group": null,
+                    "input": "frame",
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006620"
+                  }
+                }
+              ],
+              "cardinality": "single_source",
+              "accepted_absence": [],
+              "conversion": "exact"
+            }
+          ],
+          "resources": [],
+          "enabled": true,
+          "join": "all_activated"
+        }
+      ],
+      "entries": [
+        "5ca4f87a-ea1e-4d62-89b0-000000006621"
+      ],
+      "control_links": [],
+      "control_exports": [],
+      "containment": [],
+      "outputs": [
+        {
+          "output": "frame",
+          "source": {
+            "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006620",
+            "node": "5ca4f87a-ea1e-4d62-89b0-000000006621",
+            "output": {
+              "kind": "port",
+              "id": "value"
+            },
+            "selector": []
+          }
+        }
+      ],
+      "admission": {
+        "max_in_flight": 1,
+        "queue_capacity": 2,
+        "overflow": "reject"
+      },
+      "trigger": {
+        "mode": "continuous",
+        "source": "s66.controlled.clock",
+        "frame_input": "frame",
+        "interval_ms": 100
+      }
+    }
+  ]
+}

@@ -1,5 +1,6 @@
 #include "run_summary.hpp"
 #include "tool_catalog.hpp"
+#include "trigger_command.hpp"
 
 #include <visionpro/core/id_factory.hpp>
 #include <visionpro/core/schema_id_factory.hpp>
@@ -20,7 +21,7 @@ using namespace workflow;
 using nlohmann::json;
 namespace fs = std::filesystem;
 
-enum class Command { Run, Save };
+enum class Command { Run, Save, Trigger };
 struct InputArgument { InputId id; std::string text; };
 struct Arguments {
     Command command;
@@ -29,6 +30,7 @@ struct Arguments {
     std::optional<NodeId> group{};
     std::vector<InputArgument> inputs{};
     std::vector<NamedResourceRoot> roots{};
+    TriggerSequence sequence{};
 };
 
 class UsageError final : public std::runtime_error {
@@ -39,6 +41,8 @@ public:
 constexpr auto usage =
     "visionpro_cli run --solution <solution.json> --workflow <uuid> [--group <uuid>] [--input <id>=<value>]... [--root <id>=<directory>]...\n"
     "visionpro_cli save --solution <solution.json> [--root <id>=<directory>]...\n"
+    "visionpro_cli trigger --solution <solution.json> --workflow <uuid> [--frame <int64>]... [--stop drain|cancel] [--root <id>=<directory>]...\n"
+    "For a continuous entry, use --advance-ms <uint32> repeatedly to advance its controlled clock. Default stop mode is drain.\n"
     "Use --group to debug one composite Group in isolation. Inputs follow the selected public interface.\n"
     "Built-in tools include simulation, list selection, integer range judgement, calculation, logic and formatting.\n"
     "Shared tools read and write global values, send and receive queued records, and join workpiece measurements.\n"
@@ -73,12 +77,23 @@ std::pair<std::wstring_view, std::wstring_view> assignment(std::wstring_view tex
     return {text.substr(0, separator), text.substr(separator + 1)};
 }
 
+template<class T> T number(std::string_view text)
+{
+    T value{};
+    const auto end = text.data() + text.size();
+    const auto parsed = std::from_chars(text.data(), end, value);
+    if (parsed.ec != std::errc{} || parsed.ptr != end) { throw UsageError("An input does not match its numeric type."); }
+    return value;
+}
+
 Arguments parse_arguments(std::span<wchar_t*> args)
 {
-    if (args.empty()) { throw UsageError("Choose run or save. See --help."); }
+    if (args.empty()) { throw UsageError("Choose run, save or trigger. See --help."); }
     const std::wstring_view command{args.front()};
-    if (command != L"run" && command != L"save") { throw UsageError("Unknown command. See --help."); }
-    Arguments parsed{command == L"run" ? Command::Run : Command::Save};
+    Arguments parsed{Command::Run};
+    if (command == L"save") { parsed.command = Command::Save; }
+    else if (command == L"trigger") { parsed.command = Command::Trigger; }
+    else if (command != L"run") { throw UsageError("Unknown command. See --help."); }
     for (std::size_t index = 1; index < args.size(); index += 2) {
         const std::wstring_view option{args[index]};
         if (index + 1 == args.size()) { throw UsageError("An option is missing its value. See --help."); }
@@ -96,9 +111,18 @@ Arguments parse_arguments(std::span<wchar_t*> args)
                 throw UsageError("Each named root requires one directory.");
             }
             parsed.roots.push_back({id, fs::absolute(fs::path(path))});
-        } else if (parsed.command == Command::Run && option == L"--workflow") {
+        } else if (parsed.command != Command::Save && option == L"--workflow") {
             if (parsed.workflow) { throw UsageError("Specify one workflow ID."); }
             parsed.workflow = argument_value(IdFactory::parse<WorkflowId>(utf8(value)));
+        } else if (parsed.command == Command::Trigger && option == L"--frame") {
+            parsed.sequence.frames.push_back(number<std::int64_t>(utf8(value)));
+        } else if (parsed.command == Command::Trigger && option == L"--advance-ms") {
+            parsed.sequence.advances.push_back(std::chrono::milliseconds(number<std::uint32_t>(utf8(value))));
+        } else if (parsed.command == Command::Trigger && option == L"--stop") {
+            if (parsed.sequence.stop) { throw UsageError("Specify --stop once."); }
+            if (value == L"drain") { parsed.sequence.stop = TriggerStopMode::Drain; }
+            else if (value == L"cancel") { parsed.sequence.stop = TriggerStopMode::Cancel; }
+            else { throw UsageError("Choose drain or cancel for --stop."); }
         } else if (parsed.command == Command::Run && option == L"--group") {
             if (parsed.group) { throw UsageError("Specify one Group ID."); }
             parsed.group = argument_value(IdFactory::parse<NodeId>(utf8(value)));
@@ -114,17 +138,8 @@ Arguments parse_arguments(std::span<wchar_t*> args)
         }
     }
     if (parsed.manifest.empty()) { throw UsageError("Specify --solution <solution.json>."); }
-    if (parsed.command == Command::Run && !parsed.workflow) { throw UsageError("Specify --workflow <uuid>."); }
+    if (parsed.command != Command::Save && !parsed.workflow) { throw UsageError("Specify --workflow <uuid>."); }
     return parsed;
-}
-
-template<class T> T number(std::string_view text)
-{
-    T value{};
-    const auto end = text.data() + text.size();
-    const auto parsed = std::from_chars(text.data(), end, value);
-    if (parsed.ec != std::errc{} || parsed.ptr != end) { throw UsageError("An input does not match its numeric type."); }
-    return value;
 }
 
 DataValue input_value(const InputDescriptor& input, std::string_view text)
@@ -253,6 +268,16 @@ int execute(std::span<wchar_t*> args)
         auto loaded = load_solution(options.manifest.parent_path(), registry, options.roots);
         if (const auto* failure = std::get_if<Diagnostic>(&loaded)) { return report_failure("load", *failure); }
         const auto& document = std::get<SolutionDocument>(loaded);
+        if (options.command == Command::Trigger) {
+            auto result = replay_triggers(document, registry, *options.workflow, options.sequence);
+            if (const auto* failure = std::get_if<Diagnostic>(&result)) { return report_failure("trigger", *failure); }
+            const auto& replay = std::get<TriggerReplay>(result);
+            std::cout << replay.report.dump(2) << '\n';
+            if (const auto output_error = finish_output(); output_error != 0) { return output_error; }
+            if (replay.failures.empty()) { return 0; }
+            std::cerr << json{{"stage", "trigger"}, {"diagnostics", diagnostics_json(replay.failures)}}.dump(2) << '\n';
+            return 1;
+        }
         return options.command == Command::Save ? save(document) : run(options, document, registry);
     } catch (const UsageError& error) {
         return report_failure("arguments", {ErrorCode::InvalidRunRequest, Severity::Error, {}, error.what()}, 2);

@@ -2401,3 +2401,27 @@ $solution = (Resolve-Path 'samples/s6-concurrency/solution.json').Path
 ctest --test-dir out/build/s65-headless -C Release -R 'workflow\.(parallel_dispatch|exclusive_resources|bounded_admission|reentrant_state|queued_file_snapshots|state_acceptance)|app\.cli_shared_workflows' --output-on-failure
 ctest --test-dir out/build/s65-gui -C Release -R 'visionpro_(run_lifecycle|inspector|concurrency_parity)_tests' --output-on-failure
 ```
+
+### 10.6 S6.6 连续运行与外部触发
+
+2026-11-19 通过 Windows x64 Release 全量 CTest。启用 Qt 和 OpenCV 的构建通过 **147/147** 项，关闭二者的构建通过 **118/118** 项。样例的两个流程均将 Int64 帧号送入逐轮累加节点，输出即本轮帧号。外部事件由宿主提供，连续时钟可在 CLI 中手动推进。真实相机信号的验证安排在 S6.10。[样例方案](../samples/s6-trigger/solution.json) · [触发与并发测试](../tests/workflow/concurrency_tests.cpp)
+
+| 验收场景 | 实测结果 |
+|---|---|
+| 三帧与满载 | 固定阻住首帧，配置 1 个在途和 2 个等待名额。10、20、30 分别立即受理、排队、排队。第 4 帧按配置返回占用者身份或 `RunQueueFull`。排空后前三轮逐帧输出，第四帧没有运行号。 |
+| 连续时钟与快照 | 首个间隔前没有轮次，同一时刻重复推进只触发一次。晚到多个间隔时只产生一帧。同会话发布新的默认加数 100 后，下一帧 2 输出 102。停止后再推进一小时也没有新轮。 |
+| 停止与物理退出 | 停止期间仍在资源预检的事件无法受理。取消跳过排队帧，运行中的同步调用在退出后记为已取消。模拟异步调用已提交成功但尚未退出时，等待返回 `DeadlineExpired`，独占租约持有数为 1。开放退出屏障后再等待成功，持有数为 0。 |
+| 桌面保存与重开 | 编辑并另存外部源，再重开方案。桌面和独立 CLI 均得到 11、22、4000000000，核对了关联键与每轮输出。连续模式从帧 1、2 开始，重开后旧订阅的迟到事件无法启动新方案。 |
+
+桌面打开样例后，在流程画布空白处取消节点选择，进入 **Properties → Workflow → Trigger source** 编辑来源。选择「外部帧号」并执行 **Run → Arm Workflow Trigger**，再用 **Send External Frame…** 输入帧号。「连续帧号」启用后按 100 ms 间隔触发。**Stop Trigger and Drain** 等待已受理轮次完成，**Stop Trigger and Cancel Runs** 请求取消并等待实际退出。在 **Run and Results** 选择某轮即可核对来源、帧号输入、关联键和初始受理方式。[桌面与 CLI 对照测试](../tests/ui/editor_run_tests.cpp)
+
+从仓库根目录运行以下命令。第一条回放三个外部帧，第二条依次推进受控时钟，预期输出帧号 1、2、3。CLI 将每次事件的受理结果写入 `events`，受理的轮次附带固定输入和节点输出。某帧被拒绝时仍保留其他帧的结果，进程返回 1 并向 stderr 写入诊断。
+
+```powershell
+$cli = 'out/build/s66-headless/source/app/visionpro_cli.exe'
+$solution = (Resolve-Path 'samples/s6-trigger/solution.json').Path
+& $cli trigger --solution $solution --workflow '5ca4f87a-ea1e-4d62-89b0-000000006610' --frame 101 --frame 203 --frame 307 --stop drain
+& $cli trigger --solution $solution --workflow '5ca4f87a-ea1e-4d62-89b0-000000006620' --advance-ms 99 --advance-ms 1 --advance-ms 250 --advance-ms 100
+ctest --test-dir out/build/s66-headless -C Release -R 'workflow\.trigger_|app\.cli_trigger_replay' --output-on-failure
+ctest --test-dir out/build/s66-gui -C Release -R 'visionpro_(editor_run|run_lifecycle)_tests' --output-on-failure
+```

@@ -104,6 +104,7 @@ Solution extract(const Solution& draft, WorkflowId workflow, std::optional<NodeI
         flow.control_exports = config->control_exports;
         flow.enabled = root.enabled;
         flow.admission = {}; // A Group's calls run under the importing workflow's admission policy.
+        flow.trigger.reset(); // A Group runs when called by its enclosing workflow.
         rebase_inputs(flow, group, {});
     }
     Solution model{draft.id, flow.name, draft.format_version, 1, {std::move(flow)}};
@@ -199,6 +200,9 @@ void validate_package(const Package& pack, const Solution& host, const ToolRegis
     }
     if (pack.group && candidate.workflows.front().admission != WorkflowAdmission{}) {
         fail(ErrorCode::InvalidModel, "A Group package cannot declare workflow admission settings.");
+    }
+    if (pack.group && candidate.workflows.front().trigger) {
+        fail(ErrorCode::InvalidModel, "A Group package cannot declare a workflow entry trigger.");
     }
     for (const auto& [id, type] : pack.services.variables) {
         const auto it = std::ranges::find(host.variables, id, &GlobalVariableDefinition::id);

@@ -39,6 +39,9 @@ template<> struct EnumNames<workflow::JoinPolicy> {
 template<> struct EnumNames<workflow::AdmissionOverflow> {
     static constexpr auto values = std::to_array<std::string_view>({"busy", "reject"});
 };
+template<> struct EnumNames<workflow::TriggerMode> {
+    static constexpr auto values = std::to_array<std::string_view>({"continuous", "external"});
+};
 template<> struct EnumNames<workflow::LoopExportMode> {
     static constexpr auto values = std::to_array<std::string_view>({"first", "last", "collect", "sum"});
 };
@@ -501,12 +504,17 @@ Json encode_workflow(const Workflow& flow)
         result["admission"] = {{"max_in_flight", flow.admission.max_in_flight}, {"queue_capacity", flow.admission.queue_capacity},
             {"overflow", write_enum(flow.admission.overflow)}};
     }
+    if (flow.trigger) {
+        const auto& trigger = *flow.trigger;
+        result["trigger"] = {{"mode", write_enum(trigger.mode)}, {"source", write_id(trigger.source)},
+            {"frame_input", write_id(trigger.frame_input)}, {"interval_ms", trigger.interval_ms}};
+    }
     return result;
 }
 
 Workflow decode_workflow(const Reader& reader)
 {
-    reader.object({"id", "name", "interface", "nodes", "control_links", "containment", "entries", "outputs", "enabled", "control_exports", "admission"});
+    reader.object({"id", "name", "interface", "nodes", "control_links", "containment", "entries", "outputs", "enabled", "control_exports", "admission", "trigger"});
     WorkflowAdmission admission;
     if (reader.contains("admission")) {
         const auto policy = reader.field("admission");
@@ -514,11 +522,18 @@ Workflow decode_workflow(const Reader& reader)
         admission = {policy.field("max_in_flight").u32(), policy.field("queue_capacity").u32(),
             read_enum<AdmissionOverflow>(policy.field("overflow"))};
     }
+    std::optional<WorkflowTrigger> trigger;
+    if (reader.contains("trigger")) {
+        const auto config = reader.field("trigger");
+        config.object({"mode", "source", "frame_input", "interval_ms"});
+        trigger = WorkflowTrigger{read_enum<TriggerMode>(config.field("mode")), read_id<SchemaId>(config.field("source")),
+            read_id<InputId>(config.field("frame_input")), config.field("interval_ms").u32()};
+    }
     return {read_id<WorkflowId>(reader.field("id")), std::string{reader.field("name").text()}, decode_interface(reader.field("interface")),
         read_array<Node>(reader.field("nodes"), decode_node), read_array<ControlLink>(reader.field("control_links"), decode_control_link),
         read_array<Containment>(reader.field("containment"), decode_containment), read_array<NodeId>(reader.field("entries"), read_id<NodeId>),
         read_array<OutputMapping>(reader.field("outputs"), decode_output_mapping), reader.field("enabled").boolean(),
-        read_array<ControlOutputMapping>(reader.field("control_exports"), decode_control_mapping), admission};
+        read_array<ControlOutputMapping>(reader.field("control_exports"), decode_control_mapping), admission, trigger};
 }
 
 Json encode_variable(const GlobalVariableDefinition& variable)

@@ -3,7 +3,9 @@
 #include "run_inputs.hpp"
 
 #include <visionpro/infrastructure/solution_file.hpp>
+#include <visionpro/workflow/trigger_control.hpp>
 
+#include <QChronoTimer>
 #include <QObject>
 #include <QTimer>
 
@@ -28,10 +30,17 @@ class RunController final : public QObject {
 
 public:
     explicit RunController(core::ToolRegistry registry, QObject* parent = nullptr);
+    ~RunController() override;
 
     void start(workflow::Solution draft, RunDocument document, workflow::RunArguments arguments,
         std::vector<RunImageInput> images);
     void cancel(const workflow::RunHandle& run);
+    void arm_trigger(workflow::Solution draft, RunDocument document, core::WorkflowId workflow);
+    void send_frame(core::WorkflowId workflow, std::int64_t frame);
+    void stop_trigger(core::WorkflowId workflow, workflow::TriggerStopMode mode);
+    bool can_arm_trigger(const workflow::Workflow& flow) const;
+    bool can_send_frame(core::WorkflowId workflow) const;
+    bool can_stop_trigger(core::WorkflowId workflow) const;
     core::Result<std::optional<SessionSharedPreview>> shared_preview() const;
     bool can_reset_state(const workflow::NodeTarget& target) const;
     core::Result<std::monostate> reset_state(const workflow::NodeTarget& target);
@@ -51,6 +60,7 @@ public:
 signals:
     void changed();
     void operation_failed(const visionpro::core::Diagnostic& diagnostic);
+    void trigger_notice(const QString& message);
 
 private:
     void refresh_progress();
@@ -59,9 +69,21 @@ private:
     void unsubscribe();
     void trim_history();
     bool workflow_active(core::WorkflowId workflow) const noexcept;
+    bool ensure_session();
+    void record_submission(const workflow::RunSubmission& submission, std::string description = {});
+    void dispatch_trigger(core::WorkflowId workflow, std::optional<std::int64_t> frame);
+    void disarm_triggers();
 
     core::ToolRegistry registry_;
     std::shared_ptr<workflow::WorkflowSession> session_;
+    struct ArmedTrigger {
+        std::shared_ptr<workflow::TriggerControl> control;
+        std::unique_ptr<QChronoTimer> timer; // Only continuous sources have timers.
+        bool dispatching{};
+        bool stopping{};
+    };
+    std::map<core::WorkflowId, ArmedTrigger> triggers_;
+    std::uint64_t document_generation_{};
     std::optional<workflow::RunObservation> observation_;
     struct ActiveRun {
         workflow::RunHandle handle;

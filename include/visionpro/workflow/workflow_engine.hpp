@@ -43,7 +43,7 @@ public:
     [[nodiscard]] core::Result<std::monostate> close();
 private:
     friend class WorkflowSession;
-    [[nodiscard]] core::Result<std::monostate> initialize_shared(const ConfigSnapshot& capture);
+    [[nodiscard]] core::Result<std::monostate> publish_shared(const ConfigSnapshot& capture);
     [[nodiscard]] core::Result<std::shared_ptr<const core::SharedData>> shared_preview() const;
     [[nodiscard]] core::Result<std::shared_ptr<const core::CorrelationJoinAccess>> correlation_preview() const;
     struct PreparedSubmission;

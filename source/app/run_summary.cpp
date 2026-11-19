@@ -659,6 +659,19 @@ core::Result<nlohmann::json> summarize_run(const workflow::RunHandle& handle,
             {"exports", array_json(call.exports, export_trace)}};
     });
     add_run_identity(summary, handle.identity());
+    const auto& request = handle.request();
+    const auto& trigger = request.trigger();
+    if (trigger.kind == TriggerKind::External || trigger.kind == TriggerKind::Continuous) {
+        summary["trigger"] = {{"kind", trigger.kind == TriggerKind::External ? "external" : "continuous"},
+            {"source", id_text(trigger.source)}, {"correlation", nullptr}};
+        if (const auto& correlation = request.correlation()) {
+            summary["trigger"]["correlation"] = {{"domain", id_text(correlation->domain())}, {"key", correlation->key()}};
+        }
+        summary["inputs"] = array_json(request.inputs(), [](const FixedRunInput& input) {
+            return json{{"id", id_text(input.id)}, {"origin", input.origin == InputOrigin::Provided ? "provided" : "default"},
+                {"value", data_json(input.value)}};
+        });
+    }
     return summary;
 }
 

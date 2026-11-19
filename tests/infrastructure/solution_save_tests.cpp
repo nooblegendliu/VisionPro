@@ -710,6 +710,9 @@ void reusable_packages()
     auto& flow = draft.workflows.front();
     auto& reader = flow.nodes.front();
     flow.admission = {2, 3, AdmissionOverflow::Reject};
+    const auto frame_input = key<InputId>("frame");
+    flow.interface.inputs.push_back({frame_input, "Frame", DataType::integer()});
+    flow.trigger = WorkflowTrigger{TriggerMode::External, key<SchemaId>("subgraph.frames"), frame_input};
     const auto child = reader.id, group = id<NodeId>('2');
     const auto port = key<OutputId>("byte");
     const auto variable = id<VariableId>('6');
@@ -782,6 +785,7 @@ void reusable_packages()
     auto final = second.solution;
     auto& imported_flow = final.workflows.front();
     check(imported_flow.admission == WorkflowAdmission{}, "Importing a Group preserves the host workflow's own admission settings.");
+    check(!imported_flow.trigger, "Importing a Group does not copy the source workflow's entry trigger.");
     const auto& instance = std::get<GroupConfiguration>(find_node(imported_flow, *first.group)->configuration);
     const auto instance_child = instance.entries.at(0);
     check(instance.interface.id == ports.id && instance.interface.version == 3 && instance_child != child
@@ -811,6 +815,8 @@ void reusable_packages()
         "A workflow package becomes a separate workflow in the target solution.");
     check(find_workflow(as_workflow.solution, as_workflow.workflow)->admission == flow.admission,
         "A complete workflow carries its in-flight limit, waiting capacity and overflow response across the package boundary.");
+    check(find_workflow(as_workflow.solution, as_workflow.workflow)->trigger == flow.trigger,
+        "An imported workflow keeps its trigger mapping to its own public frame input.");
     const auto after = count_files();
     const auto saved_manifest = read(host_directory / solution_manifest_name);
     fs::path bundled_asset;

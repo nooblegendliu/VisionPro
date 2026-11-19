@@ -1,7 +1,8 @@
 #include <visionpro/core/id_factory.hpp>
+#include <visionpro/core/runtime_id_factory.hpp>
 #include <visionpro/core/schema_id_factory.hpp>
 #include <visionpro/infrastructure/file_resources.hpp>
-#include <visionpro/workflow/workflow_session.hpp>
+#include <visionpro/workflow/trigger_control.hpp>
 #include "logic_tools.hpp"
 
 #include <algorithm>
@@ -196,7 +197,7 @@ RunHandle accepted(RunSubmission submission)
 struct Fixture {
     std::shared_ptr<Gates> gates = std::make_shared<Gates>();
     const ToolRegistry registry = catalog(gates);
-    const std::unique_ptr<WorkflowSession> session = take(WorkflowSession::create(registry));
+    const std::shared_ptr<WorkflowSession> session = take(WorkflowSession::create(registry));
     ~Fixture() { gates->release_all(); }
     RunSubmission submit(const ConfigSnapshot& snapshot, WorkflowId flow, int ticket, int delta = 1) const
     {
@@ -487,6 +488,177 @@ void queued_file_snapshots()
     check(number(updated, "pinned") == 'A' && number(updated, "current") == '3' && number(updated) == 140,
         "Subsequent work must use the new provider and edited binding.");
 }
+
+void configure_events(Workflow& flow, TriggerMode mode = TriggerMode::External)
+{
+    auto& delta = flow.interface.inputs.at(1);
+    delta.required = false;
+    delta.default_value = ConfigValue::integer(0);
+    flow.trigger = WorkflowTrigger{mode, key<SchemaId>("s66.frames"), key<InputId>("ticket"),
+        mode == TriggerMode::Continuous ? 25u : 0u};
+}
+
+RunHandle trace_frame(const TriggerReceipt& receipt, const WorkflowTrigger& entry, int frame, TriggerKind kind)
+{
+    const auto run = accepted(receipt.submission);
+    const auto* fixed = run.request().input(entry.frame_input);
+    check(receipt.trigger.kind == kind && receipt.trigger.source == entry.source && receipt.frame == frame
+        && receipt.frame_input == entry.frame_input && receipt.correlation && receipt.correlation == run.request().correlation()
+        && run.request().trigger().kind == kind && run.request().trigger().source == entry.source
+        && fixed && fixed->origin == InputOrigin::Provided && *fixed->value.as_int64() == frame,
+        "A receipt must agree with the frozen frame, source and correlation of its own run.");
+    return run;
+}
+
+void trigger_external_overflow()
+{
+    for (auto overflow : {AdmissionOverflow::Reject, AdmissionOverflow::Busy}) {
+        Fixture f;
+        auto a = flow("sync");
+        configure_events(a);
+        a.admission = {1, 2, overflow};
+        take(f.session->activate(solution({a})));
+        const auto events = take(TriggerControl::start(f.session, a.id));
+        f.gates->hold(10);
+        const auto piece = take(RuntimeIdFactory::correlation(key<CorrelationDomainId>("line.one"), "piece-A"));
+        const auto event = events->external(10, piece);
+        const auto first = trace_frame(event, *a.trigger, 10, TriggerKind::External);
+        f.gates->await(10);
+        const auto second = trace_frame(events->external(20), *a.trigger, 20, TriggerKind::External);
+        const auto third = trace_frame(events->external(30), *a.trigger, 30, TriggerKind::External);
+        check(event.correlation == piece && second.request().correlation()->domain().text() == a.trigger->source.text()
+            && second.request().correlation()->key() == "20" && third.request().correlation()->key() == "30",
+            "Preserve supplied workpiece identity and derive missing correlations from the source and frame.");
+        check(first.admission() == RunAdmission::Immediate && second.admission() == RunAdmission::Queued
+            && third.admission() == RunAdmission::Queued && first.identity() != second.identity() && second.identity() != third.identity(),
+            "Three frames receive separate run identities, including both queue entries.");
+        const auto full = events->external(40);
+        check(full.frame == 40 && full.correlation && full.correlation->key() == "40" && full.trigger.source == a.trigger->source,
+            "A full queue still records the unaccepted event.");
+        if (overflow == AdmissionOverflow::Reject) {
+            const auto* rejection = std::get_if<RunRejected>(&full.submission);
+            check(rejection && rejection->diagnostic.code == ErrorCode::RunQueueFull, "Reject reports a full queue.");
+        } else {
+            const auto* busy = std::get_if<RunBusy>(&full.submission);
+            check(busy && busy->active == first.identity(), "Busy reports the current slot owner.");
+        }
+        check(take(events->stop(TriggerStopMode::Drain, TriggerControl::Clock::now())) == RunWaitOutcome::DeadlineExpired,
+            "Drain must wait for the blocked leader and admitted FIFO entries.");
+        check(std::holds_alternative<RunRejected>(events->external(50).submission), "Drain closes the subscription immediately.");
+        f.gates->release(10);
+        check(take(events->stop(TriggerStopMode::Drain, TriggerControl::Clock::now() + 5s)) == RunWaitOutcome::Satisfied
+            && number(output(first)) == 10 && number(output(second)) == 20 && number(output(third)) == 30
+            && !f.gates->entered(40) && !f.gates->entered(50), "Drain finishes exactly the three accepted frames.");
+    }
+}
+
+void trigger_clock_and_reopen()
+{
+    Fixture f;
+    auto a = flow("sync");
+    configure_events(a, TriggerMode::Continuous);
+    auto draft = solution({a});
+    const auto capture = take(f.session->activate(draft));
+    const TriggerControl::Clock::time_point zero{};
+    const auto clock = take(TriggerControl::start(f.session, a.id, zero));
+    check(!clock->tick(zero + 24ms) && std::holds_alternative<RunRejected>(clock->external(90).submission),
+        "Both the interval and the configured source mode apply before admission.");
+    const auto first = trace_frame(clock->tick(zero + 25ms).value(), *a.trigger, 1, TriggerKind::Continuous);
+    check(number(output(first)) == 1 && !clock->tick(zero + 25ms), "Repeated host ticks cannot duplicate a frame.");
+    draft.workflows.front().interface.inputs.at(1).default_value = ConfigValue::integer(100);
+    const auto published = accepted(f.session->publish_and_submit(capture, draft, arguments(a.id, 91, 1), {}));
+    check(number(output(published)) == 92, "The same session must publish a revised workflow.");
+    const auto second = trace_frame(clock->tick(zero + 100ms).value(), *a.trigger, 2, TriggerKind::Continuous);
+    check(number(output(second)) == 102 && second.identity().snapshot != first.identity().snapshot && !clock->tick(zero + 124ms),
+        "A delayed tick produces one frame and uses the current snapshot and defaults.");
+    check(take(clock->stop(TriggerStopMode::Drain, TriggerControl::Clock::now() + 5s)) == RunWaitOutcome::Satisfied
+        && !clock->tick(zero + 1h), "Advancing the clock after stopping cannot start another run.");
+    configure_events(draft.workflows.front());
+    const auto before = take(f.session->activate(draft));
+    const auto old_source = take(TriggerControl::start(f.session, a.id));
+    const auto reopened = take(f.session->activate(draft));
+    const auto late = old_source->external(33);
+    const auto* rejection = std::get_if<RunRejected>(&late.submission);
+    check(before.identity().session != reopened.identity().session && rejection && rejection->diagnostic.code == ErrorCode::ResultIdentityMismatch
+        && !f.gates->entered(33), "A still-live old subscription cannot route a late frame to a reopened solution with identical IDs.");
+    const auto current = take(TriggerControl::start(f.session, a.id));
+    const auto fresh = accepted(current->external(34).submission);
+    check(number(output(fresh)) == 34 && fresh.identity().snapshot.session == reopened.identity().session,
+        "Only the new subscription delivers into the reopened session.");
+}
+
+void trigger_cancel_leases()
+{
+    Fixture f;
+    const auto device = fresh<ResourceId>();
+    auto a = flow("exclusive", {{key<SchemaId>("instrument"), {device, ResourceKind::Binary, {}}}});
+    configure_events(a);
+    a.admission = {1, 1, AdmissionOverflow::Busy};
+    const auto provider = std::make_shared<Provider>();
+    take(f.session->activate(solution({a},
+        {{device, "Instrument", ResourceKind::Binary, ExternalFileResource{{PathBase::SolutionDirectory, "instrument.bin"},
+            ResourceReadPolicy::PerInvocation}}}), provider));
+    const auto source = take(TriggerControl::start(f.session, a.id));
+    f.gates->hold(11);
+    const auto holding = accepted(source->external(11).submission);
+    f.gates->await(11);
+    check(wait(holding, RunWaitTarget::Completion).status == ExecutionStatus::Succeeded,
+        "The asynchronous probe publishes its result while holding its device lease.");
+    const auto queued = accepted(source->external(12).submission);
+    check(take(source->stop(TriggerStopMode::Cancel, TriggerControl::Clock::now())) == RunWaitOutcome::DeadlineExpired
+        && !take(holding.inspect()).quiescent && provider->counts->current == 1,
+        "A cancellation wait can expire after logical completion while the actual lease stays held.");
+    check(wait(queued).status == ExecutionStatus::Cancelled && !f.gates->entered(12)
+        && std::holds_alternative<RunRejected>(source->external(13).submission), "Cancel skips waiting frames and closes the source.");
+    f.gates->release(11);
+    check(take(source->stop(TriggerStopMode::Cancel, TriggerControl::Clock::now() + 5s)) == RunWaitOutcome::Satisfied
+        && provider->counts->current == 0 && provider->counts->acquired == 1 && number(output(holding)) == 11,
+        "Physical exit releases the one admitted lease and keeps its already committed result.");
+
+    auto sync = flow("sync");
+    configure_events(sync);
+    take(f.session->activate(solution({sync})));
+    const auto next = take(TriggerControl::start(f.session, sync.id));
+    f.gates->hold(14);
+    const auto running = accepted(next->external(14).submission);
+    f.gates->await(14);
+    check(take(next->stop(TriggerStopMode::Cancel, TriggerControl::Clock::now())) == RunWaitOutcome::DeadlineExpired,
+        "Cancel requests exit of the running synchronous tool without blocking past the caller's deadline.");
+    f.gates->release(14);
+    check(wait(running).status == ExecutionStatus::Cancelled, "A result returned after accepted cancellation cannot publish success.");
+}
+
+class PreflightBarrier final : public Provider {
+public:
+    explicit PreflightBarrier(std::shared_ptr<Gates> gates) : gates_(std::move(gates)) {}
+    Result<std::monostate> preflight(const ExecutionPlan&) const override
+    {
+        gates_->enter(81, {});
+        return std::monostate{};
+    }
+private:
+    std::shared_ptr<Gates> gates_;
+};
+
+void trigger_stop_preflight()
+{
+    Fixture f;
+    auto a = flow("sync");
+    configure_events(a);
+    take(f.session->activate(solution({a}), std::make_shared<PreflightBarrier>(f.gates)));
+    const auto source = take(TriggerControl::start(f.session, a.id));
+    f.gates->hold(81);
+    auto preparing = std::async(std::launch::async, [&] { return source->external(82); });
+    struct ReleaseOnExit { Gates& gates; ~ReleaseOnExit() { gates.release(81); } } release{*f.gates};
+    f.gates->await(81);
+    check(take(source->stop(TriggerStopMode::Drain, TriggerControl::Clock::now())) == RunWaitOutcome::DeadlineExpired
+        && std::holds_alternative<RunRejected>(source->external(83).submission), "Stopping closes admission even while preflight is blocked.");
+    f.gates->release(81);
+    const auto parked = preparing.get();
+    check(std::holds_alternative<RunRejected>(parked.submission) && !f.gates->entered(82) && !f.gates->entered(83)
+        && take(source->stop(TriggerStopMode::Drain, TriggerControl::Clock::now() + 5s)) == RunWaitOutcome::Satisfied,
+        "An event that finished preparing after stop cannot acquire a run identity or dispatch a tool.");
+}
 } // namespace
 
 int main(int argc, char** argv)
@@ -498,6 +670,10 @@ int main(int argc, char** argv)
         else if (test == "bounded_admission") { bounded_admission(); admission_during_cancelled_cleanup(); }
         else if (test == "reentrant_state") { reentrant_state(); }
         else if (test == "queued_file_snapshots") { queued_file_snapshots(); }
+        else if (test == "trigger_external_overflow") { trigger_external_overflow(); }
+        else if (test == "trigger_clock_and_reopen") { trigger_clock_and_reopen(); }
+        else if (test == "trigger_cancel_leases") { trigger_cancel_leases(); }
+        else if (test == "trigger_stop_preflight") { trigger_stop_preflight(); }
         else { throw std::runtime_error("Unknown concurrency test."); }
         return 0;
     } catch (const std::exception& failure) {

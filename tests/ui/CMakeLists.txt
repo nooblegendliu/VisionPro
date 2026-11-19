@@ -32,6 +32,10 @@ set_target_properties(visionpro_editor_run_tests PROPERTIES AUTOMOC ON)
 target_link_libraries(visionpro_editor_run_tests PRIVATE
     visionpro_ui visionpro_app_tools visionpro_infrastructure visionpro_build_options Qt6::Test
 )
+target_compile_definitions(visionpro_editor_run_tests PRIVATE
+    "VISIONPRO_S66_DIRECTORY=\"${PROJECT_SOURCE_DIR}/samples/s6-trigger\""
+    "VISIONPRO_TEST_CLI=\"$<TARGET_FILE:visionpro_cli>\"")
+add_dependencies(visionpro_editor_run_tests visionpro_cli)
 add_test(NAME visionpro_editor_run_tests COMMAND visionpro_editor_run_tests -platform offscreen)
 
 add_executable(visionpro_run_lifecycle_tests run_lifecycle_tests.cpp)

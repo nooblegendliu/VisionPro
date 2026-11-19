@@ -527,6 +527,15 @@ void RunPanel::refresh_call()
 
         QStringList lines;
         const auto& request = run->request();
+        const auto kind = request.trigger().kind;
+        if (kind == TriggerKind::External || kind == TriggerKind::Continuous) {
+            lines.append(QStringLiteral("%1 trigger · %2 · %3").arg(kind == TriggerKind::External ? QStringLiteral("External")
+                : QStringLiteral("Continuous"), id_text(request.trigger().source),
+                run->admission() == RunAdmission::Queued ? QStringLiteral("Queued at admission") : QStringLiteral("Immediate admission")));
+            if (const auto& id = request.correlation()) {
+                lines.append(QStringLiteral("Correlation · %1 / %2").arg(id_text(id->domain()), text(id->key())));
+            }
+        }
         if (const auto* target = std::get_if<NodeTarget>(&request.target())) {
             const auto policy = request.debug_state() == DebugStatePolicy::Active ? QStringLiteral("Active") : QStringLiteral("Isolated");
             lines.append(QStringLiteral("%1 %2 · State policy %3").arg(request.debug_state() == DebugStatePolicy::Active

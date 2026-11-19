@@ -16,6 +16,7 @@ add_library(visionpro_workflow STATIC
     correlation_join.cpp
     workflow_engine.cpp
     workflow_session.cpp
+    trigger_control.cpp
     validation.cpp
     validation_values.cpp
     runtime_values.cpp

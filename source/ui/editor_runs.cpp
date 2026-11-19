@@ -15,6 +15,7 @@
 #include <QDialogButtonBox>
 #include <QDockWidget>
 #include <QFormLayout>
+#include <QInputDialog>
 #include <QMenuBar>
 #include <QPlainTextEdit>
 #include <QPushButton>
@@ -119,6 +120,32 @@ void EditorWindow::create_run_actions()
         show_status(QStringLiteral("Reset session state for %1.").arg(QString::fromStdString(find_node(workflow, selected.front())->name)));
     });
     menu.addSeparator();
+    arm_trigger_ = action(menu, QStringLiteral("Arm Workflow Trigger"), "armWorkflowTrigger", [this] {
+        if (const auto id = model_->workflow_id()) {
+            run_dock_->show();
+            run_dock_->raise();
+            run_controller_->arm_trigger(draft(), {source_, directory_, roots_}, *id);
+        }
+    });
+    send_frame_ = action(menu, QStringLiteral("Send External Frame…"), "sendExternalFrame", [this] {
+        const auto id = model_->workflow_id();
+        if (!id || !run_controller_->can_send_frame(*id)) { return; }
+        bool accepted{};
+        const auto entered = QInputDialog::getText(this, QStringLiteral("External frame"), QStringLiteral("Frame number"),
+            QLineEdit::Normal, {}, &accepted);
+        if (!accepted) { return; }
+        bool valid{};
+        const auto frame = entered.toLongLong(&valid);
+        if (!valid) { report_error(QStringLiteral("Enter a 64-bit integer frame number.")); return; }
+        run_controller_->send_frame(*id, frame);
+    });
+    drain_trigger_ = action(menu, QStringLiteral("Stop Trigger and Drain"), "drainWorkflowTrigger", [this] {
+        if (const auto id = model_->workflow_id()) { run_controller_->stop_trigger(*id, TriggerStopMode::Drain); }
+    });
+    cancel_trigger_ = action(menu, QStringLiteral("Stop Trigger and Cancel Runs"), "cancelWorkflowTrigger", [this] {
+        if (const auto id = model_->workflow_id()) { run_controller_->stop_trigger(*id, TriggerStopMode::Cancel); }
+    });
+    menu.addSeparator();
     action(menu, QStringLiteral("Preview Shared Data…"), "previewSharedData", [this] { show_shared_preview(); });
     run_limits_ = action(menu, QStringLiteral("History and Notifications…"), "runDisplayLimits", [this] { choose_run_limits(); });
 }
@@ -200,6 +227,7 @@ void EditorWindow::create_run_dock()
         render_diagnostics();
         show_status(QString::fromStdString(diagnostic.message));
     });
+    connect(run_controller_, &RunController::trigger_notice, this, &EditorWindow::show_status);
     connect(run_panel_, &RunPanel::image_requested, this, &EditorWindow::show_selected_run_image);
     connect(run_panel_, &RunPanel::selected_run_changed, this, &EditorWindow::refresh_actions);
 }

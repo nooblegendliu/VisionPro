@@ -53,7 +53,8 @@ add_test(NAME workflow.run_handles COMMAND visionpro_run_handle_tests)
 
 add_executable(visionpro_concurrency_tests concurrency_tests.cpp)
 target_link_libraries(visionpro_concurrency_tests PRIVATE visionpro_infrastructure visionpro_logic_tools visionpro_build_options Threads::Threads)
-foreach(case IN ITEMS parallel_dispatch exclusive_resources bounded_admission reentrant_state queued_file_snapshots)
+foreach(case IN ITEMS parallel_dispatch exclusive_resources bounded_admission reentrant_state queued_file_snapshots
+        trigger_external_overflow trigger_clock_and_reopen trigger_cancel_leases trigger_stop_preflight)
     add_test(NAME workflow.${case} COMMAND visionpro_concurrency_tests ${case})
     set_tests_properties(workflow.${case} PROPERTIES TIMEOUT 30)
 endforeach()

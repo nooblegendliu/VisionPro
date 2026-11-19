@@ -67,7 +67,7 @@ struct WorkflowSession::Impl {
         auto captured = ConfigSnapshot::capture(candidate, registry.descriptors(), {replacement->session(), version});
         if (auto* failure = std::get_if<Diagnostic>(&captured)) { return std::move(*failure); }
         const auto snapshot = std::get<ConfigSnapshot>(std::move(captured));
-        auto initialized = replacement->initialize_shared(snapshot);
+        auto initialized = replacement->publish_shared(snapshot);
         if (auto* failure = std::get_if<Diagnostic>(&initialized)) { return std::move(*failure); }
 
         {
@@ -87,6 +87,26 @@ struct WorkflowSession::Impl {
             progress.status = WorkflowSessionStatus::Active;
         }
         return snapshot;
+    }
+
+    Result<ConfigSnapshot> publish(const ConfigSnapshot& base, const Solution& draft,
+        std::shared_ptr<InvocationResourceProvider> provider)
+    {
+        auto reserved = begin_publication(base, draft.id, {});
+        if (auto* failure = std::get_if<Diagnostic>(&reserved)) { return std::move(*failure); }
+        const FinishOperation finish{*this};
+        auto validated = validate_candidate(draft, registry);
+        if (auto* failure = std::get_if<Diagnostic>(&validated)) { return std::move(*failure); }
+        auto captured = ConfigSnapshot::capture(draft, registry.descriptors(), std::get<SnapshotIdentity>(reserved));
+        if (auto* failure = std::get_if<Diagnostic>(&captured)) { return std::move(*failure); }
+        const auto& snapshot = std::get<ConfigSnapshot>(captured);
+        std::shared_ptr<InvocationResourceProvider> previous;
+        const std::lock_guard lock(mutex);
+        auto published = engine->publish_shared(snapshot);
+        if (auto* failure = std::get_if<Diagnostic>(&published)) { return std::move(*failure); }
+        previous = std::exchange(active_provider, std::move(provider));
+        progress.active = snapshot;
+        return captured;
     }
 
     RunSubmission publish_and_submit(const ConfigSnapshot& base, const Solution& draft, const RunArguments& arguments,
@@ -120,7 +140,7 @@ struct WorkflowSession::Impl {
         return submitted;
     }
 
-    RunSubmission submit(const RunRequest& request, WorkflowId workflow)
+    RunSubmission submit(const RunRequest& request, WorkflowId workflow, const AdmissionGate* gate)
     {
         std::shared_ptr<WorkflowEngine> selected;
         std::shared_ptr<InvocationResourceProvider> provider;
@@ -138,7 +158,8 @@ struct WorkflowSession::Impl {
         // Preparation can overlap an intervening publication, replacement or
         // close. Recheck the capture before the prepared work enters a slot.
         if (auto refusal = check_capture(request.snapshot(), workflow)) { return std::move(*refusal); }
-        return selected->admit(std::get<0>(prepared));
+        const auto admit = [&] { return selected->admit(std::get<0>(prepared)); };
+        return gate ? (*gate)(admit) : admit();
     }
 
     Result<std::monostate> close()
@@ -202,7 +223,7 @@ private:
         return std::monostate{};
     }
 
-    Result<SnapshotIdentity> begin_publication(const ConfigSnapshot& base, SolutionId solution, WorkflowId workflow)
+    Result<SnapshotIdentity> begin_publication(const ConfigSnapshot& base, SolutionId solution, std::optional<WorkflowId> workflow)
     {
         const std::lock_guard lock(mutex);
         if (progress.status != WorkflowSessionStatus::Active) {
@@ -270,6 +291,13 @@ core::Result<ConfigSnapshot> WorkflowSession::activate(const Solution& candidate
     catch (...) { return error(ErrorCode::ExecutionBoundaryFailure, "Could not prepare or activate the solution candidate.", candidate.id); }
 }
 
+core::Result<ConfigSnapshot> WorkflowSession::publish(const ConfigSnapshot& base, const Solution& draft,
+    std::shared_ptr<InvocationResourceProvider> provider)
+{
+    try { return impl_->publish(base, draft, std::move(provider)); }
+    catch (...) { return error(ErrorCode::ExecutionBoundaryFailure, "Could not publish the solution draft.", draft.id); }
+}
+
 RunSubmission WorkflowSession::publish_and_submit(const ConfigSnapshot& base, const Solution& draft,
     const RunArguments& run, std::shared_ptr<InvocationResourceProvider> provider)
 {
@@ -305,9 +333,12 @@ core::Result<std::shared_ptr<const core::CorrelationJoinAccess>> WorkflowSession
 }
 
 RunSubmission WorkflowSession::submit(const RunRequest& request)
+{ return submit_guarded(request, nullptr); }
+
+RunSubmission WorkflowSession::submit_guarded(const RunRequest& request, const AdmissionGate* gate)
 {
     const auto workflow = std::visit([](const auto& target) { return target.workflow; }, request.target());
-    try { return impl_->submit(request, workflow); }
+    try { return impl_->submit(request, workflow, gate); }
     catch (...) {
         return RunRejected{error(ErrorCode::ExecutionBoundaryFailure, "Session run submission failed.", request.snapshot().solution().id, workflow)};
     }

@@ -6,7 +6,7 @@ add_library(visionpro_ui STATIC
     image_panel.cpp image_panel.hpp
     image_view.cpp image_view.hpp
     roi_editor.cpp roi_editor.hpp
-    run_controller.cpp run_controller.hpp
+    run_controller.cpp run_controller.hpp run_triggers.cpp
     run_image.cpp run_image.hpp
     run_inputs.cpp run_inputs.hpp
     run_panel.cpp run_panel.hpp

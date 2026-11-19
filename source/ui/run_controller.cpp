@@ -126,16 +126,14 @@ bool RunController::can_cancel(const RunHandle& run) const noexcept
         && (found->second.status == ExecutionStatus::Pending || found->second.status == ExecutionStatus::Running);
 }
 
-void RunController::start(Solution draft, RunDocument document, RunArguments arguments, std::vector<RunImageInput> images)
+bool RunController::ensure_session()
 {
-    if (preparing_ || retiring_) { return; }
-    runs_.reserve(runs_.size() + 1);
     if (!session_) {
         // Completed runs are owned by the window's configurable handle history.
         auto created = WorkflowSession::create(registry_, {}, {0});
         if (auto* failure = std::get_if<Diagnostic>(&created)) {
             emit operation_failed(*failure);
-            return;
+            return false;
         }
         // Normal closing drains the session explicitly. Direct destruction of
         // a window also releases the session away from the GUI thread.
@@ -144,6 +142,12 @@ void RunController::start(Solution draft, RunDocument document, RunArguments arg
                 QThreadPool::globalInstance()->start([owner = std::unique_ptr<WorkflowSession>(session)] {});
             });
     }
+    return true;
+}
+
+void RunController::start(Solution draft, RunDocument document, RunArguments arguments, std::vector<RunImageInput> images)
+{
+    if (preparing_ || retiring_ || !ensure_session()) { return; }
     auto outcome = std::make_shared<std::optional<Admission>>();
     const auto subscribe_capacity = observing_ && !observation_ ? observation_capacity_ : 0;
     const auto generation = observation_generation_;
@@ -170,24 +174,32 @@ void RunController::start(Solution draft, RunDocument document, RunArguments arg
         } else {
             subscribe();
         }
-        if (const auto* handle = std::get_if<RunHandle>(&admitted.submission)) {
-            active_.emplace(handle->identity(), ActiveRun{*handle});
-            runs_.push_back(*handle);
-            refresh_.start();
-        } else if (const auto* rejected = std::get_if<RunRejected>(&admitted.submission)) {
-            emit operation_failed(rejected->diagnostic);
-        } else {
-            const auto& busy = std::get<RunBusy>(admitted.submission);
-            auto failure = issue(ErrorCode::InvalidState, "Workflow is busy (active run " + std::to_string(busy.active.run.value()) + ").");
-            failure.location.workflow = busy.active.workflow;
-            emit operation_failed(failure);
-        }
+        record_submission(admitted.submission);
         emit changed();
     });
     connect(worker, &QThread::finished, worker, &QObject::deleteLater);
     preparing_ = true;
     emit changed();
     worker->start();
+}
+
+void RunController::record_submission(const RunSubmission& submission, std::string description)
+{
+    if (const auto* handle = std::get_if<RunHandle>(&submission)) {
+        active_.emplace(handle->identity(), ActiveRun{*handle});
+        runs_.push_back(*handle);
+        refresh_.start();
+    } else if (const auto* rejected = std::get_if<RunRejected>(&submission)) {
+        auto failure = rejected->diagnostic;
+        failure.message = std::move(description) + failure.message;
+        emit operation_failed(failure);
+    } else {
+        const auto& busy = std::get<RunBusy>(submission);
+        auto failure = issue(ErrorCode::InvalidState, std::move(description) + "Workflow is busy (active run "
+            + std::to_string(busy.active.run.value()) + ").");
+        failure.location.workflow = busy.active.workflow;
+        emit operation_failed(failure);
+    }
 }
 
 void RunController::cancel(const RunHandle& run)
@@ -249,6 +261,8 @@ Result<std::monostate> RunController::reset_state(const NodeTarget& target)
 void RunController::reset_document()
 {
     if (retiring_) { return; }
+    ++document_generation_;
+    disarm_triggers();
     unsubscribe();
     dropped_ = 0;
     refresh_.stop();
@@ -266,10 +280,19 @@ void RunController::close_session()
         emit changed();
         return;
     }
+    std::vector<std::shared_ptr<TriggerControl>> retired;
+    for (auto& entry : triggers_) { retired.push_back(std::move(entry.second.control)); }
+    triggers_.clear(); // Timers are GUI-thread objects.
     auto failure = std::make_shared<std::optional<Diagnostic>>();
-    auto* worker = QThread::create([session = std::exchange(session_, {}), failure] {
+    auto* worker = QThread::create([session = std::exchange(session_, {}), retired = std::move(retired), failure] {
         auto closed = session->close();
         if (auto* diagnostic = std::get_if<Diagnostic>(&closed)) { *failure = std::move(*diagnostic); }
+        // A disarmed event can still be returning from a resource preflight.
+        // It owns no run, so closing the session alone cannot wait for it.
+        for (const auto& source : retired) {
+            auto stopped = source->stop(TriggerStopMode::Drain, std::chrono::steady_clock::time_point::max());
+            if (auto* diagnostic = std::get_if<Diagnostic>(&stopped)) { *failure = std::move(*diagnostic); }
+        }
     });
     connect(worker, &QThread::finished, this, [this, failure] {
         retiring_ = false;

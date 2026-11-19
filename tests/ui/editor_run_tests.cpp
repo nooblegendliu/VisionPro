@@ -14,10 +14,15 @@
 #include <QDialogButtonBox>
 #include <QFile>
 #include <QGraphicsView>
+#include <QInputDialog>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QProcess>
 #include <QSpinBox>
 #include <QStatusBar>
 #include <QTemporaryDir>
@@ -145,7 +150,123 @@ private slots:
     void runs_unsaved_absolute_resources();
     void selects_each_iteration_of_the_same_node();
     void runs_and_debugs_selected_group_with_public_inputs();
+    void replays_saved_trigger_in_editor_and_cli();
+    void arming_preserves_session_state();
 };
+
+void EditorRunTests::arming_preserves_session_state()
+{
+    auto draft = counter_fixture();
+    auto& flow = draft.workflows.front();
+    flow.trigger = WorkflowTrigger{TriggerMode::External, key<SchemaId>("fixture.frames"), key<InputId>("delta")};
+    EditorWindow window(draft, counter_registry());
+    window.show();
+    auto& controller = *window.findChild<RunController*>();
+    QVERIFY(submit_dialog(action(window, "runWorkflow"), [](QDialog&, QPushButton&) { return true; }));
+    QTRY_VERIFY(controller.runs().size() == 1 && controller.can_start());
+    const auto previous = controller.runs().front();
+    action(window, "armWorkflowTrigger").trigger();
+    QTRY_VERIFY(controller.can_send_frame(flow.id));
+    QCOMPARE(controller.runs().size(), 1u);
+    controller.send_frame(flow.id, 5);
+    QTRY_VERIFY(controller.runs().size() == 2 && controller.can_start());
+    const auto triggered = controller.runs().back();
+    QCOMPARE(previous.identity().snapshot.session, triggered.identity().snapshot.session);
+    QCOMPARE(integer_output(triggered, flow.nodes.front().id, key<OutputId>("total")), 7);
+}
+
+void EditorRunTests::replays_saved_trigger_in_editor_and_cli()
+{
+    const auto registry = take(app::make_tool_registry());
+    const std::filesystem::path sample{VISIONPRO_S66_DIRECTORY};
+    const auto loaded = take(infrastructure::load_solution(sample, registry));
+    const auto& external = loaded.solution().workflows.at(0);
+    const auto& periodic = loaded.solution().workflows.at(1);
+    EditorWindow window(loaded.solution(), registry);
+    window.show();
+    window.open_document(sample);
+    QTRY_VERIFY(!window.file_busy());
+    QVERIFY(scene(window).select_workflow(external.id));
+    auto& controller = *window.findChild<RunController*>();
+    auto* configure = window.findChild<QPushButton*>(QStringLiteral("editWorkflowTrigger"));
+    QTRY_VERIFY((configure = window.findChild<QPushButton*>(QStringLiteral("editWorkflowTrigger"))) && configure->isVisible());
+    const auto source = QStringLiteral("s66.desktop.frames");
+    QTimer::singleShot(0, [&] {
+        auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+        if (!dialog) { return; }
+        if (auto* input = dialog->findChild<QLineEdit*>(QStringLiteral("triggerSource"))) { input->setText(source); }
+        dialog->accept();
+    });
+    configure->click();
+    QCOMPARE(QString::fromUtf8(window.draft().workflows.front().trigger->source.text()), source);
+    QTemporaryDir scratch;
+    QVERIFY(scratch.isValid());
+    const auto saved = std::filesystem::path(scratch.path().toStdU16String()) / "saved trigger";
+    window.transfer_document(saved, infrastructure::SolutionTransfer::SaveAs);
+    QTRY_VERIFY(!window.file_busy());
+    window.open_document(saved);
+    QTRY_VERIFY(!window.file_busy());
+    QCOMPARE(QString::fromUtf8(window.draft().workflows.front().trigger->source.text()), source);
+    QVERIFY(scene(window).select_workflow(external.id));
+    auto& arm = action(window, "armWorkflowTrigger");
+    auto& send = action(window, "sendExternalFrame");
+    arm.trigger();
+    const auto output = key<OutputId>("value");
+    QStringList cli_args{QStringLiteral("trigger"), QStringLiteral("--solution"), QString::fromStdU16String((saved / "solution.json").u16string()),
+        QStringLiteral("--workflow"), QString::fromStdString(external.id.to_string())};
+    std::vector<std::int64_t> results;
+    for (const auto frame : {11LL, 22LL, 4000000000LL}) {
+        QTRY_VERIFY(send.isEnabled());
+        QTimer::singleShot(0, [frame] {
+            if (auto* dialog = qobject_cast<QInputDialog*>(QApplication::activeModalWidget())) {
+                dialog->setTextValue(QString::number(frame));
+                dialog->accept();
+            }
+        });
+        send.trigger();
+        QTRY_VERIFY(controller.can_start() && controller.runs().size() == results.size() + 1);
+        const auto run = controller.runs().back();
+        QCOMPARE(run.request().trigger().kind, TriggerKind::External);
+        QCOMPARE(QString::fromUtf8(run.request().trigger().source.text()), source);
+        QCOMPARE(run.request().correlation()->key(), std::to_string(frame));
+        const auto value = integer_output(run, external.entries.front(), output);
+        QCOMPARE(value, frame);
+        results.push_back(value);
+        cli_args << QStringLiteral("--frame") << QString::number(frame);
+    }
+    action(window, "drainWorkflowTrigger").trigger();
+    QTRY_VERIFY(arm.isEnabled() && !send.isEnabled());
+    QProcess cli;
+    cli.start(QStringLiteral(VISIONPRO_TEST_CLI), cli_args);
+    QVERIFY(cli.waitForFinished(10000));
+    const auto errors = cli.readAllStandardError();
+    QVERIFY2(cli.exitStatus() == QProcess::NormalExit && !cli.exitCode(), errors.constData());
+    const auto events = QJsonDocument::fromJson(cli.readAllStandardOutput()).object().value("events").toArray();
+    QCOMPARE(events.size(), static_cast<qsizetype>(results.size()));
+    for (qsizetype i = 0; i < events.size(); ++i) {
+        const auto event = events[i].toObject();
+        QCOMPARE(event.value("source").toString(), source);
+        const auto result = event.value("result").toObject();
+        QCOMPARE(result.value("quiescent").toBool(), true);
+        QCOMPARE(result.value("status").toString(), QStringLiteral("Succeeded"));
+        const auto outputs = result.value("nodes").toArray().at(0).toObject().value("outputs").toArray();
+        QCOMPARE(outputs.at(0).toObject().value("value").toString(), QString::number(results[static_cast<std::size_t>(i)]));
+    }
+    QVERIFY(scene(window).select_workflow(periodic.id));
+    arm.trigger();
+    QTRY_VERIFY(controller.runs().size() >= 5);
+    QCOMPARE(controller.runs().at(3).request().trigger().kind, TriggerKind::Continuous);
+    QCOMPARE(*controller.runs().at(3).request().inputs()[0].value.as_int64(), 1);
+    QCOMPARE(*controller.runs().at(4).request().inputs()[0].value.as_int64(), 2);
+    action(window, "cancelWorkflowTrigger").trigger();
+    QTRY_VERIFY(arm.isEnabled());
+    arm.trigger();
+    QTRY_VERIFY(action(window, "drainWorkflowTrigger").isEnabled());
+    window.open_document(saved);
+    QTRY_VERIFY(!window.file_busy() && !controller.has_session_work());
+    QTest::qWait(250); // More than two periods of the retired subscription.
+    QVERIFY(controller.runs().empty());
+}
 
 void EditorRunTests::runs_and_debugs_selected_group_with_public_inputs()
 {

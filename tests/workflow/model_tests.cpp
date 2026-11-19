@@ -224,8 +224,41 @@ void model_bindings()
     check(ok(validate_binding_shape(binding)), "fixed indices preserve exact values; runtime bounds are not guessed from configuration");
 }
 
+void workflow_trigger_settings()
+{
+    auto model = grouped_solution();
+    auto& flow = model.workflows.front();
+    const auto number = key<InputId>("number");
+    flow.trigger = WorkflowTrigger{TriggerMode::External, key<SchemaId>("frame.events"), number};
+    check(ok(validate_model_shape(model)), "An external source may supply the required Int64 input.");
+    flow.trigger->interval_ms = 5;
+    invalid(validate_model_shape(model), "External sources have no timer interval.");
+    flow.trigger->mode = TriggerMode::Continuous;
+    check(ok(validate_model_shape(model)), "Continuous sources have a positive interval.");
+    flow.trigger->interval_ms = 0;
+    invalid(validate_model_shape(model), "A continuous source cannot request a zero-period timer.");
+    flow.trigger->mode = static_cast<TriggerMode>(99);
+    invalid(validate_model_shape(model), "Unknown trigger modes must be rejected.");
+    flow.trigger->mode = TriggerMode::External;
+    flow.trigger->frame_input = key<InputId>("missing");
+    const auto missing = validate_model_shape(model);
+    const auto* issue = std::get_if<Diagnostic>(&missing);
+    check(issue && issue->code == ErrorCode::UnknownTarget && issue->location.workflow == flow.id
+        && issue->location.input == flow.trigger->frame_input, "The missing frame mapping identifies its workflow and input.");
+    flow.trigger->frame_input = number;
+    flow.interface.inputs.front().type = DataType::real();
+    invalid(validate_model_shape(model), "Frame input must be scalar Int64.");
+    flow.interface.inputs.front().type = DataType::integer();
+    flow.interface.inputs.push_back({key<InputId>("offset"), "Offset", DataType::integer()});
+    invalid(validate_model_shape(model), "The source cannot supply a second required input.");
+    flow.interface.inputs.back().required = false;
+    flow.interface.inputs.back().default_value = ConfigValue::integer(0);
+    check(ok(validate_model_shape(model)), "Other public inputs may declare explicit defaults.");
+}
+
 void model_structure()
 {
+    workflow_trigger_settings();
     const auto original = grouped_solution();
     auto changed = original;
     changed.format_version = 0;

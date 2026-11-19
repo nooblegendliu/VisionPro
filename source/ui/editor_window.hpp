@@ -145,6 +145,10 @@ private:
     QAction* run_group_{};
     QAction* debug_node_{};
     QAction* cancel_run_{};
+    QAction* arm_trigger_{};
+    QAction* send_frame_{};
+    QAction* drain_trigger_{};
+    QAction* cancel_trigger_{};
     QAction* reset_state_{};
     QAction* run_limits_{};
     QAction* rename_{};

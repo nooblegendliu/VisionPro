@@ -2,6 +2,8 @@
 
 #include <visionpro/workflow/workflow_engine.hpp>
 
+#include <functional>
+
 namespace visionpro::workflow {
 
 enum class WorkflowSessionStatus { Empty, Active, Switching, Closing, Closed };
@@ -46,6 +48,10 @@ public:
     // uses the session's default provider.
     [[nodiscard]] core::Result<ConfigSnapshot> activate(const Solution& candidate,
         std::shared_ptr<InvocationResourceProvider> provider);
+    // Publish a validated draft without submitting a run. Compatible shared
+    // data and node state remain in the same solution session.
+    [[nodiscard]] core::Result<ConfigSnapshot> publish(const ConfigSnapshot& base, const Solution& draft,
+        std::shared_ptr<InvocationResourceProvider> provider);
     // Prepare a run from the draft against the exact active base capture.
     // Only admission publishes the new snapshot and its provider. A null
     // provider means the draft has no resource provider for this publication.
@@ -64,6 +70,10 @@ public:
     [[nodiscard]] core::Result<std::monostate> close();
 
 private:
+    friend class TriggerControl;
+    // Called only at final admission, after resource preparation and capture revalidation.
+    using AdmissionGate = std::function<RunSubmission(const std::function<RunSubmission()>&)>;
+    [[nodiscard]] RunSubmission submit_guarded(const RunRequest& request, const AdmissionGate* gate);
     struct Impl;
     explicit WorkflowSession(std::unique_ptr<Impl> impl);
     std::unique_ptr<Impl> impl_;

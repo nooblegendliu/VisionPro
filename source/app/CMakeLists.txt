@@ -18,7 +18,7 @@ if(VISIONPRO_WITH_GUI AND VISIONPRO_WITH_OPENCV)
     )
 endif()
 
-add_executable(visionpro_cli main.cpp run_summary.cpp)
+add_executable(visionpro_cli main.cpp run_summary.cpp trigger_command.cpp)
 target_include_directories(visionpro_cli SYSTEM PRIVATE "${PROJECT_SOURCE_DIR}/third_party/nlohmann_json/include")
 target_compile_definitions(visionpro_cli PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(visionpro_cli PRIVATE visionpro_app_tools visionpro_infrastructure visionpro_build_options)

@@ -392,6 +392,11 @@ void EditorWindow::refresh_actions()
     debug_node_->setText(group ? QStringLiteral("Debug Selected Group…") : QStringLiteral("Debug Selected Node…"));
     const auto selected_run = run_panel_->selected_run();
     cancel_run_->setEnabled(!close_confirmed_ && selected_run && run_controller_->can_cancel(*selected_run));
+    arm_trigger_->setEnabled(editable && flow && run_controller_->can_arm_trigger(*flow));
+    send_frame_->setEnabled(available && flow && run_controller_->can_send_frame(flow->id));
+    const bool armed = available && flow && run_controller_->can_stop_trigger(flow->id);
+    drain_trigger_->setEnabled(armed);
+    cancel_trigger_->setEnabled(armed);
     reset_state_->setEnabled(editable && selected_node && std::holds_alternative<ToolConfiguration>(selected_node->configuration)
         && run_controller_->can_reset_state({*model_->workflow_id(), selected_node->id}));
     run_limits_->setEnabled(!close_confirmed_);

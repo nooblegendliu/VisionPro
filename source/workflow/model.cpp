@@ -189,7 +189,7 @@ Check validate_workflow_interface_shape(const Workflow& workflow, const Parents&
 {
     if (!valid_name(workflow.name)) { return error(core::ErrorCode::InvalidModel, "Workflow names require nonempty UTF-8 without NUL."); }
     if (auto checked = validate_workflow_admission(workflow.admission); failed(checked)) { return checked; }
-    for (auto checked : {validate_public_interface(workflow.interface), mappings(workflow.interface, workflow.outputs),
+    for (auto checked : {validate_public_interface(workflow.interface), validate_workflow_trigger(workflow), mappings(workflow.interface, workflow.outputs),
         entry_check(workflow, parents, std::nullopt, workflow.entries), control_mappings(workflow.interface, workflow.control_exports)}) {
         if (failed(checked)) { return checked; }
     }
@@ -333,6 +333,39 @@ Check validate_workflow_admission(const WorkflowAdmission& admission)
     }
     if (admission.overflow != AdmissionOverflow::Busy && admission.overflow != AdmissionOverflow::Reject) {
         return error(core::ErrorCode::InvalidModel, "Unknown workflow admission overflow policy.");
+    }
+    return std::monostate{};
+}
+
+Check validate_workflow_trigger(const Workflow& workflow)
+{
+    if (!workflow.trigger) { return std::monostate{}; }
+    const auto& trigger = *workflow.trigger;
+    const auto fail = [&](core::ErrorCode code, std::string message, std::optional<core::InputId> input = {}) {
+        auto result = error(code, std::move(message));
+        result.location.workflow = workflow.id;
+        result.location.input = input;
+        return result;
+    };
+    switch (trigger.mode) {
+    case TriggerMode::Continuous:
+        if (!trigger.interval_ms) { return fail(core::ErrorCode::ConstraintViolation, "A continuous trigger requires a positive interval."); }
+        break;
+    case TriggerMode::External:
+        if (trigger.interval_ms) { return fail(core::ErrorCode::ConstraintViolation, "An external trigger requires a zero interval."); }
+        break;
+    default: return fail(core::ErrorCode::InvalidModel, "Unknown workflow trigger mode.");
+    }
+    const auto& inputs = workflow.interface.inputs;
+    const auto frame = std::ranges::find(inputs, trigger.frame_input, &core::InputDescriptor::id);
+    if (frame == inputs.end()) { return fail(core::ErrorCode::UnknownTarget, "The trigger frame input is absent.", trigger.frame_input); }
+    if (frame->type != core::DataType::integer()) {
+        return fail(core::ErrorCode::TypeMismatch, "The trigger frame input must have type Int64.", frame->id);
+    }
+    for (const auto& input : inputs) {
+        if (input.id != frame->id && (input.required || !input.default_value)) {
+            return fail(core::ErrorCode::MissingRequiredValue, "Other public inputs of a triggered workflow must declare defaults.", input.id);
+        }
     }
     return std::monostate{};
 }

@@ -359,6 +359,35 @@ void loop_roundtrip(Solution draft, const ToolRegistry& registry, const PackageD
         && read_manifest(directory) == unsupported, "An unknown reduction cannot be interpreted or overwrite the manifest.");
 }
 
+void trigger_roundtrip(const ToolRegistry& registry, const PackageDirectories& directories)
+{
+    Solution draft{uuid<SolutionId>(), "受控源", 1, 1,
+        {{uuid<WorkflowId>(), "帧号", {key<SchemaId>("station.inputs"), 1, {integer_input("frame", 1)}, {}, {}}}}};
+    auto& flow = draft.workflows.front();
+    flow.trigger = WorkflowTrigger{TriggerMode::External, key<SchemaId>("station.events"), flow.interface.inputs.front().id, 0};
+    const auto directory = directories.package(u8"触发入口");
+    take(write_new_solution(directory, draft));
+    const auto external = take(load_solution(directory, registry));
+    check(external.can_save() && external.solution().workflows.front().trigger == flow.trigger,
+        "Reopening restores the external source, mode and public frame input.");
+    flow.trigger->mode = TriggerMode::Continuous;
+    flow.trigger->interval_ms = 25;
+    take(save_solution(external, draft));
+    const auto periodic = take(load_solution(directory, registry));
+    const auto cloned = take(clone_solution(periodic.solution(), ExternalReferencePolicy::Preserve));
+    check(periodic.can_save() && periodic.solution().workflows.front().trigger == flow.trigger &&
+        cloned.solution.workflows.front().trigger == flow.trigger, "The continuous source and interval survive saving and copying.");
+    auto unknown = read_manifest(directory);
+    const auto token = unknown.find("\"continuous\"");
+    check(token != std::string::npos, "The continuous mode has a stable wire name.");
+    unknown.replace(token, std::string_view("\"continuous\"").size(), "\"future_mode\"");
+    { std::ofstream out(directory / "solution.json", std::ios::binary | std::ios::trunc); out << unknown; }
+    const auto refused = load_solution(directory, registry);
+    const auto* failure = std::get_if<Diagnostic>(&refused);
+    check(failure && failure->code == ErrorCode::UnsupportedSolutionContent && read_manifest(directory) == unknown,
+        "Unknown trigger modes protect the manifest against reinterpretation or overwrite.");
+}
+
 void roundtrip()
 {
     auto tool = counter_tool();
@@ -379,6 +408,8 @@ void roundtrip()
         "A recognized manifest under a Unicode package directory remains saveable.");
     check(manifest.find("\"admission\"") == std::string::npos && loaded.solution().workflows.front().admission == WorkflowAdmission{},
         "A v1 workflow without admission settings retains one slot, no waiting and Busy on overflow.");
+    check(!loaded.solution().workflows.front().trigger,
+        "Loading a pre-trigger workflow leaves its entry manual.");
     check_relations(loaded.solution());
     check_values(loaded.solution(), original);
     check_state_projection(loaded.solution(), registry);
@@ -390,6 +421,7 @@ void roundtrip()
         && reopened.solution().variables.at(1).initial_value == ConfigValue::integer(highest) && factory->calls == 0,
         "Both Int64 boundaries reopen exactly and configuration handling leaves the tool factory unused.");
     loop_roundtrip(original, registry, directories);
+    trigger_roundtrip(registry, directories);
     auto admitting = original;
     const WorkflowAdmission limits{2, 1, AdmissionOverflow::Reject};
     admitting.workflows.front().admission = limits;

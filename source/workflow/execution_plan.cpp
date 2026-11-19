@@ -89,7 +89,16 @@ core::Result<ExecutionPlan> ExecutionPlan::create(const RunRequest& request, con
         }
     }
     if (request.trigger().kind == TriggerKind::Continuous || request.trigger().kind == TriggerKind::External) {
-        return unsupported(where, "Only manual and debug triggers can be planned.");
+        const auto& entry = find_workflow(request.snapshot().solution(), *where.workflow)->trigger;
+        const auto mode = request.trigger().kind == TriggerKind::Continuous ? TriggerMode::Continuous : TriggerMode::External;
+        if (target || !entry || entry->mode != mode || entry->source != request.trigger().source) {
+            return unsupported(where, "The trigger must match the workflow entry's configured source and mode.");
+        }
+        const auto* frame = request.input(entry->frame_input);
+        if (!frame || frame->origin != InputOrigin::Provided || !frame->value.as_int64()) {
+            where.input = entry->frame_input;
+            return Diagnostic{ErrorCode::InvalidRunRequest, Severity::Error, where, "A triggered run requires its provided frame number."};
+        }
     }
     if (request.debug_state() == DebugStatePolicy::Active && !capabilities.node_state) {
         return unsupported(where, "Independent access to active state requires state service arbitration.");

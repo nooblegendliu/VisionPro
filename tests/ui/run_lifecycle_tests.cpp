@@ -14,6 +14,7 @@
 #include <QFile>
 #include <QGraphicsView>
 #include <QLabel>
+#include <QListWidget>
 #include <QPointer>
 #include <QPushButton>
 #include <QTemporaryDir>
@@ -258,7 +259,44 @@ private slots:
     void replace_and_close_with_pending_physical_exit();
     void edits_preserve_running_capture_and_displayed_image();
     void late_completion_after_window_destruction();
+    void trigger_busy_diagnostic_and_cancel_wait_for_cleanup();
 };
+
+void RunLifecycleTests::trigger_busy_diagnostic_and_cancel_wait_for_cleanup()
+{
+    auto draft = solution_for('1');
+    auto& flow = draft.workflows.front();
+    const auto input = key<InputId>("frame_no");
+    flow.interface.inputs.push_back({input, "Frame", DataType::integer()});
+    flow.trigger = WorkflowTrigger{TriggerMode::External, key<SchemaId>("ui.test.frames"), input};
+    auto driver = std::make_shared<Driver>();
+    EditorWindow window(draft, registry_for(driver));
+    const DrainOnExit drain{*driver};
+    window.show();
+    auto& arm = control<QAction>(window, "armWorkflowTrigger");
+    auto& send = control<QAction>(window, "sendExternalFrame");
+    auto& controller = control<RunController>(window, "runController");
+    arm.trigger();
+    QTRY_VERIFY(send.isEnabled());
+    controller.send_frame(flow.id, 11);
+    QTRY_VERIFY(send.isEnabled() && controller.runs().size() == 1 && driver->call(0));
+    const auto run = controller.runs().front();
+    controller.send_frame(flow.id, 12);
+    auto& issues = control<QListWidget>(window, "editorDiagnostics");
+    const auto active = QStringLiteral("active run %1").arg(run.identity().run.value());
+    QTRY_VERIFY(!issues.findItems(active, Qt::MatchContains).isEmpty());
+    const auto message = issues.findItems(active, Qt::MatchContains).front()->text();
+    QVERIFY(message.contains(QStringLiteral("frame_no = 12")) && message.contains(QStringLiteral("ui.test.frames / 12")));
+    QCOMPARE(controller.runs().size(), 1u);
+    control<QAction>(window, "cancelWorkflowTrigger").trigger();
+    QTRY_COMPARE(driver->cancellations.load(), 1u);
+    QVERIFY(!arm.isEnabled() && !send.isEnabled() && !take(run.inspect()).quiescent);
+    controller.send_frame(flow.id, 13);
+    release(*driver->call(0));
+    QTRY_VERIFY(arm.isEnabled() && controller.can_start());
+    QCOMPARE(controller.runs().size(), 1u);
+    QCOMPARE(take(run.inspect()).status, ExecutionStatus::Cancelled);
+}
 
 void RunLifecycleTests::admits_multiple_runs_and_cancels_only_the_selected_identity()
 {

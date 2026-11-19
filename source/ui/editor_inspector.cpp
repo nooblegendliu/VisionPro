@@ -1110,6 +1110,68 @@ void edit_admission(const InspectorContext& context, WorkflowId id, WorkflowAdmi
     }
 }
 
+void edit_trigger(const InspectorContext& context, WorkflowId id)
+{
+    const auto* flow = find_workflow(context.model.draft(), id);
+    if (!flow) { return; }
+    const auto current = flow->trigger;
+    QDialog dialog(context.owner);
+    dialog.setWindowTitle(QStringLiteral("Workflow trigger"));
+    auto* layout = new QVBoxLayout(&dialog);
+    auto* form = new QFormLayout;
+    auto* mode = new QComboBox(&dialog);
+    mode->setObjectName(QStringLiteral("triggerMode"));
+    mode->addItems({QStringLiteral("Manual only"), QStringLiteral("External frames"), QStringLiteral("Continuous clock")});
+    mode->setCurrentIndex(current ? (current->mode == TriggerMode::External ? 1 : 2) : 0);
+    auto* source = new QLineEdit(current ? id_text(current->source) : QString{}, &dialog);
+    source->setObjectName(QStringLiteral("triggerSource"));
+    auto* input = new QComboBox(&dialog);
+    input->setObjectName(QStringLiteral("triggerFrameInput"));
+    std::vector<InputId> frame_inputs;
+    for (const auto& port : flow->interface.inputs) {
+        if (port.type != DataType::integer()) { continue; }
+        input->addItem(QStringLiteral("%1 (%2)").arg(qtext(port.display_name), id_text(port.id)));
+        frame_inputs.push_back(port.id);
+        if (current && current->frame_input == port.id) { input->setCurrentIndex(input->count() - 1); }
+    }
+    auto* interval = new QLineEdit(QString::number(current && current->interval_ms ? current->interval_ms : 100), &dialog);
+    interval->setObjectName(QStringLiteral("triggerIntervalMs"));
+    form->addRow(QStringLiteral("Mode"), mode);
+    form->addRow(QStringLiteral("Source ID"), source);
+    form->addRow(QStringLiteral("Frame number input"), input);
+    form->addRow(QStringLiteral("Interval (ms)"), interval);
+    layout->addLayout(form);
+    const auto refresh = [=] {
+        source->setEnabled(mode->currentIndex() != 0);
+        input->setEnabled(mode->currentIndex() != 0);
+        interval->setEnabled(mode->currentIndex() == 2);
+    };
+    QObject::connect(mode, &QComboBox::currentIndexChanged, &dialog, refresh);
+    refresh();
+    close_buttons(dialog, *layout);
+    while (dialog.exec() == QDialog::Accepted) {
+        std::optional<WorkflowTrigger> trigger;
+        if (mode->currentIndex()) {
+            auto parsed = SchemaIdFactory::parse<SchemaId>(utf8(source->text()));
+            if (const auto* failure = std::get_if<Diagnostic>(&parsed)) { warn(&dialog, qtext(failure->message)); continue; }
+            if (input->currentIndex() < 0) { warn(&dialog, QStringLiteral("Add an Int64 public input for the frame number.")); continue; }
+            const bool periodic = mode->currentIndex() == 2;
+            bool valid{};
+            const auto delay = interval->text().toUInt(&valid);
+            if (periodic && (!valid || !delay)) { warn(&dialog, QStringLiteral("Enter a positive interval in milliseconds.")); continue; }
+            trigger.emplace(WorkflowTrigger{periodic ? TriggerMode::Continuous : TriggerMode::External,
+                std::get<SchemaId>(std::move(parsed)), frame_inputs[static_cast<std::size_t>(input->currentIndex())], periodic ? delay : 0});
+        }
+        if (trigger != current) {
+            context.edit_flow(id, QStringLiteral("Change workflow trigger"), [&](Solution&, Workflow& draft) -> Check {
+                draft.trigger = trigger;
+                return std::monostate{};
+            });
+        }
+        return;
+    }
+}
+
 void workflow_properties(QVBoxLayout& panel, const InspectorContext& context, const Workflow& flow)
 {
     auto* group = section(panel, QStringLiteral("Workflow"));
@@ -1137,6 +1199,9 @@ void workflow_properties(QVBoxLayout& panel, const InspectorContext& context, co
         .arg(policy.overflow == AdmissionOverflow::Busy ? QStringLiteral("Busy") : QStringLiteral("Reject"));
     form->addRow(QStringLiteral("Admission"), action(group, summary, "editWorkflowAdmission",
         [context, id, policy] { edit_admission(context, id, policy); }));
+    const auto trigger = flow.trigger ? id_text(flow.trigger->source) : QStringLiteral("Manual only");
+    form->addRow(QStringLiteral("Trigger source"), action(group, trigger, "editWorkflowTrigger",
+        [context, id] { edit_trigger(context, id); }));
 }
 
 void move_to_group(const InspectorContext& context, const WorkflowId& id, const NodeId& selected)

@@ -1374,10 +1374,10 @@ struct WorkflowEngine::Impl {
     const ToolRegistry registry;
     std::shared_ptr<SharedServices> services; // Published under the scheduler mutex.
 
-    Result<std::monostate> initialize_shared(const ConfigSnapshot& snapshot)
+    Result<std::monostate> publish_shared(const ConfigSnapshot& snapshot)
     {
         const std::lock_guard lock(events->mutex);
-        auto created = shared_services(snapshot, {});
+        auto created = shared_services(snapshot, services);
         if (auto* bad = std::get_if<Diagnostic>(&created)) { return std::move(*bad); }
         services = std::get<std::shared_ptr<SharedServices>>(std::move(created));
         return std::monostate{};
@@ -1585,8 +1585,8 @@ private:
 WorkflowEngine::WorkflowEngine(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
 WorkflowEngine::~WorkflowEngine() = default;
 
-core::Result<std::monostate> WorkflowEngine::initialize_shared(const ConfigSnapshot& snapshot)
-{ return impl_->initialize_shared(snapshot); }
+core::Result<std::monostate> WorkflowEngine::publish_shared(const ConfigSnapshot& snapshot)
+{ return impl_->publish_shared(snapshot); }
 
 core::Result<std::shared_ptr<const core::SharedData>> WorkflowEngine::shared_preview() const
 { return impl_->shared_preview(); }

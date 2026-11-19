@@ -75,6 +75,14 @@ struct WorkflowAdmission {
     AdmissionOverflow overflow{AdmissionOverflow::Busy};
     bool operator==(const WorkflowAdmission&) const = default;
 };
+enum class TriggerMode { Continuous, External };
+struct WorkflowTrigger {
+    TriggerMode mode;
+    core::SchemaId source;
+    core::InputId frame_input; // The controlled source supplies this Int64 public input for each run.
+    std::uint32_t interval_ms{0}; // Positive for continuous ticks, zero for external events.
+    bool operator==(const WorkflowTrigger&) const = default;
+};
 struct Workflow {
     core::WorkflowId id;
     std::string name;
@@ -87,6 +95,7 @@ struct Workflow {
     bool enabled{true};
     std::vector<ControlOutputMapping> control_exports;
     WorkflowAdmission admission{};
+    std::optional<WorkflowTrigger> trigger{};
 };
 struct NodePlacement { core::NodeId node; double x; double y; };
 struct WorkflowLayout { core::WorkflowId workflow; std::vector<NodePlacement> nodes; };
@@ -111,6 +120,7 @@ struct Solution {
 [[nodiscard]] core::Result<std::vector<core::NodeId>> descendants(const Workflow& workflow, const core::NodeId& group);
 [[nodiscard]] core::Result<std::monostate> validate_public_interface(const PublicInterface& interface);
 [[nodiscard]] core::Result<std::monostate> validate_workflow_admission(const WorkflowAdmission& admission);
+[[nodiscard]] core::Result<std::monostate> validate_workflow_trigger(const Workflow& workflow);
 // Solution envelope, stable identities and the shared definition catalogs.
 [[nodiscard]] core::Result<std::monostate> validate_global_invariants(const Solution& solution);
 // Local shape, identity and containment checks only. Not proof of executability:

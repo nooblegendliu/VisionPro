@@ -18,6 +18,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <set>
 #include <stdexcept>
 #include <utility>
 
@@ -130,7 +131,7 @@ HANDLE broken_output_pipe(SECURITY_ATTRIBUTES& attributes)
     return writer;
 }
 
-CommandResult invoke(const fs::path& executable, const fs::path& working, std::initializer_list<std::wstring> arguments,
+CommandResult invoke(const fs::path& executable, const fs::path& working, const std::vector<std::wstring>& arguments,
     OutputMode output_mode = OutputMode::File)
 {
     const auto stdout_path = working / L"stdout.txt";
@@ -597,6 +598,64 @@ void shared_workflows(const fs::path& executable)
         "An ordinary binding keeps the global snapshot captured when preparing this run.");
 }
 
+void trigger_replay(const fs::path& executable)
+{
+    ScratchDirectory scratch;
+    const auto manifest = scratch.path / "trigger" / "solution.json";
+    write_file(manifest, read_file(VISIONPRO_TRIGGER_SAMPLE));
+    success(invoke(executable, scratch.path, {L"save", L"--solution", manifest.native()}));
+    const auto flows = Json::parse(read_file(manifest)).at("workflows");
+    const auto replay = [&](std::size_t flow, std::initializer_list<std::wstring> options) {
+        const auto id = flows.at(flow).at("id").get<std::string>();
+        // Launch a separate CLI process against the saved package, outside its directory.
+        std::vector<std::wstring> args{L"trigger", L"--solution", manifest.native(), L"--workflow", {id.begin(), id.end()}};
+        args.insert(args.end(), options.begin(), options.end());
+        return invoke(executable, scratch.path, args);
+    };
+    const auto verify = [&](const Json& report, std::size_t index, std::initializer_list<std::string_view> frames) {
+        const auto& config = flows.at(index).at("trigger");
+        const auto& events = report.at("events");
+        check(report.at("stop") == "drain" && report.at("quiescent") == true
+            && events.size() == frames.size(), "Drain returns a terminal record for each supplied event.");
+        std::set<std::string> runs;
+        auto event = events.begin();
+        for (const auto frame : frames) {
+            const auto& result = event->at("result");
+            check(event->at("mode") == config.at("mode") && event->at("source") == config.at("source")
+                && event->at("frame_input") == config.at("frame_input") && text_is(event->at("frame"), frame)
+                && event->at("correlation") == Json{{"domain", config.at("source")}, {"key", frame}},
+                "Each receipt retains its source and associated frame.");
+            check((event->at("admission") == "immediate" || event->at("admission") == "queued")
+                && result.at("quiescent") == true && result.at("status") == "Succeeded"
+                && runs.insert(result.at("run").get<std::string>()).second
+                && result.at("trigger").at("correlation") == event->at("correlation")
+                && text_is(result.at("inputs").at(0).at("value"), frame)
+                && text_is(produced(result.at("nodes").at(0)), frame), "Each accepted run executes with its own frozen frame.");
+            ++event;
+        }
+    };
+    verify(success(replay(0, {L"--frame", L"71", L"--frame", L"-4", L"--frame", L"9007199254740993"})),
+        0, {"71", "-4", "9007199254740993"});
+    verify(success(replay(1, {L"--advance-ms", L"99", L"--advance-ms", L"1", L"--advance-ms", L"250",
+        L"--advance-ms", L"100"})), 1, {"1", "2", "3"});
+    const auto empty = success(replay(0, {L"--stop", L"cancel"}));
+    check(empty.at("events").empty() && empty.at("stop") == "cancel" && empty.at("quiescent") == true,
+        "Stopping an idle controlled source submits no work.");
+    rejected(replay(0, {L"--advance-ms", L"100"}), 1, "InvalidRunRequest");
+    rejected(replay(1, {L"--frame", L"3"}), 1, "InvalidRunRequest");
+    auto limited = Json::parse(read_file(manifest));
+    limited.at("workflows").at(0).at("interface").at("inputs").at(0).at("constraints")["integer_range"]
+        = {{"minimum", "0"}, {"maximum", "10"}};
+    write_file(manifest, limited.dump());
+    const auto mixed = replay(0, {L"--frame", L"3", L"--frame", L"11", L"--frame", L"5"});
+    rejected(mixed, 1, "ConstraintViolation");
+    const auto events = Json::parse(mixed.output).at("events");
+    check(events.size() == 3 && produced(events.at(0).at("result").at("nodes").at(0)) == "3"
+        && events.at(1).at("admission") == "rejected" && events.at(1).at("correlation").at("key") == "11"
+        && !events.at(1).contains("result") && produced(events.at(2).at("result").at("nodes").at(0)) == "5",
+        "A rejected frame remains traceable without suppressing accepted frames on either side.");
+}
+
 void output_failures(const fs::path& executable)
 {
     const Fixture fixture(executable, PayloadStorage::External);
@@ -978,6 +1037,7 @@ int wmain(int argc, wchar_t** argv)
         else if (group == L"output-failures") { output_failures(cli); }
         else if (group == L"calculations") { calculations(cli); }
         else if (group == L"shared") { shared_workflows(cli); }
+        else if (group == L"trigger") { trigger_replay(cli); }
 #ifdef VISIONPRO_WITH_OPENCV
         else if (group == L"vision-roundtrip") { vision_roundtrip(cli); }
         else if (group == L"vision-diagnostics") { vision_diagnostics(cli); }
