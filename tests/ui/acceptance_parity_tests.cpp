@@ -30,6 +30,7 @@
 #include <charconv>
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <set>
 #include <span>
 #include <stdexcept>
@@ -458,6 +459,7 @@ private Q_SLOTS:
     void compares_saved_blob_loop();
     void imports_and_runs_blob_groups();
     void reproduces_saved_calculations();
+    void reproduces_saved_shared_workflows();
 };
 
 namespace {
@@ -616,39 +618,73 @@ void AcceptanceParityTests::imports_and_runs_blob_groups()
     } catch (const std::exception& failure) { QFAIL(failure.what()); }
 }
 
-void AcceptanceParityTests::reproduces_saved_calculations()
+namespace {
+// Channels generate fresh message IDs in each process. Translate using the
+// corresponding producer so the comparison still checks end-to-end identity.
+void match_message_ids(json& value, const std::map<std::string, std::string>& ids)
 {
-    try {
-        QTemporaryDir scratch;
-        require(scratch.isValid(), "Temporary directory unavailable.");
-        const fs::path sample(QString::fromUtf8(VISIONPRO_S63_DIRECTORY).toStdU16String());
-        const auto package = fs::path(scratch.path().toStdU16String()) / "saved calculations";
-        const auto registry = take(app::make_tool_registry());
-        const auto original = take(load_solution(sample, registry));
-        EditorWindow window(original.solution(), registry);
-        window.show();
-        window.open_document(sample);
-        wait_for_file(window);
-        window.transfer_document(package, SolutionTransfer::SaveAs);
-        wait_for_file(window);
-        window.open_document(package);
-        wait_for_file(window);
-        for (const auto& flow : original.solution().workflows) {
-            require(scene(window).select_workflow(flow.id), "Could not select the reloaded workflow.");
-            const auto desktop = complete_editor_run(window, "runWorkflow", {}, true);
-            const auto cli = run_cli(package, flow.id);
-            require(cli.at("status") == "Succeeded" && desktop.at("status") == cli.at("status")
-                && desktop.at("revision") == cli.at("revision") && desktop.at("session") != cli.at("session"),
-                "Both processes must complete the same saved workflow revision.");
-            for (const auto& node : flow.nodes) {
-                const auto& a = named(desktop.at("nodes"), "id", node.id.to_string());
-                const auto& b = named(cli.at("nodes"), "id", node.id.to_string());
-                require(a.at("status") == b.at("status") && a.at("judgement") == b.at("judgement")
-                    && a.at("outputs") == b.at("outputs") && a.at("selected_outputs") == b.at("selected_outputs"),
-                    "Desktop and CLI disagree at " + node.name);
+    if (auto* text = value.get_ptr<std::string*>()) {
+        if (const auto found = ids.find(*text); found != ids.end()) { *text = found->second; }
+    } else if (value.is_structured()) {
+        for (auto& child : value) { match_message_ids(child, ids); }
+    }
+}
+
+void compare_saved_workflows(const char* directory)
+{
+    QTemporaryDir scratch;
+    require(scratch.isValid(), "Temporary directory unavailable.");
+    const fs::path sample(QString::fromUtf8(directory).toStdU16String());
+    const auto package = fs::path(scratch.path().toStdU16String()) / "saved workflows";
+    const auto registry = take(app::make_tool_registry());
+    const auto original = take(load_solution(sample, registry));
+    EditorWindow window(original.solution(), registry);
+    window.show();
+    window.open_document(sample);
+    wait_for_file(window);
+    window.transfer_document(package, SolutionTransfer::SaveAs);
+    wait_for_file(window);
+    window.open_document(package);
+    wait_for_file(window);
+    for (const auto& flow : original.solution().workflows) {
+        require(scene(window).select_workflow(flow.id), "Could not select the reloaded workflow.");
+        const auto desktop = complete_editor_run(window, "runWorkflow", {}, !flow.interface.inputs.empty());
+        auto cli = run_cli(package, flow.id);
+        require(cli.at("status") == "Succeeded" && desktop.at("status") == cli.at("status")
+            && desktop.at("revision") == cli.at("revision") && desktop.at("session") != cli.at("session"),
+            "Both processes must complete the same saved workflow revision.");
+        std::map<std::string, std::string> ids;
+        for (const auto& call : cli.at("nodes")) {
+            for (const auto& slot : call.at("outputs")) {
+                if (slot.at("id") != "message_id" || slot.at("status") != "Produced") { continue; }
+                const auto& producer = named(desktop.at("nodes"), "id", call.at("id").get<std::string>());
+                const auto actual = output(producer, "message_id").get<std::string>();
+                require(slot.at("value") != actual && ids.emplace(slot.at("value").get<std::string>(), actual).second,
+                    "Each send must issue a new message ID in each process.");
             }
         }
-    } catch (const std::exception& failure) { QFAIL(failure.what()); }
+        match_message_ids(cli, ids);
+        for (const auto& node : flow.nodes) {
+            const auto& a = named(desktop.at("nodes"), "id", node.id.to_string());
+            const auto& b = named(cli.at("nodes"), "id", node.id.to_string());
+            require(a.at("status") == b.at("status") && a.at("judgement") == b.at("judgement")
+                && a.at("outputs") == b.at("outputs") && a.at("selected_outputs") == b.at("selected_outputs"),
+                "Desktop and CLI disagree at " + node.name);
+        }
+    }
+}
+} // namespace
+
+void AcceptanceParityTests::reproduces_saved_calculations()
+{
+    try { compare_saved_workflows(VISIONPRO_S63_DIRECTORY); }
+    catch (const std::exception& failure) { QFAIL(failure.what()); }
+}
+
+void AcceptanceParityTests::reproduces_saved_shared_workflows()
+{
+    try { compare_saved_workflows(VISIONPRO_S64_DIRECTORY); }
+    catch (const std::exception& failure) { QFAIL(failure.what()); }
 }
 
 void AcceptanceParityTests::compares_saved_blob_loop()

@@ -67,6 +67,8 @@ struct WorkflowSession::Impl {
         auto captured = ConfigSnapshot::capture(candidate, registry.descriptors(), {replacement->session(), version});
         if (auto* failure = std::get_if<Diagnostic>(&captured)) { return std::move(*failure); }
         const auto snapshot = std::get<ConfigSnapshot>(std::move(captured));
+        auto initialized = replacement->initialize_shared(snapshot);
+        if (auto* failure = std::get_if<Diagnostic>(&initialized)) { return std::move(*failure); }
 
         {
             const std::lock_guard lock(mutex);
@@ -282,6 +284,24 @@ WorkflowSessionProgress WorkflowSession::inspect() const
 {
     const std::lock_guard lock(impl_->mutex);
     return impl_->progress;
+}
+
+core::Result<std::shared_ptr<const core::SharedData>> WorkflowSession::shared_preview() const
+{
+    const std::lock_guard lock(impl_->mutex);
+    if (impl_->progress.status != WorkflowSessionStatus::Active) {
+        return error(ErrorCode::InvalidState, "Shared data preview requires an active solution session.");
+    }
+    return impl_->engine->shared_preview();
+}
+
+core::Result<std::shared_ptr<const core::CorrelationJoinAccess>> WorkflowSession::correlation_preview() const
+{
+    const std::lock_guard lock(impl_->mutex);
+    if (impl_->progress.status != WorkflowSessionStatus::Active) {
+        return error(ErrorCode::InvalidState, "Correlation preview requires an active solution session.");
+    }
+    return impl_->engine->correlation_preview();
 }
 
 RunSubmission WorkflowSession::submit(const RunRequest& request)

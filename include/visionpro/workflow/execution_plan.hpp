@@ -15,6 +15,7 @@ struct ExecutionCapabilities {
     // Separate opt-in: an ordinary DAG consumer expects each reachable node to be a prepared tool.
     bool structured_loops{false};
     bool composite_groups{false};
+    bool shared_data{false};
 };
 
 // A preflight product holding the request, its exact validation index and the

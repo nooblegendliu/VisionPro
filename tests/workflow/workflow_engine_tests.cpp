@@ -335,8 +335,8 @@ void execution_fail_fast()
         "An available empty List reports the actual out-of-range input.");
     const auto omission = blocked_sink(SourceMode::Available, false, 7, ErrorCode::InputUnavailable);
     check(omission.location.input == key<InputId>("hint"), "Unaccepted omission does not silently become None.");
-    const auto absent = blocked_sink(SourceMode::Available, true, {}, ErrorCode::GlobalUnavailable);
-    check(absent.location.variable == uuid<VariableId>(), "Absent global does not use the definition's initial value.");
+    const auto initial = blocked_sink(SourceMode::Available, true, {}, ErrorCode::GlobalRevisionMismatch);
+    check(initial.location.variable == uuid<VariableId>(), "The session's initial revision zero cannot satisfy an explicit pin to revision seven.");
     const auto stale = blocked_sink(SourceMode::Available, true, 6, ErrorCode::GlobalRevisionMismatch);
     check(stale.location.variable == uuid<VariableId>(), "A different global revision is reported before the sink starts.");
 }

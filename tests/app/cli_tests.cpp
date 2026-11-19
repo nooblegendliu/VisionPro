@@ -557,6 +557,46 @@ void calculations(const fs::path& executable)
         "Formatter tolerance never consumes an upstream technical failure.");
 }
 
+void shared_workflows(const fs::path& executable)
+{
+    ScratchDirectory scratch;
+    const auto manifest = scratch.path / "shared" / "solution.json";
+    write_file(manifest, read_file(VISIONPRO_SHARED_SAMPLE));
+    const auto sample = Json::parse(read_file(manifest));
+    success(invoke(executable, scratch.path, {L"save", L"--solution", manifest.native()}));
+    const auto run = [&](std::size_t index) {
+        const auto id = sample.at("workflows").at(index).at("id").get<std::string>();
+        return success(invoke(executable, scratch.path, {L"run", L"--solution", manifest.native(), L"--workflow",
+            std::wstring(id.begin(), id.end())}));
+    };
+    const auto delivery = run(0);
+    const auto& received = delivery.at("nodes").back();
+    const auto& messages = produced(received, "messages");
+    check(delivery.at("status") == "Succeeded" && produced(received, "count") == "2" && messages.size() == 2,
+        "Exactly two completed workpieces are received.");
+    for (std::size_t i = 0; i < 2; ++i) {
+        const auto& message = messages.at(i);
+        check(message.at("queue_id") == sample.at("queues").at(1).at("id") && message.at("domain") == "inspection.lot1"
+            && message.at("sequence") == std::to_string(i + 1) && message.at("key") == (i == 0 ? "B" : "A")
+            && message.at("payload") == Json{{"height", i == 0 ? "2" : "1"}, {"width", i == 0 ? "20" : "10"}},
+            "A completion preserves FIFO sequence, business identity and measurements from the same workpiece.");
+        const auto& sender = find_by(delivery.at("nodes"), "id",
+            sample.at("workflows").at(0).at("nodes").at(i == 0 ? 8 : 10).at("id").get<std::string>());
+        check(produced(sender, "message_id") == message.at("message_id"), "Received message traces its original send.");
+    }
+    const auto globals = run(1);
+    const auto& nodes = globals.at("nodes");
+    check(globals.at("status") == "Succeeded" && produced(nodes.at(0)) == "0" && produced(nodes.at(0), "revision") == "0"
+        && produced(nodes.at(1)) == "10" && produced(nodes.at(1), "revision") == "1", "A fresh session initializes then advances a global.");
+    const auto& entries = produced(nodes.at(2), "entries");
+    check(entries.size() == 2 && entries.at(0).at("value") == "2" && entries.at(0).at("revision") == "0"
+        && entries.at(1).at("value") == "10" && entries.at(1).at("revision") == "1",
+        "The explicit multi-variable read observes the live values in declared order.");
+    const auto& frozen = sources(nodes.back(), "left").at(0);
+    check(produced(nodes.back()) == "0" && frozen.at("kind") == "global" && frozen.at("revision") == "0",
+        "An ordinary binding keeps the global snapshot captured when preparing this run.");
+}
+
 void output_failures(const fs::path& executable)
 {
     const Fixture fixture(executable, PayloadStorage::External);
@@ -937,6 +977,7 @@ int wmain(int argc, wchar_t** argv)
         else if (group == L"external-diagnostics") { diagnostics(cli, PayloadStorage::External); }
         else if (group == L"output-failures") { output_failures(cli); }
         else if (group == L"calculations") { calculations(cli); }
+        else if (group == L"shared") { shared_workflows(cli); }
 #ifdef VISIONPRO_WITH_OPENCV
         else if (group == L"vision-roundtrip") { vision_roundtrip(cli); }
         else if (group == L"vision-diagnostics") { vision_diagnostics(cli); }

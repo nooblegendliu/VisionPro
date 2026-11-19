@@ -2346,3 +2346,33 @@ $strict = '5ca4f87a-ea1e-4d62-89b0-000000006330'
 ctest --test-dir out/build/s63-headless -C Release -R 'workflow.resolver_dynamic_indices|infrastructure.dynamic_file_resources|tools.logic|app.cli_calculations' --output-on-failure
 ctest --test-dir out/build/s63-gui -C Release -R 'visionpro_(calculation_parity|inspector|visual)_tests' --output-on-failure
 ```
+
+### 10.4 S6.4 共享值与工件汇合
+
+2026-11-19 在 Windows x64 完成 Release 构建与全量 CTest。启用 Qt 和 OpenCV 的配置通过 **136/136** 项，关闭二者的配置通过 **108/108** 项。桌面测试使用 Qt offscreen，执行另存、重开和运行，再让独立 CLI 从另一工作目录运行保存的方案。[固定验收方案](../samples/s6-shared/solution.json)
+
+| 样例流程 | 新会话首次运行的预期结果 |
+|---|---|
+| 乱序测量与工件交付 | 输入依次为 A 宽 10、B 宽 20、B 高 2、A 高 1。第一条队列按 FIFO 取出四个片段。B 先齐备，第二条队列依次收到序号 1 的 B=(20,2) 和序号 2 的 A=(10,1)。每个接收信封的消息 ID 与本次实际发送一致。 |
+| 全局值写入与一致读取 | 初始宽度为 0、版本 0。写入 10 后版本为 1。显式批量读取依配置顺序返回高度 2（版本 0）、宽度 10（版本 1）。同轮普通绑定仍读到准备时的宽度 0、版本 0。 |
+
+桌面使用 **Run → Preview Shared Data…** 查看每个变量的值与版本、队列的消息序号和关联键，以及各命名汇合的完成、重复、过期和容量统计。可在节点检查器按稳定 ID 选择或调整共享目标的顺序。样例固定使用批次 1，重开后可从空队列复跑。同一会话处理下一批工件时使用更大的批次号。跨进程复现时，消息 UUID 各自生成，校验按发送节点追踪到接收信封，并比较序号、工件键及内容。
+
+专项回归还覆盖以下边界。
+
+- 队列容量为 2、满时拒绝，第 3 条发送得到 `QueueFull`。精确批量或跨队列组合接收缺项时保留全部原消息，取消空队列接收或满队列发送也保留队列内容。
+- 汇合保留首个有效来源。重复片段及并发到达的最后一个字段只交付一次。超时后可查询缺失字段，大批次号关闭旧批次，新批次可以复用原工件号。暂存名额、批次键和命名汇合的容量分别计数。
+- 桌面连续刷新后，未收消息的序号仍为 1、接收计数仍为 0。在有待收消息、未齐工件和已写全局值时保存，重开后首条消息序号回到 1，全局读取回到初值和版本 0，同号工件可重新暂存。跨方案子图导入另验缺失或类型不匹配的共享目标，以及缺少共享服务时原宿主仍能运行。
+
+内置节点覆盖 Int64 全局读写与多值读取、测量片段及完整宽高 Record 的队列收发，以及必需来源为 `width`、`height` 的工件汇合。服务接口按声明类型校验。多流程并行与有界重入安排在 S6.5。[数据契约](data-model.md#11-全局变量) · [后续计划](s6-plan.md#s65-多流程并行与重入)
+
+以下命令在仓库根目录执行。两种 Release 配置沿用 [§3.28](#328-s55-release-构建与测试)，构建目录分别为 `out/build/s64-gui`、`out/build/s64-headless`。全量回归可移除 `-R` 及其表达式。
+
+```powershell
+$cli = 'out/build/s64-headless/source/app/visionpro_cli.exe'
+$solution = (Resolve-Path 'samples/s6-shared/solution.json').Path
+& $cli run --solution $solution --workflow '5ca4f87a-ea1e-4d62-89b0-000000006410'
+& $cli run --solution $solution --workflow '5ca4f87a-ea1e-4d62-89b0-000000006420'
+ctest --test-dir out/build/s64-headless -C Release -R 'workflow\.(shared_data|correlation_join)|tools\.shared_data|app\.(shared_package|cli_shared_workflows)' --output-on-failure
+ctest --test-dir out/build/s64-gui -C Release -R 'visionpro_(inspector|shared_parity)_tests' --output-on-failure
+```

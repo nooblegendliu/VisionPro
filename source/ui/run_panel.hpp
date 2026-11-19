@@ -12,6 +12,9 @@ class QTreeWidget;
 
 namespace visionpro::ui {
 
+QString shared_value_text(const core::DataValue& value);
+QString shared_value_text(const core::ConfigValue& value);
+
 class RunPanel final : public QWidget {
     Q_OBJECT
 

@@ -1,3 +1,8 @@
+add_executable(visionpro_shared_tools_tests shared_tools_tests.cpp)
+target_link_libraries(visionpro_shared_tools_tests PRIVATE visionpro_shared_tools visionpro_workflow visionpro_build_options Threads::Threads)
+add_test(NAME tools.shared_data COMMAND visionpro_shared_tools_tests)
+set_tests_properties(tools.shared_data PROPERTIES TIMEOUT 30)
+
 add_executable(visionpro_logic_tests logic_tests.cpp)
 target_link_libraries(visionpro_logic_tests PRIVATE visionpro_logic_tools visionpro_workflow visionpro_build_options)
 add_test(NAME tools.logic COMMAND visionpro_logic_tests)

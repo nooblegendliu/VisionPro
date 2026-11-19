@@ -12,6 +12,8 @@ add_library(visionpro_workflow STATIC
     scoped_schedule.cpp
     loop_execution.cpp
     node_state_service.cpp
+    shared_data.cpp
+    correlation_join.cpp
     workflow_engine.cpp
     workflow_session.cpp
     validation.cpp

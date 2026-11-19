@@ -116,9 +116,11 @@ Solution extract(const Solution& draft, WorkflowId workflow, std::optional<NodeI
 
 struct HostServices {
     std::map<VariableId, DataType> variables;
+    std::map<QueueId, DataType> queues;
     std::map<ResourceId, ResourceKind> resources;
     bool node_state{};
     bool file_leases{};
+    bool shared_data{};
 };
 
 struct Package {
@@ -130,7 +132,7 @@ struct Package {
 
 SubgraphHostCapabilities required_capabilities(const Package& pack, const ToolRegistry& registry)
 {
-    SubgraphHostCapabilities needs{false, !pack.model.resources.empty()};
+    SubgraphHostCapabilities needs{false, !pack.model.resources.empty(), false};
     for (const auto& flow : pack.model.workflows) {
         for (const auto& node : flow.nodes) {
             const auto* config = std::get_if<ToolConfiguration>(&node.configuration);
@@ -139,6 +141,7 @@ SubgraphHostCapabilities required_capabilities(const Package& pack, const ToolRe
             if (!tool) { DiagnosticLocation where; where.node = node.id; where.tool = config->type;
                 fail(ErrorCode::UnknownTool, "The package requires a tool missing from the host registry.", where); }
             needs.node_state |= tool->state.has_value();
+            needs.shared_data |= tool->shared_target.has_value() || tool->requires_correlation_join;
             for (const auto& slot : tool->resources) {
                 const bool file = slot.kind == ResourceKind::Image || slot.kind == ResourceKind::Mask ||
                     slot.kind == ResourceKind::Template || slot.kind == ResourceKind::Calibration || slot.kind == ResourceKind::Binary;
@@ -168,6 +171,9 @@ void resolve_dependencies(Package& pack, const Solution& source)
         if (const auto* global = std::get_if<GlobalReference>(&external.reference)) {
             const auto& variable = by_id(source.variables, global->variable, "Required host variable");
             pack.services.variables.emplace(variable.id, variable.type);
+        } else if (const auto* queue = std::get_if<QueueId>(&external.reference)) {
+            const auto& definition = by_id(source.queues, *queue, "Required host queue");
+            pack.services.queues.emplace(*queue, definition.message_schema);
         } else if (const auto* ref = std::get_if<ResourceReference>(&external.reference)) {
             require(validate_resource_reference(*ref, source.resources));
             if (!resources.insert(ref->id).second) { continue; }
@@ -198,6 +204,14 @@ void validate_package(const Package& pack, const Solution& host, const ToolRegis
         }
         candidate.variables.push_back(*it);
     }
+    for (const auto& [id, type] : pack.services.queues) {
+        const auto it = std::ranges::find(host.queues, id, &DataQueueDefinition::id);
+        if (it == host.queues.end() || it->message_schema != type) {
+            DiagnosticLocation where; where.queue = id;
+            fail(ErrorCode::MissingCapability, "Host queue with the declared identity and message schema is required.", where);
+        }
+        candidate.queues.push_back(*it);
+    }
     for (const auto& [id, kind] : pack.services.resources) {
         const auto it = std::ranges::find(host.resources, id, &ResourceDefinition::id);
         if (it == host.resources.end() || it->kind != kind) {
@@ -221,10 +235,15 @@ Json encode(const Package& pack)
     for (const auto& [id, digest] : pack.digests) {
         files.push_back({{"id", detail::write_id(id)}, {"sha256", digest}});
     }
-    return {{"format", "visionpro.subgraph"}, {"version", 1}, {"kind", pack.group ? "group" : "workflow"},
+    Json encoded{{"format", "visionpro.subgraph"}, {"version", 1}, {"kind", pack.group ? "group" : "workflow"},
         {"model", detail::encode_solution(pack.model)}, {"files", std::move(files)},
         {"host", {{"variables", std::move(variables)}, {"resources", std::move(resources)},
             {"node_state", pack.services.node_state}, {"file_leases", pack.services.file_leases}}}};
+    if (pack.services.shared_data) { encoded["host"]["shared_data"] = true; }
+    for (const auto& [id, type] : pack.services.queues) {
+        encoded["host"]["queues"].push_back({{"id", detail::write_id(id)}, {"type", detail::encode_type(type)}});
+    }
+    return encoded;
 }
 
 Package decode(const fs::path& directory)
@@ -240,7 +259,16 @@ Package decode(const fs::path& directory)
     if (kind != "group" && kind != "workflow") { fail(ErrorCode::UnsupportedSolutionContent, "Unknown subgraph package kind."); }
     Package pack{detail::decode_solution(root.field("model")), kind == "group", {}, {}};
     const auto host = root.field("host");
-    host.object({"variables", "resources", "node_state", "file_leases"});
+    host.object({"variables", "resources", "node_state", "file_leases", "queues", "shared_data"});
+    pack.services.shared_data = host.contains("shared_data") && host.field("shared_data").boolean();
+    if (host.contains("queues")) {
+        const auto queues = host.field("queues");
+        for (std::size_t i = 0; i < queues.size(); ++i) {
+            const auto service = queues.at(i); service.object({"id", "type"});
+            if (!pack.services.queues.emplace(detail::read_id<QueueId>(service.field("id")),
+                    detail::decode_type(service.field("type"))).second) { fail(ErrorCode::DuplicateIdentity, "Repeated host queue requirement."); }
+        }
+    }
     pack.services.node_state = host.field("node_state").boolean();
     pack.services.file_leases = host.field("file_leases").boolean();
     const auto variables = host.field("variables"), resources = host.field("resources"), files = root.field("files");
@@ -442,6 +470,7 @@ core::Result<std::monostate> export_subgraph_package(const fs::path& directory, 
         const auto needs = required_capabilities(pack, registry);
         pack.services.node_state = needs.node_state;
         pack.services.file_leases = needs.file_leases;
+        pack.services.shared_data = needs.shared_data;
         validate_package(pack, draft, registry);
         const auto from = source ? require(detail::resource_paths(source->directory(), source->resource_roots()))
                                  : require(detail::resource_paths({}, {}));
@@ -467,10 +496,11 @@ core::Result<SubgraphImport> import_subgraph_package(const fs::path& directory, 
         const auto from = require(detail::resource_paths(directory, {}));
         auto pack = decode(from.directory);
         const auto needs = required_capabilities(pack, registry);
-        if (pack.services.node_state != needs.node_state || pack.services.file_leases != needs.file_leases) {
+        if (pack.services.node_state != needs.node_state || pack.services.file_leases != needs.file_leases || pack.services.shared_data != needs.shared_data) {
             fail(ErrorCode::InvalidModel, "The host-service manifest does not match its tool and resource dependencies.");
         }
         if (needs.node_state && !capabilities.node_state) { fail(ErrorCode::MissingCapability, "The package requires a host node state service."); }
+        if (needs.shared_data && !capabilities.shared_data) { fail(ErrorCode::MissingCapability, "The package requires host shared data services."); }
         if (needs.file_leases && !capabilities.file_leases) { fail(ErrorCode::MissingCapability, "The package requires host file resource leases."); }
         validate_package(pack, draft, registry);
         auto copied = require(clone_solution(pack.model, ExternalReferencePolicy::Preserve, pack.group ? target : std::nullopt));

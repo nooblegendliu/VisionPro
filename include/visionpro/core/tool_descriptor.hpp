@@ -118,6 +118,15 @@ struct StateParameterProjection {
     bool operator==(const StateParameterProjection&) const = default;
 };
 
+enum class SharedTargetKind { Variable, Queue };
+using SharedTargetId = std::variant<VariableId, QueueId>;
+struct SharedTargetRequirement {
+    SharedTargetKind kind;
+    DataType type;
+    bool multiple{false};
+    bool operator==(const SharedTargetRequirement&) const = default;
+};
+
 struct ToolDescriptor {
     ToolTypeId id;
     std::string display_name;
@@ -133,6 +142,8 @@ struct ToolDescriptor {
     std::vector<PixelFormat> image_formats;
     ToolExecutionPolicy execution;
     StateParameterProjection state_parameters;
+    std::optional<SharedTargetRequirement> shared_target{};
+    bool requires_correlation_join{false};
 };
 
 struct SchemaSupport {
@@ -143,6 +154,8 @@ struct SchemaSupport {
 };
 
 [[nodiscard]] Result<std::monostate> validate_descriptor(const ToolDescriptor& descriptor);
+[[nodiscard]] Result<std::monostate> validate_shared_targets(const ToolDescriptor& descriptor,
+    std::span<const SharedTargetId> targets);
 [[nodiscard]] Result<std::monostate> validate_input_descriptor(const InputDescriptor& descriptor);
 [[nodiscard]] Result<std::monostate> validate_output_descriptor(const OutputDescriptor& descriptor);
 [[nodiscard]] bool allows_output_absence(const OutputDescriptor& descriptor, OutputAbsenceReason reason);

@@ -832,10 +832,11 @@ void reusable_packages()
     fs::rename(fixture.managed, fixture.scratch.path / "moved-input");
     auto execution = take(open_solution_execution(take(load_solution(host_directory, tools)), tools));
     const auto no_values = start(execution, target);
-    const auto absent = take(no_values.wait(RunWaitTarget::Quiescence, std::chrono::steady_clock::now() + 5s));
-    check(absent.progress.status == ExecutionStatus::Failed && std::ranges::any_of(absent.progress.diagnostics,
-        [&](const auto& diagnostic) { return diagnostic.code == ErrorCode::GlobalUnavailable && diagnostic.location.variable == variable; }),
-        "The definition alone does not provide a runtime global value; the failure identifies the exact missing variable.");
+    const auto initial = take(no_values.wait(RunWaitTarget::Quiescence, std::chrono::steady_clock::now() + 5s));
+    check(initial.progress.status == ExecutionStatus::Failed && no_values.request().globals().size() == 1
+        && no_values.request().globals().front().variable == variable && no_values.request().globals().front().revision == 0
+        && std::ranges::any_of(initial.progress.diagnostics, [](const auto& issue) { return issue.code == ErrorCode::IndexOutOfRange; }),
+        "The new host session supplies the configured initial index 2, outside its two-element Group input.");
     const auto origin = key<SchemaId>("subgraph.test.host");
     const std::array globals{GlobalVariableEntry{variable, DataValue::integer(1), 0,
         ExternalUpdateOrigin{execution.engine->session(), origin}}};

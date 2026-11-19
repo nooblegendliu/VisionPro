@@ -41,6 +41,7 @@ constexpr auto usage =
     "visionpro_cli save --solution <solution.json> [--root <id>=<directory>]...\n"
     "Use --group to debug one composite Group in isolation. Inputs follow the selected public interface.\n"
     "Built-in tools include simulation, list selection, integer range judgement, calculation, logic and formatting.\n"
+    "Shared tools read and write global values, send and receive queued records, and join workpiece measurements.\n"
 #ifdef VISIONPRO_WITH_OPENCV
     "Image tools include visionpro.image.read_file, visionpro.image.threshold and visionpro.image.blob.\n"
 #endif

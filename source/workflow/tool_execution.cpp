@@ -160,7 +160,7 @@ core::Result<PreparedTool> PreparedTool::create(BindingResolver resolver, core::
     const auto* tool = snapshot.find_tool(tool_config->type);
     if (!tool) { return error(core::ErrorCode::UnknownTool, "Tool execution metadata is absent from the snapshot.", snapshot, workflow, node); }
     core::ToolExecutionConfigurationData data{snapshot.identity().session, snapshot.identity().snapshot,
-        workflow, node, *tool, {}, {}};
+        workflow, node, *tool, {}, {}, tool_config->shared_targets};
     for (const auto& parameter : tool->parameters) {
         if (parameter.binding.time != core::BindingTime::SnapshotBuild) { continue; }
         auto value = fixed_parameter(parameter, *configured);

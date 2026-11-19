@@ -1,3 +1,7 @@
+add_library(visionpro_shared_tools STATIC shared_tools.cpp shared_tools.hpp)
+target_include_directories(visionpro_shared_tools PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>")
+target_link_libraries(visionpro_shared_tools PUBLIC visionpro_core PRIVATE visionpro_build_options Threads::Threads)
+
 add_library(visionpro_list_tools STATIC list_item.cpp list_item.hpp)
 target_include_directories(visionpro_list_tools PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>")
 target_link_libraries(visionpro_list_tools PUBLIC visionpro_core PRIVATE visionpro_build_options)

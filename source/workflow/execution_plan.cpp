@@ -39,6 +39,9 @@ Result<std::monostate> check_tool(const ToolExecutionConfiguration& configuratio
 {
     const auto& data = configuration.data();
     where.tool = data.tool.id;
+    if ((data.tool.shared_target || data.tool.requires_correlation_join) && !capabilities.shared_data) {
+        return unsupported(where, "The execution profile does not provide session shared data services.");
+    }
     if (data.tool.execution.lifetime != ToolInstanceLifetime::Invocation) {
         return unsupported(where, "This planner supports invocation-lifetime tool instances.");
     }

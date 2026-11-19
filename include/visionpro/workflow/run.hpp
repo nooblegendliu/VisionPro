@@ -51,7 +51,8 @@ public:
     [[nodiscard]] const RunTarget& target() const noexcept;
     [[nodiscard]] std::span<const FixedRunInput> inputs() const noexcept;
     [[nodiscard]] const FixedRunInput* input(const core::InputId& id) const noexcept;
-    // The read snapshot contains only the explicitly supplied current values.
+    // Global references use one immutable read snapshot for the entire run.
+    [[nodiscard]] core::Result<RunRequest> with_global_snapshot(std::span<const core::GlobalVariableEntry> entries) const;
     [[nodiscard]] std::span<const core::GlobalVariableEntry> globals() const noexcept;
     [[nodiscard]] const RunTrigger& trigger() const noexcept;
     [[nodiscard]] const std::optional<core::CorrelationId>& correlation() const noexcept;

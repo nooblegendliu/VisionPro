@@ -80,7 +80,8 @@ bool same_contract(const ToolDescriptor& left, const ToolDescriptor& right)
         && std::ranges::equal(left.resources, right.resources, same_resource)
         && left.region_capabilities == right.region_capabilities
         && std::ranges::is_permutation(left.image_formats, right.image_formats)
-        && left.execution == right.execution;
+        && left.execution == right.execution && left.shared_target == right.shared_target
+        && left.requires_correlation_join == right.requires_correlation_join;
 }
 
 } // namespace

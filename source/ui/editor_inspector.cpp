@@ -16,6 +16,8 @@
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QInputDialog>
+#include <QJsonArray>
+#include <QJsonDocument>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
@@ -210,6 +212,11 @@ QString constant_text(const ConfigValue& value)
     if (const auto* real = value.as_float64()) { return QString::number(*real, 'g', 17); }
     if (const auto* string = value.as_string()) { return qtext(*string); }
     if (const auto* member = value.as_enum()) { return id_text(*member); }
+    if (const auto* list = value.elements(); list && value.type().element_type()->kind() == TypeKind::String) {
+        QJsonArray strings;
+        for (const auto& item : *list) { strings.append(qtext(*item.as_string())); }
+        return QString::fromUtf8(QJsonDocument(strings).toJson(QJsonDocument::Compact));
+    }
     if (const auto* list = value.elements(); list && value.type().element_type()->kind() == TypeKind::Int64) {
         QStringList numbers;
         for (const auto& item : *list) { numbers.append(QString::number(*item.as_int64())); }
@@ -604,6 +611,29 @@ std::optional<ConfigValue> edit_constant(QWidget* owner, const RoiEditContext& c
     const auto initial = prior ? constant_text(*prior) : QString{};
     switch (type.kind()) {
     case TypeKind::List: {
+        if (type.element_type()->kind() == TypeKind::String) {
+            QInputDialog dialog(owner);
+            dialog.setObjectName(QStringLiteral("stringListEditor"));
+            dialog.setWindowTitle(QStringLiteral("String list"));
+            dialog.setLabelText(QStringLiteral("Ordered JSON array of strings, for example [\"width\", \"height\"]"));
+            dialog.setTextValue(prior ? constant_text(*prior) : QStringLiteral("[]"));
+            while (dialog.exec() == QDialog::Accepted) {
+                const auto document = QJsonDocument::fromJson(dialog.textValue().toUtf8());
+                const auto array = document.array();
+                if (!document.isArray() || !std::all_of(array.constBegin(), array.constEnd(), [](const QJsonValue& item) { return item.isString(); })) {
+                    warn(&dialog, QStringLiteral("Enter a JSON array containing only strings."));
+                    continue;
+                }
+                std::vector<ConfigValue> elements;
+                for (const auto item : array) {
+                    auto value = constant_result(owner, ConfigValue::string(utf8(item.toString())));
+                    if (!value) { return {}; }
+                    elements.push_back(std::move(*value));
+                }
+                return constant_result(owner, ConfigValue::list(DataType::string(), elements));
+            }
+            return {};
+        }
         if (type.element_type()->kind() != TypeKind::Int64) {
             warn(owner, QStringLiteral("Choose a typed source for this list."));
             return std::nullopt;
@@ -1365,6 +1395,106 @@ void resource_row(QFormLayout& form, QWidget* owner, const InspectorContext& con
     form.addRow(id_text(slot.slot), row);
 }
 
+Choices<SharedTargetId> compatible_targets(const Solution& solution, const SharedTargetRequirement& requirement)
+{
+    Choices<SharedTargetId> choices;
+    const auto add = [&](const auto& definition) {
+        choices.emplace_back(QStringLiteral("%1 [%2]").arg(qtext(definition.name), qtext(definition.id.to_string())), definition.id);
+    };
+    if (requirement.kind == SharedTargetKind::Variable) {
+        for (const auto& item : solution.variables) { if (item.type == requirement.type) { add(item); } }
+    } else {
+        for (const auto& item : solution.queues) { if (item.message_schema == requirement.type) { add(item); } }
+    }
+    return choices;
+}
+
+QString target_label(const Choices<SharedTargetId>& choices, const SharedTargetId& target)
+{
+    for (const auto& [label, id] : choices) { if (target == id) { return label; } }
+    return QStringLiteral("Unavailable [%1]").arg(std::visit([](const auto& id) { return qtext(id.to_string()); }, target));
+}
+
+void shared_targets(QVBoxLayout& panel, const InspectorContext& context, const Workflow& flow, const Node& node,
+    const SharedTargetRequirement& requirement)
+{
+    const auto choices = compatible_targets(context.model.draft(), requirement);
+    const auto current = std::get<ToolConfiguration>(node.configuration).shared_targets;
+    const auto title = requirement.kind == SharedTargetKind::Variable ? QStringLiteral("Global variables") : QStringLiteral("Queues");
+    auto* group = section(panel, title);
+    auto* form = new QFormLayout(group);
+    QStringList labels;
+    for (const auto& target : current) { labels.append(target_label(choices, target)); }
+    const auto summary = labels.isEmpty() ? QStringLiteral("Select target…") : labels.join(QStringLiteral(" → "));
+    auto* button = action(group, button_text(summary), "editSharedTargets", [=, id = flow.id, selected = node.id] {
+        QDialog dialog(context.owner);
+        dialog.setWindowTitle(title);
+        auto* layout = new QVBoxLayout(&dialog);
+        auto* picker = new QComboBox(&dialog);
+        picker->setObjectName(QStringLiteral("compatibleSharedTargets"));
+        for (const auto& [label, target] : choices) { picker->addItem(label); }
+        if (!requirement.multiple && current.size() == 1) {
+            picker->setCurrentIndex(picker->findText(target_label(choices, current.front())));
+        }
+        layout->addWidget(picker);
+        auto* list = new QListWidget(&dialog);
+        list->setObjectName(QStringLiteral("orderedSharedTargets"));
+        layout->addWidget(list);
+        auto targets = current;
+        auto* edits = new QHBoxLayout;
+        const auto render = [&](int row) {
+            list->clear();
+            for (const auto& target : targets) { list->addItem(target_label(choices, target)); }
+            if (list->count()) { list->setCurrentRow(std::clamp(row, 0, list->count() - 1)); }
+        };
+        render(0);
+        auto* set = action(&dialog, requirement.multiple ? QStringLiteral("Add") : QStringLiteral("Set"), "setSharedTarget", [&] {
+            if (picker->currentIndex() < 0) { return; }
+            const auto& target = choices[static_cast<std::size_t>(picker->currentIndex())].second;
+            if (!requirement.multiple) { targets = {target}; }
+            else if (std::ranges::find(targets, target) == targets.end()) { targets.push_back(target); }
+            render(static_cast<int>(std::ranges::find(targets, target) - targets.begin()));
+        });
+        set->setEnabled(!choices.empty());
+        edits->addWidget(set);
+        edits->addWidget(action(&dialog, QStringLiteral("Remove"), "removeSharedTarget", [&] {
+            const auto index = list->currentRow();
+            if (index >= 0) { targets.erase(targets.begin() + index); render(index); }
+        }));
+        const auto move = [&](int delta) {
+            const auto index = list->currentRow(), other = index + delta;
+            if (index < 0 || other < 0 || other >= list->count()) { return; }
+            std::iter_swap(targets.begin() + index, targets.begin() + other);
+            render(other);
+        };
+        if (requirement.multiple) {
+            edits->addWidget(action(&dialog, QStringLiteral("↑"), "earlierSharedTarget", [&] { move(-1); }));
+            edits->addWidget(action(&dialog, QStringLiteral("↓"), "laterSharedTarget", [&] { move(1); }));
+        }
+        layout->addLayout(edits);
+        close_buttons(dialog, *layout);
+        if (dialog.exec() != QDialog::Accepted || targets == current) { return; }
+        context.edit_node(id, selected, QStringLiteral("Change shared targets"), [&](Solution& solution, Workflow&, Node& editing) -> Check {
+            if (!targets.empty()) {
+                const auto* tool = metadata(context.registry, editing);
+                if (!tool) { return error(ErrorCode::UnknownTool, "The selected tool metadata is unavailable."); }
+                auto shape = validate_shared_targets(*tool, targets);
+                if (const auto* failure = std::get_if<Diagnostic>(&shape)) { return *failure; }
+            }
+            const auto compatible = compatible_targets(solution, requirement);
+            for (const auto& target : targets) {
+                if (std::ranges::none_of(compatible, [&](const auto& item) { return item.second == target; })) {
+                    return error(ErrorCode::TypeMismatch, "A selected shared target is missing or has an incompatible type.");
+                }
+            }
+            std::get<ToolConfiguration>(editing.configuration).shared_targets = targets;
+            return std::monostate{};
+        });
+    });
+    button->setToolTip(summary);
+    form->addRow(type_text(requirement.type), button);
+}
+
 void tool_settings(QVBoxLayout& panel, const InspectorContext& context, const Workflow& flow, const Node& node)
 {
     const auto* tool = metadata(context.registry, node);
@@ -1374,6 +1504,7 @@ void tool_settings(QVBoxLayout& panel, const InspectorContext& context, const Wo
         panel.addWidget(status);
         return;
     }
+    if (tool->shared_target) { shared_targets(panel, context, flow, node, *tool->shared_target); }
     if (!tool->inputs.empty()) {
         auto* group = section(panel, QStringLiteral("Inputs"));
         auto* form = new QFormLayout(group);

@@ -24,7 +24,7 @@ struct GlobalVariableDefinition {
 struct GlobalVariableEntry {
     VariableId variable;
     DataValue current_value;
-    std::uint64_t revision; // Zero is the initialized value; writes advance it in the later service.
+    std::uint64_t revision; // Starts at zero and advances on each successful write.
     UpdateOrigin update_origin;
 };
 

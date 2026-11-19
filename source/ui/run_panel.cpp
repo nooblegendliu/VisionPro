@@ -144,7 +144,8 @@ QString diagnostic_text(const Diagnostic& item)
         .arg(enum_text(item.severity, std::array{"Info", "Warning", "Error"}), text(error_code_name(item.code)), text(item.message), where);
 }
 
-QString value_text(const DataValue& value, bool preview_list = true)
+template<ValueDomain Domain>
+QString value_text(const BasicValue<Domain>& value, bool preview_list = true)
 {
     if (const auto* content = value.as_bool()) { return *content ? QStringLiteral("true") : QStringLiteral("false"); }
     if (const auto* content = value.as_int64()) { return QString::number(*content); }
@@ -156,13 +157,15 @@ QString value_text(const DataValue& value, bool preview_list = true)
         return preview;
     }
     if (const auto* content = value.as_enum()) { return id_text(*content); }
-    if (const auto* content = value.as_image()) {
-        return QStringLiteral("Image %1 × %2 · %3").arg(content->image.width()).arg(content->image.height())
-            .arg(id_text(content->image.coordinate_frame()));
-    }
-    if (const auto* content = value.as_raster_mask()) {
-        return QStringLiteral("Raster mask %1 × %2 · %3").arg(content->pixels.width()).arg(content->pixels.height())
-            .arg(id_text(content->pixels.coordinate_frame()));
+    if constexpr (Domain == ValueDomain::Data) {
+        if (const auto* content = value.as_image()) {
+            return QStringLiteral("Image %1 × %2 · %3").arg(content->image.width()).arg(content->image.height())
+                .arg(id_text(content->image.coordinate_frame()));
+        }
+        if (const auto* content = value.as_raster_mask()) {
+            return QStringLiteral("Raster mask %1 × %2 · %3").arg(content->pixels.width()).arg(content->pixels.height())
+                .arg(id_text(content->pixels.coordinate_frame()));
+        }
     }
     if (const auto* content = value.as_region2d()) { return QStringLiteral("ROI %1").arg(id_text(content->id)); }
     if (const auto* content = value.as_resource_reference()) { return resource_text(*content); }
@@ -221,7 +224,25 @@ void set_text(QLabel& label, const QString& value)
 {
     if (label.text() != value) { label.setText(value); }
 }
+
+template<class Value>
+QString shared_summary(const Value& value)
+{
+    const auto* fields = value.fields();
+    if (!fields) { return value_text(value); }
+    QStringList parts;
+    constexpr std::size_t limit = 8;
+    for (std::size_t i = 0; i < std::min(limit, fields->size()); ++i) {
+        const auto& field = (*fields)[i];
+        parts.append(id_text(field.id) + QStringLiteral("=") + value_text(field.value));
+    }
+    if (fields->size() > limit) { parts.append(QStringLiteral("…")); }
+    return value_text(value) + QStringLiteral(" {") + parts.join(QStringLiteral(", ")) + QStringLiteral("}");
+}
 } // namespace
+
+QString shared_value_text(const core::DataValue& value) { return shared_summary(value); }
+QString shared_value_text(const core::ConfigValue& value) { return shared_summary(value); }
 
 RunPanel::RunPanel(QWidget* parent)
     : QWidget(parent)

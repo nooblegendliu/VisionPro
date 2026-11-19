@@ -410,6 +410,22 @@ Check Validator::node_metadata(const Node& node)
     if (tool->config_version != configured.config_version) {
         return error(ErrorCode::IncompatibleSchemaVersion, "Node configuration version does not match its tool.", where);
     }
+    if (auto checked = validate_shared_targets(*tool, configured.shared_targets); failed(checked)) {
+        return contextualize(std::move(checked), where);
+    }
+    for (const auto& target : configured.shared_targets) {
+        if (const auto* variable = std::get_if<VariableId>(&target)) {
+            where.variable = *variable;
+            const auto* defined = find(solution_.variables, *variable);
+            if (!defined) { return error(ErrorCode::InvalidGlobalVariable, "Shared target variable is not defined.", where); }
+            if (defined->type != tool->shared_target->type) { return error(ErrorCode::TypeMismatch, "Shared variable type differs from the tool contract.", where); }
+        } else {
+            where.queue = std::get<QueueId>(target);
+            const auto* defined = find(solution_.queues, *where.queue);
+            if (!defined) { return error(ErrorCode::InvalidQueue, "Shared target queue is not defined.", where); }
+            if (defined->message_schema != tool->shared_target->type) { return error(ErrorCode::TypeMismatch, "Queue message schema differs from the tool contract.", where); }
+        }
+    }
     if (!support_.empty()) {
         const auto it = std::ranges::find(support_, tool->schema.id, &SchemaSupport::id);
         if (it == support_.end()) { return error(ErrorCode::IncompatibleSchemaVersion, "Tool Schema has no backend support declaration.", where); }

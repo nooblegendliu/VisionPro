@@ -224,6 +224,18 @@ public:
             for (auto& item : binding.sources) { item = source(item); }
         }
         for (auto& binding : result.resources) { binding.resource = resource(binding.resource); }
+        if (auto* tool = std::get_if<ToolConfiguration>(&result.configuration)) {
+            for (auto& target : tool->shared_targets) {
+                if (auto* variable = std::get_if<VariableId>(&target)) {
+                    *variable = global(GlobalReference{*variable, {}, {}}).variable;
+                } else {
+                    auto& queue = std::get<QueueId>(target);
+                    const auto mapped = identities.queues.find(queue);
+                    if (mapped != identities.queues.end()) { queue = mapped->second; }
+                    else { external(queue); }
+                }
+            }
+        }
         if (auto* group = std::get_if<GroupConfiguration>(&result.configuration)) {
             group->interface = public_interface(group->interface);
             for (auto& entry : group->entries) {

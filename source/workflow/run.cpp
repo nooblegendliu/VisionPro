@@ -165,6 +165,14 @@ const FixedRunInput* RunRequest::input(const core::InputId& id) const noexcept
     const auto found = std::ranges::find(storage_->inputs, id, &FixedRunInput::id);
     return found == storage_->inputs.end() ? nullptr : &*found;
 }
+Result<RunRequest> RunRequest::with_global_snapshot(std::span<const core::GlobalVariableEntry> entries) const
+{
+    auto checked = detail::validate_global_read_snapshot(snapshot().solution(), snapshot().identity().session, entries);
+    if (const auto* failure = std::get_if<Diagnostic>(&checked)) { return *failure; }
+    auto copy = std::make_shared<Storage>(*storage_);
+    copy->globals.assign(entries.begin(), entries.end());
+    return RunRequest{std::move(copy)};
+}
 std::span<const core::GlobalVariableEntry> RunRequest::globals() const noexcept { return storage_->globals; }
 const RunTrigger& RunRequest::trigger() const noexcept { return storage_->trigger; }
 const std::optional<core::CorrelationId>& RunRequest::correlation() const noexcept { return storage_->correlation; }

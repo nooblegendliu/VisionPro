@@ -190,6 +190,19 @@ void RunController::cancel()
     emit changed();
 }
 
+Result<std::optional<SessionSharedPreview>> RunController::shared_preview() const
+{
+    if (preparing_ || retiring_) { return issue(ErrorCode::InvalidState, "Shared data is changing sessions. Refresh after publication."); }
+    const auto active = session_ ? session_->inspect().active : std::nullopt;
+    if (!active) { return std::optional<SessionSharedPreview>{}; }
+    auto view = session_->shared_preview();
+    if (const auto* failure = std::get_if<Diagnostic>(&view)) { return *failure; }
+    auto joins = session_->correlation_preview();
+    if (const auto* failure = std::get_if<Diagnostic>(&joins)) { return *failure; }
+    return std::optional{SessionSharedPreview{*active, std::get<std::shared_ptr<const SharedData>>(std::move(view)),
+        std::get<std::shared_ptr<const CorrelationJoinAccess>>(std::move(joins))}};
+}
+
 bool RunController::can_reset_state(const NodeTarget& target) const
 {
     if (!session_ || !can_start()) { return false; }

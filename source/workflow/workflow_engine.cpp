@@ -1,4 +1,6 @@
 #include <visionpro/workflow/workflow_engine.hpp>
+#include <visionpro/workflow/shared_data.hpp>
+#include <visionpro/workflow/correlation_join.hpp>
 #include <visionpro/core/id_factory.hpp>
 #include <visionpro/core/runtime_id_factory.hpp>
 #include <visionpro/workflow/execution_plan.hpp>
@@ -659,13 +661,31 @@ struct GroupBody {
     std::size_t frame;
 };
 
+struct SharedServices {
+    ConfigSnapshot snapshot;
+    std::shared_ptr<SharedDataService> data;
+    std::shared_ptr<CorrelationJoinService> joins;
+};
+
+Result<std::shared_ptr<SharedServices>> shared_services(const ConfigSnapshot& snapshot,
+    const std::shared_ptr<SharedServices>& previous)
+{
+    if (previous && previous->snapshot.same_capture(snapshot)) { return previous; }
+    const bool same_solution = previous && previous->snapshot.solution().id == snapshot.solution().id;
+    auto data = SharedDataService::create(snapshot, same_solution ? previous->data : nullptr);
+    if (auto* failure = std::get_if<Diagnostic>(&data)) { return std::move(*failure); }
+    return std::make_shared<SharedServices>(SharedServices{snapshot, std::get<std::shared_ptr<SharedDataService>>(std::move(data)),
+        same_solution ? previous->joins : std::make_shared<CorrelationJoinService>()});
+}
+
 struct Work {
     Work(ExecutionPlan configured, std::shared_ptr<EngineRun> backend,
-        std::shared_ptr<InvocationResourceProvider> provider)
-        : resources(std::move(provider)), plan(std::move(configured)), run(std::move(backend)),
+        std::shared_ptr<InvocationResourceProvider> provider, std::shared_ptr<SharedServices> shared)
+        : resources(std::move(provider)), services(std::move(shared)), plan(std::move(configured)), run(std::move(backend)),
           issued(run->nodes().size()) {}
 
     const std::shared_ptr<InvocationResourceProvider> resources;
+    const std::shared_ptr<SharedServices> services;
     ExecutionPlan plan;
     std::shared_ptr<EngineRun> run;
     IdSequence<InvocationId> calls;
@@ -729,18 +749,20 @@ void settle_notified(Work& work)
 }
 
 Result<InvocationOperation> launch_call(ActiveCall& call, std::shared_ptr<ToolInstance> instance,
-    const RunRequest& request, detail::NodeStateService& states, detail::RunStateCells& run_states)
+    const RunRequest& request, detail::NodeStateService& states, Work& work)
 {
     auto& invocation = call.invocation;
     const auto& configuration = invocation.context.data().configuration.data();
     const auto& flow = *find_workflow(invocation.snapshot.solution(), configuration.workflow);
     const auto& node = *find_node(flow, configuration.node);
-    auto acquired = states.acquire(invocation.context, node, request.debug_state() == DebugStatePolicy::Isolated, *instance, run_states);
+    auto acquired = states.acquire(invocation.context, node, request.debug_state() == DebugStatePolicy::Isolated, *instance, work.run_states);
     if (auto* failure = std::get_if<Diagnostic>(&acquired)) { return std::move(*failure); }
     call.state = std::get<std::shared_ptr<detail::InvocationStateLease>>(std::move(acquired));
-    if (call.state) {
+    if (call.state || configuration.tool.shared_target || configuration.tool.requires_correlation_join) {
         auto data = invocation.context.data();
         data.state = call.state;
+        if (configuration.tool.shared_target) { data.shared_data = work.services->data; }
+        if (configuration.tool.requires_correlation_join) { data.correlation_join = work.services->joins; }
         auto fixed = InvocationContext::create(data);
         if (auto* failure = std::get_if<Diagnostic>(&fixed)) { return std::move(*failure); }
         invocation.context = std::get<InvocationContext>(std::move(fixed));
@@ -990,7 +1012,7 @@ void start_node(Work& work, std::size_t index, detail::NodeStateService& states)
         work.active_calls.erase(entry);
         return;
     }
-    auto started = launch_call(call, std::get<std::shared_ptr<ToolInstance>>(std::move(created)), request, states, work.run_states);
+    auto started = launch_call(call, std::get<std::shared_ptr<ToolInstance>>(std::move(created)), request, states, work);
     if (auto* failure = std::get_if<Diagnostic>(&started)) {
         auto result = failed_call(request, call.invocation, std::move(*failure));
         static_cast<void>(run.accept_completion(index, call.invocation, call.state.get(), std::move(result)));
@@ -1040,6 +1062,7 @@ struct WorkflowEngine::PreparedSubmission {
     const WorkflowId workflow;
     const std::shared_ptr<InvocationResourceProvider> resources;
     detail::ControlSchedule schedule;
+    std::shared_ptr<SharedServices> previous_services, candidate_services, run_services;
     bool consumed{false}; // Protected by the originating engine's scheduler mutex.
 };
 
@@ -1062,6 +1085,8 @@ struct WorkflowEngine::Impl {
             const std::lock_guard lock(events->mutex);
             if (!stopping) {
                 stopping = true;
+                if (services) { services->data->stop_waits(); }
+                for (const auto& work : admitted) { work->services->data->stop_waits(); }
                 observers->close();
                 events->changed.notify_one();
             }
@@ -1079,20 +1104,46 @@ struct WorkflowEngine::Impl {
             }
             const auto workflow = std::visit([](const auto& target) { return target.workflow; }, request.target());
             std::shared_ptr<InvocationResourceProvider> provider;
+            std::shared_ptr<SharedServices> previous;
             {
                 const std::lock_guard lock(events->mutex);
                 if (auto refusal = check_slot<Preparation>(request, workflow)) { return std::move(*refusal); }
                 provider = supplied ? std::move(*supplied) : default_resources;
+                previous = services;
+            }
+            auto proposed = shared_services(request.snapshot(), previous);
+            if (auto* bad = std::get_if<Diagnostic>(&proposed)) { return RunRejected{std::move(*bad)}; }
+            auto candidate = std::get<std::shared_ptr<SharedServices>>(std::move(proposed));
+            auto scoped = candidate;
+            const bool isolated = request.debug_state() == DebugStatePolicy::Isolated;
+            if (isolated) {
+                auto separate = shared_services(request.snapshot(), {});
+                if (auto* bad = std::get_if<Diagnostic>(&separate)) { return RunRejected{std::move(*bad)}; }
+                scoped = std::get<std::shared_ptr<SharedServices>>(std::move(separate));
+            }
+            auto fixed = request;
+            // An explicit host supplies the detached debug scope. Normal runs
+            // capture a consistent service snapshot before planning and preflight.
+            if (!isolated && request.globals().empty() && !request.snapshot().solution().variables.empty()) {
+                auto entries = scoped->data->read_all();
+                if (auto* bad = std::get_if<Diagnostic>(&entries)) { return RunRejected{std::move(*bad)}; }
+                auto captured = request.with_global_snapshot(std::get<std::vector<GlobalVariableEntry>>(entries));
+                if (auto* bad = std::get_if<Diagnostic>(&captured)) { return RunRejected{std::move(*bad)}; }
+                fixed = std::get<RunRequest>(std::move(captured));
             }
             const auto capabilities = supplied ? profile(provider.get()) : default_capabilities;
-            auto planned = ExecutionPlan::create(request, registry, capabilities);
+            auto planned = ExecutionPlan::create(fixed, registry, capabilities);
             if (auto* failure = std::get_if<Diagnostic>(&planned)) { return RunRejected{std::move(*failure)}; }
             const auto& plan = std::get<ExecutionPlan>(planned);
             if (provider) {
                 auto checked = provider->preflight(plan);
                 if (auto* failure = std::get_if<Diagnostic>(&checked)) { return RunRejected{std::move(*failure)}; }
             }
-            return std::make_shared<PreparedSubmission>(plan, workflow, std::move(provider));
+            auto prepared = std::make_shared<PreparedSubmission>(plan, workflow, std::move(provider));
+            prepared->previous_services = std::move(previous);
+            prepared->candidate_services = std::move(candidate);
+            prepared->run_services = std::move(scoped);
+            return prepared;
         } catch (...) {
             return RunRejected{error(ErrorCode::ExecutionBoundaryFailure, "Workflow preparation raised an unexpected exception.", request)};
         }
@@ -1112,6 +1163,15 @@ struct WorkflowEngine::Impl {
             }
             // Planning does not reserve a slot. Another submit may have won it.
             if (auto refusal = check_slot<RunSubmission>(request, workflow)) { return std::move(*refusal); }
+            if (services != prepared.previous_services && services != prepared.candidate_services) {
+                // Another workflow was admitted during preflight. Reuse its
+                // compatible cells without changing this request's frozen inputs.
+                auto updated = shared_services(request.snapshot(), services);
+                if (auto* failure = std::get_if<Diagnostic>(&updated)) { return RunRejected{std::move(*failure)}; }
+                auto current = std::get<std::shared_ptr<SharedServices>>(std::move(updated));
+                if (prepared.run_services == prepared.candidate_services) { prepared.run_services = current; }
+                prepared.candidate_services = std::move(current);
+            }
             const auto next = last_admitted ? RuntimeIdFactory::next(*last_admitted)
                                             : RuntimeIdFactory::from_value<WorkflowRunId>(1);
             if (const auto* failure = std::get_if<Diagnostic>(&next)) { return RunRejected{*failure}; }
@@ -1121,7 +1181,7 @@ struct WorkflowEngine::Impl {
             if (auto* failure = std::get_if<Diagnostic>(&handle)) { return RunRejected{std::move(*failure)}; }
             auto accepted = std::get<RunHandle>(std::move(handle));
 
-            auto work = std::make_unique<Work>(prepared.plan, run, prepared.resources);
+            auto work = std::make_unique<Work>(prepared.plan, run, prepared.resources, prepared.run_services);
             const auto slot = active.emplace(workflow, run).first;
             try {
                 admitted.push_back(std::move(work));
@@ -1130,6 +1190,7 @@ struct WorkflowEngine::Impl {
                 throw;
             }
             last_admitted = run->identity().run;
+            services = prepared.candidate_services;
             events->changed.notify_one();
             return accepted;
         } catch (...) {
@@ -1181,6 +1242,29 @@ struct WorkflowEngine::Impl {
 
     const SolutionSessionId session;
     const ToolRegistry registry;
+    std::shared_ptr<SharedServices> services; // Published under the scheduler mutex.
+
+    Result<std::monostate> initialize_shared(const ConfigSnapshot& snapshot)
+    {
+        const std::lock_guard lock(events->mutex);
+        auto created = shared_services(snapshot, {});
+        if (auto* bad = std::get_if<Diagnostic>(&created)) { return std::move(*bad); }
+        services = std::get<std::shared_ptr<SharedServices>>(std::move(created));
+        return std::monostate{};
+    }
+
+    Result<std::shared_ptr<const SharedData>> shared_preview() const
+    {
+        const std::lock_guard lock(events->mutex);
+        if (stopping || !services) { return Diagnostic{ErrorCode::InvalidState, Severity::Error, {}, "No active shared data view."}; }
+        return std::shared_ptr<const SharedData>{services->data};
+    }
+    Result<std::shared_ptr<const CorrelationJoinAccess>> correlation_preview() const
+    {
+        const std::lock_guard lock(events->mutex);
+        if (stopping || !services) { return Diagnostic{ErrorCode::InvalidState, Severity::Error, {}, "No active correlation joins."}; }
+        return std::shared_ptr<const CorrelationJoinAccess>{services->joins};
+    }
 
 private:
     using WorkList = std::list<std::unique_ptr<Work>>;
@@ -1193,6 +1277,7 @@ private:
         supported.structured_loops = true;
         supported.composite_groups = true;
         supported.node_state = true;
+        supported.shared_data = true;
         if (provider) {
             const auto kinds = provider->kinds();
             supported.resource_leases.assign(kinds.begin(), kinds.end());
@@ -1306,6 +1391,14 @@ private:
 
 WorkflowEngine::WorkflowEngine(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
 WorkflowEngine::~WorkflowEngine() = default;
+
+core::Result<std::monostate> WorkflowEngine::initialize_shared(const ConfigSnapshot& snapshot)
+{ return impl_->initialize_shared(snapshot); }
+
+core::Result<std::shared_ptr<const core::SharedData>> WorkflowEngine::shared_preview() const
+{ return impl_->shared_preview(); }
+core::Result<std::shared_ptr<const core::CorrelationJoinAccess>> WorkflowEngine::correlation_preview() const
+{ return impl_->correlation_preview(); }
 
 core::Result<std::unique_ptr<WorkflowEngine>> WorkflowEngine::create(const core::ToolRegistry& registry,
     std::shared_ptr<InvocationResourceProvider> resources, WorkflowEngineOptions options)

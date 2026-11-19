@@ -70,6 +70,9 @@ ErrorCategory error_category(ErrorCode code) noexcept
     case ErrorCode::IndexOutOfRange:
     case ErrorCode::GlobalUnavailable:
     case ErrorCode::GlobalRevisionMismatch:
+    case ErrorCode::QueueFull:
+    case ErrorCode::QueueEmpty:
+    case ErrorCode::QueueConsumerConflict:
     case ErrorCode::InvalidRunHandle:
     case ErrorCode::ExecutionBoundaryFailure:
         return ErrorCategory::Runtime;
@@ -183,6 +186,9 @@ std::string_view error_code_name(ErrorCode code) noexcept
     case ErrorCode::IndexOutOfRange: return "IndexOutOfRange";
     case ErrorCode::GlobalUnavailable: return "GlobalUnavailable";
     case ErrorCode::GlobalRevisionMismatch: return "GlobalRevisionMismatch";
+    case ErrorCode::QueueFull: return "QueueFull";
+    case ErrorCode::QueueEmpty: return "QueueEmpty";
+    case ErrorCode::QueueConsumerConflict: return "QueueConsumerConflict";
     case ErrorCode::InvalidRunHandle: return "InvalidRunHandle";
     case ErrorCode::ExecutionBoundaryFailure: return "ExecutionBoundaryFailure";
     case ErrorCode::IdGenerationFailed: return "IdGenerationFailed";

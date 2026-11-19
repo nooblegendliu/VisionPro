@@ -7,6 +7,8 @@
 #include "run_panel.hpp"
 
 #include <visionpro/core/schema_id_factory.hpp>
+#include <visionpro/core/correlation_join.hpp>
+#include <visionpro/core/shared_data.hpp>
 
 #include <QAction>
 #include <QDialog>
@@ -14,15 +16,76 @@
 #include <QDockWidget>
 #include <QFormLayout>
 #include <QMenuBar>
+#include <QPlainTextEdit>
+#include <QPushButton>
 #include <QSpinBox>
+#include <QThread>
 #include <QTimer>
+#include <QVBoxLayout>
 
+#include <algorithm>
 #include <exception>
 
 namespace visionpro::ui {
 namespace {
 using namespace core;
 using namespace workflow;
+
+QString shared_report(const std::optional<SessionSharedPreview>& live, const std::vector<GlobalVariableDefinition>& variables,
+    const std::vector<DataQueueDefinition>& queues)
+{
+    QStringList lines{live ? QStringLiteral("Active session · snapshot %1").arg(live->snapshot.identity().snapshot.value())
+                           : QStringLiteral("Draft definitions · initial values and empty queues")};
+    lines.append(QStringLiteral("\nGlobal variables (%1)").arg(variables.size()));
+    std::vector<GlobalVariableEntry> entries;
+    if (live) {
+        auto read = live->data->read_all();
+        if (const auto* issue = std::get_if<Diagnostic>(&read)) { return QString::fromStdString(issue->message); }
+        entries = std::get<std::vector<GlobalVariableEntry>>(std::move(read));
+    }
+    for (const auto& variable : variables) {
+        const auto entry = std::ranges::find(entries, variable.id, &GlobalVariableEntry::variable);
+        const auto value = entry != entries.end() ? shared_value_text(entry->current_value)
+            : live ? QStringLiteral("Unavailable") : shared_value_text(variable.initial_value);
+        auto revision = entry != entries.end() ? QString::number(entry->revision) : live ? QStringLiteral("—") : QStringLiteral("0");
+        lines.append(QStringLiteral("%1 [%2] · revision %3 · %4").arg(QString::fromStdString(variable.name),
+            QString::fromStdString(variable.id.to_string()), revision, value));
+    }
+    lines.append(QStringLiteral("\nQueues (%1)").arg(queues.size()));
+    for (const auto& queue : queues) {
+        QueuePreview preview{queue.id};
+        if (live) {
+            auto read = live->data->preview(queue.id);
+            if (const auto* issue = std::get_if<Diagnostic>(&read)) { return QString::fromStdString(issue->message); }
+            preview = std::get<QueuePreview>(std::move(read));
+        }
+        lines.append(QStringLiteral("%1 [%2] · messages %3 · enqueued %4 · received %5 · dropped %6 · rejected %7")
+            .arg(QString::fromStdString(queue.name), QString::fromStdString(queue.id.to_string())).arg(preview.messages.size())
+            .arg(preview.enqueued).arg(preview.received).arg(preview.dropped_oldest).arg(preview.rejected));
+        constexpr std::size_t limit = 100;
+        for (std::size_t i = 0; i < std::min(limit, preview.messages.size()); ++i) {
+            const auto& message = preview.messages[i];
+            lines.append(QStringLiteral("  #%1 · %2 / %3 · %4").arg(message.sequence)
+                .arg(QString::fromUtf8(message.correlation.domain().text()), QString::fromUtf8(message.correlation.key()), shared_value_text(message.payload)));
+        }
+        if (preview.messages.size() > limit) { lines.append(QStringLiteral("  Showing the oldest %1 messages.").arg(limit)); }
+    }
+    lines.append(QStringLiteral("\nCorrelation joins"));
+    if (live) {
+        const auto joins = live->joins->inspect_all();
+        if (joins.empty()) { lines.append(QStringLiteral("No contributions in this session.")); }
+        for (const auto& join : joins) {
+            const auto& stats = join.stats;
+            lines.append(QStringLiteral("%1 · batch %2 · pending %3 · completed %4 · expired %5 · duplicates %6 · late %7")
+                .arg(QString::fromUtf8(join.join.text())).arg(stats.batch).arg(stats.pending).arg(stats.completed)
+                .arg(stats.expired).arg(stats.duplicates).arg(stats.late));
+            lines.append(QStringLiteral("  Retained keys %1 · abandoned at rollover %2 · pending capacity rejections %3 · batch key rejections %4")
+                .arg(stats.retained_keys).arg(stats.abandoned_at_rollover).arg(stats.pending_capacity_rejections).arg(stats.batch_capacity_rejections));
+        }
+        lines.append(QStringLiteral("Session join capacity rejections %1").arg(live->joins->join_capacity_rejections()));
+    } else { lines.append(QStringLiteral("Statistics are available after a session accepts contributions.")); }
+    return lines.join(u'\n');
+}
 
 SchemaId trigger_id(bool independent)
 {
@@ -55,7 +118,56 @@ void EditorWindow::create_run_actions()
         show_status(QStringLiteral("Reset session state for %1.").arg(QString::fromStdString(find_node(workflow, selected.front())->name)));
     });
     menu.addSeparator();
+    action(menu, QStringLiteral("Preview Shared Data…"), "previewSharedData", [this] { show_shared_preview(); });
     run_limits_ = action(menu, QStringLiteral("History and Notifications…"), "runDisplayLimits", [this] { choose_run_limits(); });
+}
+
+void EditorWindow::show_shared_preview()
+{
+    if (auto* shown = findChild<QDialog*>(QStringLiteral("sharedDataDialog")); shown && shown->isVisible()) {
+        shown->raise();
+        shown->activateWindow();
+        return;
+    }
+    auto* dialog = new QDialog(this);
+    dialog->setObjectName(QStringLiteral("sharedDataDialog"));
+    dialog->setWindowTitle(QStringLiteral("Shared Data"));
+    dialog->setWindowModality(Qt::WindowModal);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    auto* layout = new QVBoxLayout(dialog);
+    auto* details = new QPlainTextEdit(dialog);
+    details->setObjectName(QStringLiteral("sharedDataPreview"));
+    details->setReadOnly(true);
+    layout->addWidget(details);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, dialog);
+    auto* refresh = buttons->addButton(QStringLiteral("Refresh"), QDialogButtonBox::ActionRole);
+    refresh->setObjectName(QStringLiteral("refreshSharedPreview"));
+    connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+    const auto load = [this, dialog, details, refresh] {
+        auto view = run_controller_->shared_preview();
+        if (const auto* issue = std::get_if<Diagnostic>(&view)) { details->setPlainText(QString::fromStdString(issue->message)); return; }
+        const auto live = std::get<std::optional<SessionSharedPreview>>(std::move(view));
+        const auto& configuration = live ? live->snapshot.solution() : draft();
+        auto report = std::make_shared<QString>();
+        refresh->setEnabled(false);
+        details->setPlainText(QStringLiteral("Reading shared data…"));
+        auto* worker = QThread::create([report, live, variables = configuration.variables, queues = configuration.queues] {
+            try { *report = shared_report(live, variables, queues); }
+            catch (const std::exception& error) { *report = QString::fromUtf8(error.what()); }
+            catch (...) { *report = QStringLiteral("Could not read shared data."); }
+        });
+        connect(worker, &QThread::finished, dialog, [report, details, refresh] {
+            details->setPlainText(*report);
+            refresh->setEnabled(true);
+        });
+        connect(worker, &QThread::finished, worker, &QObject::deleteLater);
+        worker->start();
+    };
+    connect(refresh, &QPushButton::clicked, dialog, load);
+    dialog->resize(680, 420);
+    dialog->show();
+    load();
 }
 
 void EditorWindow::create_run_dock()

@@ -386,7 +386,14 @@ LoopConfiguration decode_loop(const Reader& reader)
 Json encode_configuration(const std::variant<ToolConfiguration, GroupConfiguration>& configuration)
 {
     if (const auto* tool = std::get_if<ToolConfiguration>(&configuration)) {
-        return {{"kind", "tool"}, {"type", write_id(tool->type)}, {"config_version", tool->config_version}};
+        Json result{{"kind", "tool"}, {"type", write_id(tool->type)}, {"config_version", tool->config_version}};
+        if (!tool->shared_targets.empty()) {
+            result["shared_targets"] = write_array(tool->shared_targets, [](const SharedTargetId& target) {
+                return Json{{"kind", std::holds_alternative<VariableId>(target) ? "variable" : "queue"},
+                    {"id", std::visit([](const auto& id) { return write_id(id); }, target)}};
+            });
+        }
+        return result;
     }
     const auto& group = std::get<GroupConfiguration>(configuration);
     Json result{{"kind", group.loop ? "loop" : "group"}, {"interface", encode_interface(group.interface)},
@@ -401,8 +408,18 @@ std::variant<ToolConfiguration, GroupConfiguration> decode_configuration(const R
 {
     const auto kind = reader.field("kind");
     if (kind.text() == "tool") {
-        reader.object({"kind", "type", "config_version"});
-        return ToolConfiguration{read_id<ToolTypeId>(reader.field("type")), reader.field("config_version").u32()};
+        reader.object({"kind", "type", "config_version", "shared_targets"});
+        ToolConfiguration tool{read_id<ToolTypeId>(reader.field("type")), reader.field("config_version").u32()};
+        if (reader.contains("shared_targets")) {
+            tool.shared_targets = read_array<SharedTargetId>(reader.field("shared_targets"), [](const Reader& item) -> SharedTargetId {
+                item.object({"kind", "id"});
+                const auto kind = item.field("kind");
+                if (kind.text() == "variable") { return read_id<VariableId>(item.field("id")); }
+                if (kind.text() == "queue") { return read_id<QueueId>(item.field("id")); }
+                kind.fail(ErrorCode::UnsupportedSolutionContent, "Unknown shared target kind.");
+            });
+        }
+        return tool;
     }
     if (kind.text() == "group" || kind.text() == "loop") {
         std::optional<LoopConfiguration> loop;

@@ -20,7 +20,7 @@ struct IdentityRemap {
 };
 struct ControlExportReference { core::WorkflowId workflow; ControlOutputMapping mapping; };
 using ExternalCopyReference = std::variant<OutputReference, ScopedInputReference,
-    core::ResourceReference, GlobalReference, Containment, ControlExportReference>;
+    core::ResourceReference, GlobalReference, Containment, ControlExportReference, core::QueueId>;
 struct PreservedReference {
     // Source node identity when applicable; other references retain their own
     // structured location (for example Containment carries its original child).

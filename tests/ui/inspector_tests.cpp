@@ -158,6 +158,7 @@ private Q_SLOTS:
     void edits_loop_settings_and_collects_a_selected_field();
     void edits_and_reloads_dynamic_indices_and_format_options();
     void resets_only_the_selected_session_accumulator();
+    void edits_shared_targets_and_previews_without_consuming();
 };
 
 ControlScene& scene(EditorWindow& window)
@@ -176,6 +177,141 @@ NodeResult result_for(const RunHandle& run, const NodeId& node)
     const auto found = std::ranges::find(progress.nodes, node, &RunNodeProgress::node);
     if (found == progress.nodes.end() || !found->invocation) { throw std::runtime_error("Missing invocation"); }
     return take(run.lookup(*found->invocation)).value();
+}
+
+void InspectorTests::edits_shared_targets_and_previews_without_consuming()
+{
+    const auto catalog = take(app::make_tool_registry());
+    const auto queue1 = take(IdFactory::generate<QueueId>()), queue2 = take(IdFactory::generate<QueueId>());
+    const auto first = take(IdFactory::generate<VariableId>()), second = take(IdFactory::generate<VariableId>());
+    const auto flow = take(IdFactory::generate<WorkflowId>());
+    const auto send = take(IdFactory::generate<NodeId>()), many = take(IdFactory::generate<NodeId>()), join = take(IdFactory::generate<NodeId>());
+    const auto write = take(IdFactory::generate<NodeId>());
+    const auto send_type = key<ToolTypeId>("visionpro.shared.queue_send_dimensions");
+    const auto* sender = catalog.find_descriptor(send_type);
+    QVERIFY(sender && sender->shared_target);
+    const auto dimensions = sender->shared_target->type;
+    const auto string = [](std::string_view value) { return take(ConfigValue::string(value)); };
+    const auto payload = take(ConfigValue::record(dimensions, {{key<FieldId>("width"), ConfigValue::integer(10)},
+        {key<FieldId>("height"), ConfigValue::integer(1)}}));
+    const auto domain = key<InputId>("domain"), item = key<InputId>("key");
+    Workflow workflow{flow, "Dimensions", {key<SchemaId>("test.shared_editor"), 1},
+        {{send, "Send measurement", ToolConfiguration{send_type, 1, {queue1}},
+            {{key<InputId>("payload"), {payload}}, {domain, {string("line.one")}}, {item, {string("A")}}}},
+         {many, "Read values", ToolConfiguration{key<ToolTypeId>("visionpro.shared.global_read_many_int64"), 1, {first}}},
+         {join, "Join parts", ToolConfiguration{key<ToolTypeId>("visionpro.shared.join_dimensions"), 1},
+            {{key<ParameterId>("join"), {string("measure")}}, {key<InputId>("batch"), {ConfigValue::integer(1)}},
+             {domain, {string("line.one")}}, {item, {string("A")}}, {key<InputId>("source"), {string("width")}},
+             {key<InputId>("value"), {ConfigValue::integer(10)}}}},
+         {write, "Write gain", ToolConfiguration{key<ToolTypeId>("visionpro.shared.global_write_int64"), 1, {first}},
+            {{key<InputId>("value"), {ConfigValue::integer(9)}}}}},
+        {{take(IdFactory::generate<ControlLinkId>()), send, {}, many},
+         {take(IdFactory::generate<ControlLinkId>()), many, {}, join},
+         {take(IdFactory::generate<ControlLinkId>()), join, key<ControlOutputId>("waiting"), write}}, {}, {send}};
+    const QueueReceivePolicy policy{EmptyQueuePolicy::Fail, 1, QueueConsumerPolicy::SingleConsumer, QueueBatchPolicy::RequireExact};
+    const auto other_schema = take(DataType::record(key<SchemaId>("test.other"), 1, dimensions.fields()));
+    Solution draft{take(IdFactory::generate<SolutionId>()), "Shared preview", infrastructure::solution_format_version, 1, {workflow}, {},
+        {{first, "Gain", DataType::integer(), ConfigValue::integer(2)}, {second, "Gain", DataType::integer(), ConfigValue::integer(3)},
+         {take(IdFactory::generate<VariableId>()), "Label", DataType::string(), string("x")}},
+        {{queue1, "Discard", dimensions, 2, QueueOverflowPolicy::Reject, policy}, {queue2, "Measurements", dimensions, 2, QueueOverflowPolicy::Reject, policy},
+         {take(IdFactory::generate<QueueId>()), "Wrong schema", other_schema, 2, QueueOverflowPolicy::Reject, policy}}};
+    EditorWindow window(std::move(draft), catalog);
+    window.show();
+    auto& inspector = properties(window);
+    const auto reveal = [&](const NodeId& id) {
+        const auto ok = scene(window).reveal_node(id);
+        static_cast<EditorInspector&>(inspector).refresh();
+        return ok;
+    };
+    const auto choose_target = [](const auto& id) -> DialogStep {
+        return [label = QString::fromStdString(id.to_string())](QDialog& dialog) -> QPushButton* {
+            auto* combo = dialog.findChild<QComboBox*>(QStringLiteral("compatibleSharedTargets"));
+            if (!combo || combo->count() != 2 || !select_choice(*combo, label, true)) { return nullptr; }
+            return dialog.findChild<QPushButton*>(QStringLiteral("setSharedTarget"));
+        };
+    };
+    QVERIFY(reveal(send));
+    auto* edit = inspector.findChild<QPushButton*>(QStringLiteral("editSharedTargets"));
+    QVERIFY(edit);
+    auto changed = exercise_dialog(inspector, *edit, {choose_target(queue2), accept_button});
+    QVERIFY2(changed.isEmpty(), qPrintable(changed));
+    QVERIFY(reveal(many));
+    edit = inspector.findChild<QPushButton*>(QStringLiteral("editSharedTargets"));
+    QVERIFY(edit);
+    changed = exercise_dialog(inspector, *edit, {choose_target(second), [](QDialog& dialog) -> QPushButton* {
+        auto* list = dialog.findChild<QListWidget*>(QStringLiteral("orderedSharedTargets"));
+        if (!list || list->count() != 2 || list->currentRow() != 1) { return nullptr; }
+        return dialog.findChild<QPushButton*>(QStringLiteral("earlierSharedTarget"));
+    }, accept_button});
+    QVERIFY2(changed.isEmpty(), qPrintable(changed));
+    const auto& edited = window.draft().workflows.front();
+    QVERIFY(std::get<ToolConfiguration>(find_node(edited, send)->configuration).shared_targets == std::vector<SharedTargetId>{queue2});
+    const std::vector<SharedTargetId> ordered{second, first};
+    QVERIFY(std::get<ToolConfiguration>(find_node(edited, many)->configuration).shared_targets == ordered);
+    QVERIFY(reveal(join));
+    auto* sources = binding_button(inspector, QStringLiteral("sources"));
+    QVERIFY(sources);
+    changed = exercise_dialog(inspector, *sources, {[](QDialog& dialog) {
+        return dialog.findChild<QPushButton*>(QStringLiteral("setBindingSource"));
+    }, [](QDialog& dialog) -> QPushButton* {
+        auto* input = qobject_cast<QInputDialog*>(&dialog);
+        if (!input || input->objectName() != QStringLiteral("stringListEditor")) { return nullptr; }
+        input->setTextValue(QStringLiteral("[\"height\",\"width\"]"));
+        return accept_button(dialog);
+    }, accept_button});
+    QVERIFY2(changed.isEmpty(), qPrintable(changed));
+    auto* preview = window.findChild<QAction*>(QStringLiteral("previewSharedData"));
+    QVERIFY(preview);
+    preview->trigger();
+    auto* dialog = window.findChild<QDialog*>(QStringLiteral("sharedDataDialog"));
+    auto* details = dialog->findChild<QPlainTextEdit*>(QStringLiteral("sharedDataPreview"));
+    QVERIFY(details->isReadOnly());
+    QTRY_VERIFY(details->toPlainText().contains(QStringLiteral("Draft definitions")) && details->toPlainText().contains(QStringLiteral("messages 0")));
+    dialog->close();
+    QTRY_VERIFY(!window.findChild<QDialog*>(QStringLiteral("sharedDataDialog")));
+
+    auto* controller = window.findChild<RunController*>();
+    window.findChild<QAction*>(QStringLiteral("runWorkflow"))->trigger();
+    QTRY_VERIFY(controller->runs().size() == 1 && controller->can_start());
+    const auto progress = take(controller->runs().front().inspect());
+    QVERIFY2(progress.status == ExecutionStatus::Succeeded, progress.diagnostics.empty() ? "" : progress.diagnostics.front().message.c_str());
+    const auto undo = scene(window).undoStack().index();
+    preview->trigger();
+    dialog = window.findChild<QDialog*>(QStringLiteral("sharedDataDialog"));
+    details = dialog->findChild<QPlainTextEdit*>(QStringLiteral("sharedDataPreview"));
+    auto* refresh = dialog->findChild<QPushButton*>(QStringLiteral("refreshSharedPreview"));
+    QTRY_VERIFY(refresh->isEnabled() && details->toPlainText().contains(QStringLiteral("#1 · line.one / A")));
+    const auto report = details->toPlainText();
+    QVERIFY(report.contains(QStringLiteral("messages 1 · enqueued 1 · received 0")) && report.contains(QStringLiteral("width=10")));
+    QVERIFY(report.contains(QStringLiteral("measure · batch 1 · pending 1 · completed 0 · expired 0 · duplicates 0 · late 0")));
+    QTest::mouseClick(refresh, Qt::LeftButton);
+    QTRY_VERIFY(refresh->isEnabled());
+    QCOMPARE(details->toPlainText(), report);
+    QCOMPARE(scene(window).undoStack().index(), undo);
+    dialog->close();
+    QVERIFY(report.contains(QStringLiteral("revision 1 · 9")));
+
+    QTemporaryDir scratch;
+    QVERIFY(scratch.isValid());
+    const auto directory = std::filesystem::path(scratch.path().toStdWString()) / L"shared";
+    window.transfer_document(directory, infrastructure::SolutionTransfer::SaveAs);
+    QTRY_VERIFY(!window.file_busy() && std::filesystem::exists(directory / "solution.json"));
+    window.open_document(directory);
+    QTRY_VERIFY(!window.file_busy() && controller->can_start() && controller->runs().empty());
+    window.findChild<QAction*>(QStringLiteral("runWorkflow"))->trigger();
+    QTRY_VERIFY(controller->runs().size() == 1 && controller->can_start());
+    const auto& run = controller->runs().front();
+    QVERIFY(take(run.inspect()).status == ExecutionStatus::Succeeded);
+    const auto output = [&](const NodeId& node, std::string_view port) {
+        const auto result = result_for(run, node);
+        return std::get<DataValue>(result.output(key<OutputId>(port))->content);
+    };
+    QVERIFY(*output(send, "sequence").as_string() == "1");
+    const auto entries = output(many, "entries");
+    const auto& gain = entries.elements()->at(1);
+    QVERIFY(*gain.field(key<FieldId>("value"))->as_int64() == 2);
+    QVERIFY(*gain.field(key<FieldId>("revision"))->as_string() == "0");
+    QVERIFY(*output(join, "status").as_enum() == key<EnumMemberId>("Pending"));
 }
 
 void InspectorTests::edits_and_reloads_dynamic_indices_and_format_options()

@@ -414,8 +414,32 @@ bool allows_output_absence(const OutputDescriptor& descriptor, OutputAbsenceReas
         && std::ranges::find(descriptor.allowed_absence, reason) != descriptor.allowed_absence.end();
 }
 
+Result<std::monostate> validate_shared_targets(const ToolDescriptor& descriptor, std::span<const SharedTargetId> targets)
+{
+    const auto& requirement = descriptor.shared_target;
+    if (!requirement && targets.empty()) { return std::monostate{}; }
+    if (!requirement || targets.empty() || (!requirement->multiple && targets.size() != 1)) {
+        return error(ErrorCode::InvalidBinding, "The configured shared targets do not match the tool's required cardinality.");
+    }
+    std::set<SharedTargetId> seen;
+    for (const auto& target : targets) {
+        if ((requirement->kind == SharedTargetKind::Variable) != std::holds_alternative<VariableId>(target)) {
+            return error(ErrorCode::TypeMismatch, "The shared target kind does not match the tool.");
+        }
+        if (!seen.insert(target).second) { return error(ErrorCode::DuplicateIdentity, "A shared target is configured more than once."); }
+    }
+    return std::monostate{};
+}
+
 Result<std::monostate> validate_descriptor(const ToolDescriptor& descriptor)
 {
+    if (descriptor.shared_target) {
+        const auto& required = *descriptor.shared_target;
+        if ((required.kind != SharedTargetKind::Variable && required.kind != SharedTargetKind::Queue)
+            || (required.kind == SharedTargetKind::Queue && required.type.kind() != TypeKind::Record)) {
+            return error(ErrorCode::InvalidDescriptor, "A shared target needs a supported kind and queues require a Record schema.");
+        }
+    }
     DiagnosticLocation tool_location;
     tool_location.tool = descriptor.id;
     tool_location.schema = descriptor.schema.id;

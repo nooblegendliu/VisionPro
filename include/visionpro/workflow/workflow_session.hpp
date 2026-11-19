@@ -52,6 +52,8 @@ public:
     [[nodiscard]] RunSubmission publish_and_submit(const ConfigSnapshot& base, const Solution& draft,
         const RunArguments& run, std::shared_ptr<InvocationResourceProvider> provider);
     [[nodiscard]] WorkflowSessionProgress inspect() const;
+    [[nodiscard]] core::Result<std::shared_ptr<const core::SharedData>> shared_preview() const;
+    [[nodiscard]] core::Result<std::shared_ptr<const core::CorrelationJoinAccess>> correlation_preview() const;
     [[nodiscard]] RunSubmission submit(const RunRequest& request) override;
     [[nodiscard]] core::Result<RunObservation> observe(std::size_t capacity = 32);
     [[nodiscard]] core::Result<std::optional<NodeResult>> lookup_result(

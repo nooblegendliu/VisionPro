@@ -42,6 +42,9 @@ public:
     [[nodiscard]] core::Result<std::monostate> close();
 private:
     friend class WorkflowSession;
+    [[nodiscard]] core::Result<std::monostate> initialize_shared(const ConfigSnapshot& capture);
+    [[nodiscard]] core::Result<std::shared_ptr<const core::SharedData>> shared_preview() const;
+    [[nodiscard]] core::Result<std::shared_ptr<const core::CorrelationJoinAccess>> correlation_preview() const;
     struct PreparedSubmission;
     using Preparation = std::variant<std::shared_ptr<PreparedSubmission>, RunRejected, RunBusy>;
     // Preparation runs with an explicit provider (which can be null) and

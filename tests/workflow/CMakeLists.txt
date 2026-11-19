@@ -1,3 +1,10 @@
+foreach(service IN ITEMS shared_data correlation_join)
+    add_executable(visionpro_${service}_tests ${service}_tests.cpp)
+    target_link_libraries(visionpro_${service}_tests PRIVATE visionpro_workflow visionpro_build_options Threads::Threads)
+    add_test(NAME workflow.${service} COMMAND visionpro_${service}_tests)
+    set_tests_properties(workflow.${service} PROPERTIES TIMEOUT 30)
+endforeach()
+
 add_executable(visionpro_model_tests model_tests.cpp)
 target_link_libraries(visionpro_model_tests PRIVATE visionpro_workflow visionpro_build_options)
 foreach(test_group IN ITEMS model_graph model_bindings model_structure)

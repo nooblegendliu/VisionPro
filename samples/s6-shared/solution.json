@@ -1,0 +1,2102 @@
+{
+  "coordinates": [],
+  "format": "visionpro.solution",
+  "format_version": 1,
+  "id": "5ca4f87a-ea1e-4d62-89b0-000000006400",
+  "layouts": [
+    {
+      "nodes": [
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000064101",
+          "x": 50.0,
+          "y": 50.0
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000064102",
+          "x": 280.0,
+          "y": 50.0
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000064103",
+          "x": 510.0,
+          "y": 50.0
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000064104",
+          "x": 740.0,
+          "y": 50.0
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000064105",
+          "x": 50.0,
+          "y": 225.0
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000064106",
+          "x": 280.0,
+          "y": 225.0
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000064107",
+          "x": 510.0,
+          "y": 225.0
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000064108",
+          "x": 740.0,
+          "y": 225.0
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000064113",
+          "x": 50.0,
+          "y": 400.0
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000064109",
+          "x": 280.0,
+          "y": 400.0
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000064114",
+          "x": 510.0,
+          "y": 400.0
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000064115",
+          "x": 740.0,
+          "y": 400.0
+        }
+      ],
+      "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006410"
+    },
+    {
+      "nodes": [
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000064201",
+          "x": 50.0,
+          "y": 50.0
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000064202",
+          "x": 280.0,
+          "y": 50.0
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000064203",
+          "x": 510.0,
+          "y": 50.0
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000064204",
+          "x": 740.0,
+          "y": 50.0
+        }
+      ],
+      "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006420"
+    }
+  ],
+  "name": "S6.4 共享值与工件汇合",
+  "queues": [
+    {
+      "capacity": "4",
+      "id": "5ca4f87a-ea1e-4d62-89b0-000000064001",
+      "message_schema": {
+        "fields": [
+          {
+            "id": "batch",
+            "type": {
+              "kind": "int64"
+            }
+          },
+          {
+            "id": "source",
+            "type": {
+              "kind": "string"
+            }
+          },
+          {
+            "id": "value",
+            "type": {
+              "kind": "int64"
+            }
+          }
+        ],
+        "kind": "record",
+        "schema": "visionpro.shared.fragment",
+        "version": 1
+      },
+      "name": "测量消息",
+      "overflow": "reject",
+      "receive": {
+        "batch": "require_exact",
+        "consumers": "single_consumer",
+        "empty": "fail",
+        "maximum_batch_size": "4"
+      }
+    },
+    {
+      "capacity": "2",
+      "id": "5ca4f87a-ea1e-4d62-89b0-000000064002",
+      "message_schema": {
+        "fields": [
+          {
+            "id": "height",
+            "type": {
+              "kind": "int64"
+            }
+          },
+          {
+            "id": "width",
+            "type": {
+              "kind": "int64"
+            }
+          }
+        ],
+        "kind": "record",
+        "schema": "visionpro.shared.dimensions",
+        "version": 1
+      },
+      "name": "完整工件",
+      "overflow": "reject",
+      "receive": {
+        "batch": "require_exact",
+        "consumers": "single_consumer",
+        "empty": "fail",
+        "maximum_batch_size": "2"
+      }
+    }
+  ],
+  "resources": [],
+  "revision": "1",
+  "variables": [
+    {
+      "id": "5ca4f87a-ea1e-4d62-89b0-000000064003",
+      "initial_value": {
+        "type": {
+          "kind": "int64"
+        },
+        "value": "0"
+      },
+      "name": "宽度",
+      "type": {
+        "kind": "int64"
+      }
+    },
+    {
+      "id": "5ca4f87a-ea1e-4d62-89b0-000000064004",
+      "initial_value": {
+        "type": {
+          "kind": "int64"
+        },
+        "value": "2"
+      },
+      "name": "高度",
+      "type": {
+        "kind": "int64"
+      }
+    }
+  ],
+  "workflows": [
+    {
+      "containment": [],
+      "control_exports": [],
+      "control_links": [
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000646410",
+          "output": null,
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000064101",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000064102"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000646411",
+          "output": null,
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000064102",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000064103"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000646412",
+          "output": null,
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000064103",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000064104"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000646413",
+          "output": null,
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000064104",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000064105"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000646414",
+          "output": null,
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000064105",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000064106"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000646415",
+          "output": "waiting",
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000064106",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000064107"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000646416",
+          "output": "waiting",
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000064107",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000064108"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000646417",
+          "output": "ready",
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000064108",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000064113"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000646418",
+          "output": null,
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000064113",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000064109"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000646419",
+          "output": "ready",
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000064109",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000064114"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000646420",
+          "output": null,
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000064114",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000064115"
+        }
+      ],
+      "enabled": true,
+      "entries": [
+        "5ca4f87a-ea1e-4d62-89b0-000000064101"
+      ],
+      "id": "5ca4f87a-ea1e-4d62-89b0-000000006410",
+      "interface": {
+        "control_outputs": [],
+        "id": "s6.shared.measurements",
+        "inputs": [],
+        "outputs": [],
+        "version": 1
+      },
+      "name": "乱序测量与工件交付",
+      "nodes": [
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "string"
+                    },
+                    "value": "inspection.lot1"
+                  }
+                }
+              ],
+              "target": {
+                "id": "domain",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "string"
+                    },
+                    "value": "A"
+                  }
+                }
+              ],
+              "target": {
+                "id": "key",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "fields": [
+                        {
+                          "id": "batch",
+                          "type": {
+                            "kind": "int64"
+                          }
+                        },
+                        {
+                          "id": "source",
+                          "type": {
+                            "kind": "string"
+                          }
+                        },
+                        {
+                          "id": "value",
+                          "type": {
+                            "kind": "int64"
+                          }
+                        }
+                      ],
+                      "kind": "record",
+                      "schema": "visionpro.shared.fragment",
+                      "version": 1
+                    },
+                    "value": [
+                      {
+                        "id": "batch",
+                        "value": {
+                          "type": {
+                            "kind": "int64"
+                          },
+                          "value": "1"
+                        }
+                      },
+                      {
+                        "id": "source",
+                        "value": {
+                          "type": {
+                            "kind": "string"
+                          },
+                          "value": "width"
+                        }
+                      },
+                      {
+                        "id": "value",
+                        "value": {
+                          "type": {
+                            "kind": "int64"
+                          },
+                          "value": "10"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ],
+              "target": {
+                "id": "payload",
+                "kind": "input"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "shared_targets": [
+              {
+                "id": "5ca4f87a-ea1e-4d62-89b0-000000064001",
+                "kind": "queue"
+              }
+            ],
+            "type": "visionpro.shared.queue_send_fragment"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000064101",
+          "join": "all_activated",
+          "name": "发送 A 宽度",
+          "resources": []
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "string"
+                    },
+                    "value": "inspection.lot1"
+                  }
+                }
+              ],
+              "target": {
+                "id": "domain",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "string"
+                    },
+                    "value": "B"
+                  }
+                }
+              ],
+              "target": {
+                "id": "key",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "fields": [
+                        {
+                          "id": "batch",
+                          "type": {
+                            "kind": "int64"
+                          }
+                        },
+                        {
+                          "id": "source",
+                          "type": {
+                            "kind": "string"
+                          }
+                        },
+                        {
+                          "id": "value",
+                          "type": {
+                            "kind": "int64"
+                          }
+                        }
+                      ],
+                      "kind": "record",
+                      "schema": "visionpro.shared.fragment",
+                      "version": 1
+                    },
+                    "value": [
+                      {
+                        "id": "batch",
+                        "value": {
+                          "type": {
+                            "kind": "int64"
+                          },
+                          "value": "1"
+                        }
+                      },
+                      {
+                        "id": "source",
+                        "value": {
+                          "type": {
+                            "kind": "string"
+                          },
+                          "value": "width"
+                        }
+                      },
+                      {
+                        "id": "value",
+                        "value": {
+                          "type": {
+                            "kind": "int64"
+                          },
+                          "value": "20"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ],
+              "target": {
+                "id": "payload",
+                "kind": "input"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "shared_targets": [
+              {
+                "id": "5ca4f87a-ea1e-4d62-89b0-000000064001",
+                "kind": "queue"
+              }
+            ],
+            "type": "visionpro.shared.queue_send_fragment"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000064102",
+          "join": "all_activated",
+          "name": "发送 B 宽度",
+          "resources": []
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "string"
+                    },
+                    "value": "inspection.lot1"
+                  }
+                }
+              ],
+              "target": {
+                "id": "domain",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "string"
+                    },
+                    "value": "B"
+                  }
+                }
+              ],
+              "target": {
+                "id": "key",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "fields": [
+                        {
+                          "id": "batch",
+                          "type": {
+                            "kind": "int64"
+                          }
+                        },
+                        {
+                          "id": "source",
+                          "type": {
+                            "kind": "string"
+                          }
+                        },
+                        {
+                          "id": "value",
+                          "type": {
+                            "kind": "int64"
+                          }
+                        }
+                      ],
+                      "kind": "record",
+                      "schema": "visionpro.shared.fragment",
+                      "version": 1
+                    },
+                    "value": [
+                      {
+                        "id": "batch",
+                        "value": {
+                          "type": {
+                            "kind": "int64"
+                          },
+                          "value": "1"
+                        }
+                      },
+                      {
+                        "id": "source",
+                        "value": {
+                          "type": {
+                            "kind": "string"
+                          },
+                          "value": "height"
+                        }
+                      },
+                      {
+                        "id": "value",
+                        "value": {
+                          "type": {
+                            "kind": "int64"
+                          },
+                          "value": "2"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ],
+              "target": {
+                "id": "payload",
+                "kind": "input"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "shared_targets": [
+              {
+                "id": "5ca4f87a-ea1e-4d62-89b0-000000064001",
+                "kind": "queue"
+              }
+            ],
+            "type": "visionpro.shared.queue_send_fragment"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000064103",
+          "join": "all_activated",
+          "name": "发送 B 高度",
+          "resources": []
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "string"
+                    },
+                    "value": "inspection.lot1"
+                  }
+                }
+              ],
+              "target": {
+                "id": "domain",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "string"
+                    },
+                    "value": "A"
+                  }
+                }
+              ],
+              "target": {
+                "id": "key",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "fields": [
+                        {
+                          "id": "batch",
+                          "type": {
+                            "kind": "int64"
+                          }
+                        },
+                        {
+                          "id": "source",
+                          "type": {
+                            "kind": "string"
+                          }
+                        },
+                        {
+                          "id": "value",
+                          "type": {
+                            "kind": "int64"
+                          }
+                        }
+                      ],
+                      "kind": "record",
+                      "schema": "visionpro.shared.fragment",
+                      "version": 1
+                    },
+                    "value": [
+                      {
+                        "id": "batch",
+                        "value": {
+                          "type": {
+                            "kind": "int64"
+                          },
+                          "value": "1"
+                        }
+                      },
+                      {
+                        "id": "source",
+                        "value": {
+                          "type": {
+                            "kind": "string"
+                          },
+                          "value": "height"
+                        }
+                      },
+                      {
+                        "id": "value",
+                        "value": {
+                          "type": {
+                            "kind": "int64"
+                          },
+                          "value": "1"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ],
+              "target": {
+                "id": "payload",
+                "kind": "input"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "shared_targets": [
+              {
+                "id": "5ca4f87a-ea1e-4d62-89b0-000000064001",
+                "kind": "queue"
+              }
+            ],
+            "type": "visionpro.shared.queue_send_fragment"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000064104",
+          "join": "all_activated",
+          "name": "发送 A 高度",
+          "resources": []
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "4"
+                  }
+                }
+              ],
+              "target": {
+                "id": "count",
+                "kind": "parameter"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "shared_targets": [
+              {
+                "id": "5ca4f87a-ea1e-4d62-89b0-000000064001",
+                "kind": "queue"
+              }
+            ],
+            "type": "visionpro.shared.queue_receive_fragment"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000064105",
+          "join": "all_activated",
+          "name": "按 FIFO 接收四条测量消息",
+          "resources": []
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000064105",
+                    "output": {
+                      "id": "messages",
+                      "kind": "port"
+                    },
+                    "selector": [
+                      {
+                        "index": "0",
+                        "kind": "element"
+                      },
+                      {
+                        "field": "key",
+                        "kind": "field"
+                      }
+                    ],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006410"
+                  }
+                }
+              ],
+              "target": {
+                "id": "key",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000064105",
+                    "output": {
+                      "id": "messages",
+                      "kind": "port"
+                    },
+                    "selector": [
+                      {
+                        "index": "0",
+                        "kind": "element"
+                      },
+                      {
+                        "field": "domain",
+                        "kind": "field"
+                      }
+                    ],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006410"
+                  }
+                }
+              ],
+              "target": {
+                "id": "domain",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000064105",
+                    "output": {
+                      "id": "messages",
+                      "kind": "port"
+                    },
+                    "selector": [
+                      {
+                        "index": "0",
+                        "kind": "element"
+                      },
+                      {
+                        "field": "payload",
+                        "kind": "field"
+                      },
+                      {
+                        "field": "source",
+                        "kind": "field"
+                      }
+                    ],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006410"
+                  }
+                }
+              ],
+              "target": {
+                "id": "source",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000064105",
+                    "output": {
+                      "id": "messages",
+                      "kind": "port"
+                    },
+                    "selector": [
+                      {
+                        "index": "0",
+                        "kind": "element"
+                      },
+                      {
+                        "field": "payload",
+                        "kind": "field"
+                      },
+                      {
+                        "field": "value",
+                        "kind": "field"
+                      }
+                    ],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006410"
+                  }
+                }
+              ],
+              "target": {
+                "id": "value",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000064105",
+                    "output": {
+                      "id": "messages",
+                      "kind": "port"
+                    },
+                    "selector": [
+                      {
+                        "index": "0",
+                        "kind": "element"
+                      },
+                      {
+                        "field": "payload",
+                        "kind": "field"
+                      },
+                      {
+                        "field": "batch",
+                        "kind": "field"
+                      }
+                    ],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006410"
+                  }
+                }
+              ],
+              "target": {
+                "id": "batch",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "string"
+                    },
+                    "value": "inspection.dimensions"
+                  }
+                }
+              ],
+              "target": {
+                "id": "join",
+                "kind": "parameter"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "type": "visionpro.shared.join_dimensions"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000064106",
+          "join": "all_activated",
+          "name": "A 宽度汇合",
+          "resources": []
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000064105",
+                    "output": {
+                      "id": "messages",
+                      "kind": "port"
+                    },
+                    "selector": [
+                      {
+                        "index": "1",
+                        "kind": "element"
+                      },
+                      {
+                        "field": "key",
+                        "kind": "field"
+                      }
+                    ],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006410"
+                  }
+                }
+              ],
+              "target": {
+                "id": "key",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000064105",
+                    "output": {
+                      "id": "messages",
+                      "kind": "port"
+                    },
+                    "selector": [
+                      {
+                        "index": "1",
+                        "kind": "element"
+                      },
+                      {
+                        "field": "domain",
+                        "kind": "field"
+                      }
+                    ],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006410"
+                  }
+                }
+              ],
+              "target": {
+                "id": "domain",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000064105",
+                    "output": {
+                      "id": "messages",
+                      "kind": "port"
+                    },
+                    "selector": [
+                      {
+                        "index": "1",
+                        "kind": "element"
+                      },
+                      {
+                        "field": "payload",
+                        "kind": "field"
+                      },
+                      {
+                        "field": "source",
+                        "kind": "field"
+                      }
+                    ],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006410"
+                  }
+                }
+              ],
+              "target": {
+                "id": "source",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000064105",
+                    "output": {
+                      "id": "messages",
+                      "kind": "port"
+                    },
+                    "selector": [
+                      {
+                        "index": "1",
+                        "kind": "element"
+                      },
+                      {
+                        "field": "payload",
+                        "kind": "field"
+                      },
+                      {
+                        "field": "value",
+                        "kind": "field"
+                      }
+                    ],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006410"
+                  }
+                }
+              ],
+              "target": {
+                "id": "value",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000064105",
+                    "output": {
+                      "id": "messages",
+                      "kind": "port"
+                    },
+                    "selector": [
+                      {
+                        "index": "1",
+                        "kind": "element"
+                      },
+                      {
+                        "field": "payload",
+                        "kind": "field"
+                      },
+                      {
+                        "field": "batch",
+                        "kind": "field"
+                      }
+                    ],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006410"
+                  }
+                }
+              ],
+              "target": {
+                "id": "batch",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "string"
+                    },
+                    "value": "inspection.dimensions"
+                  }
+                }
+              ],
+              "target": {
+                "id": "join",
+                "kind": "parameter"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "type": "visionpro.shared.join_dimensions"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000064107",
+          "join": "all_activated",
+          "name": "B 宽度汇合",
+          "resources": []
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000064105",
+                    "output": {
+                      "id": "messages",
+                      "kind": "port"
+                    },
+                    "selector": [
+                      {
+                        "index": "2",
+                        "kind": "element"
+                      },
+                      {
+                        "field": "key",
+                        "kind": "field"
+                      }
+                    ],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006410"
+                  }
+                }
+              ],
+              "target": {
+                "id": "key",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000064105",
+                    "output": {
+                      "id": "messages",
+                      "kind": "port"
+                    },
+                    "selector": [
+                      {
+                        "index": "2",
+                        "kind": "element"
+                      },
+                      {
+                        "field": "domain",
+                        "kind": "field"
+                      }
+                    ],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006410"
+                  }
+                }
+              ],
+              "target": {
+                "id": "domain",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000064105",
+                    "output": {
+                      "id": "messages",
+                      "kind": "port"
+                    },
+                    "selector": [
+                      {
+                        "index": "2",
+                        "kind": "element"
+                      },
+                      {
+                        "field": "payload",
+                        "kind": "field"
+                      },
+                      {
+                        "field": "source",
+                        "kind": "field"
+                      }
+                    ],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006410"
+                  }
+                }
+              ],
+              "target": {
+                "id": "source",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000064105",
+                    "output": {
+                      "id": "messages",
+                      "kind": "port"
+                    },
+                    "selector": [
+                      {
+                        "index": "2",
+                        "kind": "element"
+                      },
+                      {
+                        "field": "payload",
+                        "kind": "field"
+                      },
+                      {
+                        "field": "value",
+                        "kind": "field"
+                      }
+                    ],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006410"
+                  }
+                }
+              ],
+              "target": {
+                "id": "value",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000064105",
+                    "output": {
+                      "id": "messages",
+                      "kind": "port"
+                    },
+                    "selector": [
+                      {
+                        "index": "2",
+                        "kind": "element"
+                      },
+                      {
+                        "field": "payload",
+                        "kind": "field"
+                      },
+                      {
+                        "field": "batch",
+                        "kind": "field"
+                      }
+                    ],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006410"
+                  }
+                }
+              ],
+              "target": {
+                "id": "batch",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "string"
+                    },
+                    "value": "inspection.dimensions"
+                  }
+                }
+              ],
+              "target": {
+                "id": "join",
+                "kind": "parameter"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "type": "visionpro.shared.join_dimensions"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000064108",
+          "join": "all_activated",
+          "name": "B 高度汇合",
+          "resources": []
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000064105",
+                    "output": {
+                      "id": "messages",
+                      "kind": "port"
+                    },
+                    "selector": [
+                      {
+                        "index": "2",
+                        "kind": "element"
+                      },
+                      {
+                        "field": "key",
+                        "kind": "field"
+                      }
+                    ],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006410"
+                  }
+                }
+              ],
+              "target": {
+                "id": "key",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000064105",
+                    "output": {
+                      "id": "messages",
+                      "kind": "port"
+                    },
+                    "selector": [
+                      {
+                        "index": "2",
+                        "kind": "element"
+                      },
+                      {
+                        "field": "domain",
+                        "kind": "field"
+                      }
+                    ],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006410"
+                  }
+                }
+              ],
+              "target": {
+                "id": "domain",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000064108",
+                    "output": {
+                      "id": "record",
+                      "kind": "port"
+                    },
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006410"
+                  }
+                }
+              ],
+              "target": {
+                "id": "payload",
+                "kind": "input"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "shared_targets": [
+              {
+                "id": "5ca4f87a-ea1e-4d62-89b0-000000064002",
+                "kind": "queue"
+              }
+            ],
+            "type": "visionpro.shared.queue_send_dimensions"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000064113",
+          "join": "all_activated",
+          "name": "交付工件 B",
+          "resources": []
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000064105",
+                    "output": {
+                      "id": "messages",
+                      "kind": "port"
+                    },
+                    "selector": [
+                      {
+                        "index": "3",
+                        "kind": "element"
+                      },
+                      {
+                        "field": "key",
+                        "kind": "field"
+                      }
+                    ],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006410"
+                  }
+                }
+              ],
+              "target": {
+                "id": "key",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000064105",
+                    "output": {
+                      "id": "messages",
+                      "kind": "port"
+                    },
+                    "selector": [
+                      {
+                        "index": "3",
+                        "kind": "element"
+                      },
+                      {
+                        "field": "domain",
+                        "kind": "field"
+                      }
+                    ],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006410"
+                  }
+                }
+              ],
+              "target": {
+                "id": "domain",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000064105",
+                    "output": {
+                      "id": "messages",
+                      "kind": "port"
+                    },
+                    "selector": [
+                      {
+                        "index": "3",
+                        "kind": "element"
+                      },
+                      {
+                        "field": "payload",
+                        "kind": "field"
+                      },
+                      {
+                        "field": "source",
+                        "kind": "field"
+                      }
+                    ],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006410"
+                  }
+                }
+              ],
+              "target": {
+                "id": "source",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000064105",
+                    "output": {
+                      "id": "messages",
+                      "kind": "port"
+                    },
+                    "selector": [
+                      {
+                        "index": "3",
+                        "kind": "element"
+                      },
+                      {
+                        "field": "payload",
+                        "kind": "field"
+                      },
+                      {
+                        "field": "value",
+                        "kind": "field"
+                      }
+                    ],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006410"
+                  }
+                }
+              ],
+              "target": {
+                "id": "value",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000064105",
+                    "output": {
+                      "id": "messages",
+                      "kind": "port"
+                    },
+                    "selector": [
+                      {
+                        "index": "3",
+                        "kind": "element"
+                      },
+                      {
+                        "field": "payload",
+                        "kind": "field"
+                      },
+                      {
+                        "field": "batch",
+                        "kind": "field"
+                      }
+                    ],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006410"
+                  }
+                }
+              ],
+              "target": {
+                "id": "batch",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "string"
+                    },
+                    "value": "inspection.dimensions"
+                  }
+                }
+              ],
+              "target": {
+                "id": "join",
+                "kind": "parameter"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "type": "visionpro.shared.join_dimensions"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000064109",
+          "join": "all_activated",
+          "name": "A 高度汇合",
+          "resources": []
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000064105",
+                    "output": {
+                      "id": "messages",
+                      "kind": "port"
+                    },
+                    "selector": [
+                      {
+                        "index": "3",
+                        "kind": "element"
+                      },
+                      {
+                        "field": "key",
+                        "kind": "field"
+                      }
+                    ],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006410"
+                  }
+                }
+              ],
+              "target": {
+                "id": "key",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000064105",
+                    "output": {
+                      "id": "messages",
+                      "kind": "port"
+                    },
+                    "selector": [
+                      {
+                        "index": "3",
+                        "kind": "element"
+                      },
+                      {
+                        "field": "domain",
+                        "kind": "field"
+                      }
+                    ],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006410"
+                  }
+                }
+              ],
+              "target": {
+                "id": "domain",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000064109",
+                    "output": {
+                      "id": "record",
+                      "kind": "port"
+                    },
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006410"
+                  }
+                }
+              ],
+              "target": {
+                "id": "payload",
+                "kind": "input"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "shared_targets": [
+              {
+                "id": "5ca4f87a-ea1e-4d62-89b0-000000064002",
+                "kind": "queue"
+              }
+            ],
+            "type": "visionpro.shared.queue_send_dimensions"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000064114",
+          "join": "all_activated",
+          "name": "交付工件 A",
+          "resources": []
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "2"
+                  }
+                }
+              ],
+              "target": {
+                "id": "count",
+                "kind": "parameter"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "shared_targets": [
+              {
+                "id": "5ca4f87a-ea1e-4d62-89b0-000000064002",
+                "kind": "queue"
+              }
+            ],
+            "type": "visionpro.shared.queue_receive_dimensions"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000064115",
+          "join": "all_activated",
+          "name": "接收两件完整工件",
+          "resources": []
+        }
+      ],
+      "outputs": []
+    },
+    {
+      "containment": [],
+      "control_exports": [],
+      "control_links": [
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000647001",
+          "output": null,
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000064201",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000064202"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000647002",
+          "output": null,
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000064202",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000064203"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000647003",
+          "output": null,
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000064203",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000064204"
+        }
+      ],
+      "enabled": true,
+      "entries": [
+        "5ca4f87a-ea1e-4d62-89b0-000000064201"
+      ],
+      "id": "5ca4f87a-ea1e-4d62-89b0-000000006420",
+      "interface": {
+        "control_outputs": [],
+        "id": "s6.shared.globals",
+        "inputs": [],
+        "outputs": [],
+        "version": 1
+      },
+      "name": "全局值写入与一致读取",
+      "nodes": [
+        {
+          "bindings": [],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "shared_targets": [
+              {
+                "id": "5ca4f87a-ea1e-4d62-89b0-000000064003",
+                "kind": "variable"
+              }
+            ],
+            "type": "visionpro.shared.global_read_int64"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000064201",
+          "join": "all_activated",
+          "name": "读取初始宽度",
+          "resources": []
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "10"
+                  }
+                }
+              ],
+              "target": {
+                "id": "value",
+                "kind": "input"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "shared_targets": [
+              {
+                "id": "5ca4f87a-ea1e-4d62-89b0-000000064003",
+                "kind": "variable"
+              }
+            ],
+            "type": "visionpro.shared.global_write_int64"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000064202",
+          "join": "all_activated",
+          "name": "写入宽度 10",
+          "resources": []
+        },
+        {
+          "bindings": [],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "shared_targets": [
+              {
+                "id": "5ca4f87a-ea1e-4d62-89b0-000000064004",
+                "kind": "variable"
+              },
+              {
+                "id": "5ca4f87a-ea1e-4d62-89b0-000000064003",
+                "kind": "variable"
+              }
+            ],
+            "type": "visionpro.shared.global_read_many_int64"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000064203",
+          "join": "all_activated",
+          "name": "同步读取高度与宽度",
+          "resources": []
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "global_read",
+                  "value": {
+                    "required_revision": null,
+                    "selector": [],
+                    "variable": "5ca4f87a-ea1e-4d62-89b0-000000064003"
+                  }
+                }
+              ],
+              "target": {
+                "id": "left",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "0"
+                  }
+                }
+              ],
+              "target": {
+                "id": "right",
+                "kind": "input"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "type": "visionpro.calc.int64"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000064204",
+          "join": "all_activated",
+          "name": "读取本轮冻结的宽度",
+          "resources": []
+        }
+      ],
+      "outputs": []
+    }
+  ]
+}

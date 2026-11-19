@@ -210,6 +210,7 @@ Result<ToolExecutionConfiguration> ToolExecutionConfiguration::create(const Tool
 {
     const auto fail = [&](Diagnostic diagnostic) -> Result<ToolExecutionConfiguration> { return contextualize(std::move(diagnostic), data); };
     if (auto checked = validate_descriptor(data.tool); const auto* failure = std::get_if<Diagnostic>(&checked)) { return fail(*failure); }
+    if (auto checked = validate_shared_targets(data.tool, data.shared_targets); const auto* failure = std::get_if<Diagnostic>(&checked)) { return fail(*failure); }
     std::set<ParameterId> parameters;
     for (const auto& parameter : data.parameters) {
         const auto* declared = find(data.tool.parameters, parameter.id);

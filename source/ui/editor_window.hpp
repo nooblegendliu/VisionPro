@@ -59,6 +59,7 @@ private:
     void create_run_dock();
     void start_run(std::optional<workflow::DebugStatePolicy> debug = {});
     void show_selected_run_image();
+    void show_shared_preview();
     void choose_run_limits();
     void replace_canvas(workflow::Solution draft, bool writable = true);
     void refresh_canvas();

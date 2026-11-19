@@ -15,6 +15,12 @@ struct RunDocument {
     std::vector<infrastructure::NamedResourceRoot> roots;
 };
 
+struct SessionSharedPreview {
+    workflow::ConfigSnapshot snapshot;
+    std::shared_ptr<const core::SharedData> data;
+    std::shared_ptr<const core::CorrelationJoinAccess> joins;
+};
+
 class RunController final : public QObject {
     Q_OBJECT
 
@@ -24,6 +30,7 @@ public:
     void start(workflow::Solution draft, RunDocument document, workflow::RunArguments arguments,
         std::vector<RunImageInput> images);
     void cancel();
+    core::Result<std::optional<SessionSharedPreview>> shared_preview() const;
     bool can_reset_state(const workflow::NodeTarget& target) const;
     core::Result<std::monostate> reset_state(const workflow::NodeTarget& target);
     void reset_document();

@@ -24,7 +24,11 @@ struct ControlOutputMapping {
     core::NodeId source;
     std::optional<core::ControlOutputId> source_output;
 };
-struct ToolConfiguration { core::ToolTypeId type; std::uint32_t config_version; };
+struct ToolConfiguration {
+    core::ToolTypeId type;
+    std::uint32_t config_version;
+    std::vector<core::SharedTargetId> shared_targets{};
+};
 enum class LoopExportMode { First, Last, Collect, Sum };
 struct LoopExport {
     core::OutputId output;

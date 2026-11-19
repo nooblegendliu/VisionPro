@@ -10,6 +10,9 @@
 
 namespace visionpro::core {
 
+class SharedData;
+class CorrelationJoinAccess;
+
 struct FixedToolParameter { ParameterId id; ConfigValue value; };
 struct ToolResourceBinding { SchemaId slot; ResourceReference resource; };
 struct ToolExecutionConfigurationData {
@@ -21,6 +24,7 @@ struct ToolExecutionConfigurationData {
     // Exactly the SnapshotBuild parameters, already fixed by the workflow layer.
     std::vector<FixedToolParameter> parameters;
     std::vector<ToolResourceBinding> resources;
+    std::vector<SharedTargetId> shared_targets{};
 };
 class ToolExecutionConfiguration final {
 public:
@@ -102,6 +106,8 @@ struct InvocationContextData {
     std::vector<InvocationResourceLease> resources;
     // Attached by the state service after preparation and initialization.
     std::shared_ptr<ToolStateAccess> state{};
+    std::shared_ptr<SharedData> shared_data{};
+    std::shared_ptr<CorrelationJoinAccess> correlation_join{};
 };
 class InvocationContext final {
 public:

@@ -14,6 +14,7 @@ struct SubgraphImport {
 struct SubgraphHostCapabilities {
     bool node_state{true};
     bool file_leases{true};
+    bool shared_data{true};
 };
 
 // Exports the public definition. Parent control connections and input bindings
