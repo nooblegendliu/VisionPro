@@ -1,0 +1,889 @@
+{
+  "coordinates": [],
+  "format": "visionpro.solution",
+  "format_version": 1,
+  "id": "5ca4f87a-ea1e-4d62-89b0-000000612000",
+  "layouts": [
+    {
+      "workflow": "5ca4f87a-ea1e-4d62-89b0-000000612100",
+      "nodes": [
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000612101",
+          "x": 50.0,
+          "y": 70.0
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000612102",
+          "x": 310.0,
+          "y": 70.0
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000612103",
+          "x": 570.0,
+          "y": 70.0
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000612106",
+          "x": 830.0,
+          "y": 70.0
+        }
+      ]
+    },
+    {
+      "workflow": "5ca4f87a-ea1e-4d62-89b0-000000612200",
+      "nodes": [
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000612201",
+          "x": 50.0,
+          "y": 70.0
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000612202",
+          "x": 310.0,
+          "y": 70.0
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000612203",
+          "x": 570.0,
+          "y": 70.0
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000612206",
+          "x": 830.0,
+          "y": 70.0
+        }
+      ]
+    }
+  ],
+  "name": "双流程工件宽高配对",
+  "queues": [
+    {
+      "capacity": "2",
+      "id": "5ca4f87a-ea1e-4d62-89b0-000000612005",
+      "message_schema": {
+        "fields": [
+          {
+            "id": "height",
+            "type": {
+              "kind": "int64"
+            }
+          },
+          {
+            "id": "width",
+            "type": {
+              "kind": "int64"
+            }
+          }
+        ],
+        "kind": "record",
+        "schema": "visionpro.shared.dimensions",
+        "version": 1
+      },
+      "name": "完整工件",
+      "overflow": "reject",
+      "receive": {
+        "batch": "require_exact",
+        "consumers": "competing_consumers",
+        "empty": "fail",
+        "maximum_batch_size": "2"
+      }
+    }
+  ],
+  "resources": [],
+  "revision": "1",
+  "variables": [],
+  "workflows": [
+    {
+      "containment": [],
+      "control_exports": [],
+      "control_links": [
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000612104",
+          "output": null,
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000612101",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000612102"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000612105",
+          "output": "ready",
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000612102",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000612103"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000612107",
+          "output": null,
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000612103",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000612106"
+        }
+      ],
+      "enabled": true,
+      "entries": [
+        "5ca4f87a-ea1e-4d62-89b0-000000612101"
+      ],
+      "id": "5ca4f87a-ea1e-4d62-89b0-000000612100",
+      "interface": {
+        "control_outputs": [],
+        "id": "handoff.width",
+        "inputs": [
+          {
+            "binding": {
+              "allowed_conversions": [
+                "exact"
+              ],
+              "allowed_sources": [
+                "constant",
+                "run_output",
+                "public_input"
+              ],
+              "cardinality": "single_source",
+              "time": "before_invocation"
+            },
+            "constraints": {
+              "allowed_values": [],
+              "integer_range": null,
+              "max_length": null,
+              "real_range": null
+            },
+            "default_value": null,
+            "display_name": "工件号",
+            "id": "piece",
+            "required": true,
+            "semantics": {
+              "coordinate_system": null,
+              "unit": "unspecified"
+            },
+            "type": {
+              "kind": "string"
+            }
+          },
+          {
+            "binding": {
+              "allowed_conversions": [
+                "exact"
+              ],
+              "allowed_sources": [
+                "constant",
+                "run_output",
+                "public_input"
+              ],
+              "cardinality": "single_source",
+              "time": "before_invocation"
+            },
+            "constraints": {
+              "allowed_values": [],
+              "integer_range": null,
+              "max_length": null,
+              "real_range": null
+            },
+            "default_value": null,
+            "display_name": "宽度测量值",
+            "id": "measure",
+            "required": true,
+            "semantics": {
+              "coordinate_system": null,
+              "unit": "unspecified"
+            },
+            "type": {
+              "kind": "int64"
+            }
+          }
+        ],
+        "outputs": [],
+        "version": 1
+      },
+      "name": "宽度工位",
+      "nodes": [
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "public_input",
+                  "value": {
+                    "group": null,
+                    "input": "measure",
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000612100"
+                  }
+                }
+              ],
+              "target": {
+                "id": "left",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "0"
+                  }
+                }
+              ],
+              "target": {
+                "id": "right",
+                "kind": "input"
+              }
+            }
+          ],
+          "configuration": {
+            "kind": "tool",
+            "config_version": 1,
+            "type": "visionpro.calc.int64"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000612101",
+          "join": "all_activated",
+          "name": "校正宽度",
+          "resources": []
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "1"
+                  }
+                }
+              ],
+              "target": {
+                "id": "batch",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "string"
+                    },
+                    "value": "inspection.piece"
+                  }
+                }
+              ],
+              "target": {
+                "id": "domain",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "public_input",
+                  "value": {
+                    "group": null,
+                    "input": "piece",
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000612100"
+                  }
+                }
+              ],
+              "target": {
+                "id": "key",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "string"
+                    },
+                    "value": "width"
+                  }
+                }
+              ],
+              "target": {
+                "id": "source",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000612101",
+                    "output": {
+                      "id": "value",
+                      "kind": "port"
+                    },
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000612100"
+                  }
+                }
+              ],
+              "target": {
+                "id": "value",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "string"
+                    },
+                    "value": "inspection.dimensions"
+                  }
+                }
+              ],
+              "target": {
+                "id": "join",
+                "kind": "parameter"
+              }
+            }
+          ],
+          "configuration": {
+            "kind": "tool",
+            "config_version": 1,
+            "type": "visionpro.shared.join_dimensions"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000612102",
+          "join": "all_activated",
+          "name": "按工件汇合宽度",
+          "resources": []
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "string"
+                    },
+                    "value": "inspection.piece"
+                  }
+                }
+              ],
+              "target": {
+                "id": "domain",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "public_input",
+                  "value": {
+                    "group": null,
+                    "input": "piece",
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000612100"
+                  }
+                }
+              ],
+              "target": {
+                "id": "key",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000612102",
+                    "output": {
+                      "id": "record",
+                      "kind": "port"
+                    },
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000612100"
+                  }
+                }
+              ],
+              "target": {
+                "id": "payload",
+                "kind": "input"
+              }
+            }
+          ],
+          "configuration": {
+            "kind": "tool",
+            "config_version": 1,
+            "type": "visionpro.shared.queue_send_dimensions",
+            "shared_targets": [
+              {
+                "id": "5ca4f87a-ea1e-4d62-89b0-000000612005",
+                "kind": "queue"
+              }
+            ]
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000612103",
+          "join": "all_activated",
+          "name": "交付配对结果",
+          "resources": []
+        },
+        {
+          "bindings": [],
+          "configuration": {
+            "kind": "tool",
+            "config_version": 1,
+            "type": "visionpro.shared.queue_receive_dimensions",
+            "shared_targets": [
+              {
+                "id": "5ca4f87a-ea1e-4d62-89b0-000000612005",
+                "kind": "queue"
+              }
+            ]
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000612106",
+          "join": "all_activated",
+          "name": "读取并追溯交付消息",
+          "resources": []
+        }
+      ],
+      "outputs": []
+    },
+    {
+      "containment": [],
+      "control_exports": [],
+      "control_links": [
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000612204",
+          "output": null,
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000612201",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000612202"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000612205",
+          "output": "ready",
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000612202",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000612203"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000612207",
+          "output": null,
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000612203",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000612206"
+        }
+      ],
+      "enabled": true,
+      "entries": [
+        "5ca4f87a-ea1e-4d62-89b0-000000612201"
+      ],
+      "id": "5ca4f87a-ea1e-4d62-89b0-000000612200",
+      "interface": {
+        "control_outputs": [],
+        "id": "handoff.height",
+        "inputs": [
+          {
+            "binding": {
+              "allowed_conversions": [
+                "exact"
+              ],
+              "allowed_sources": [
+                "constant",
+                "run_output",
+                "public_input"
+              ],
+              "cardinality": "single_source",
+              "time": "before_invocation"
+            },
+            "constraints": {
+              "allowed_values": [],
+              "integer_range": null,
+              "max_length": null,
+              "real_range": null
+            },
+            "default_value": null,
+            "display_name": "工件号",
+            "id": "piece",
+            "required": true,
+            "semantics": {
+              "coordinate_system": null,
+              "unit": "unspecified"
+            },
+            "type": {
+              "kind": "string"
+            }
+          },
+          {
+            "binding": {
+              "allowed_conversions": [
+                "exact"
+              ],
+              "allowed_sources": [
+                "constant",
+                "run_output",
+                "public_input"
+              ],
+              "cardinality": "single_source",
+              "time": "before_invocation"
+            },
+            "constraints": {
+              "allowed_values": [],
+              "integer_range": null,
+              "max_length": null,
+              "real_range": null
+            },
+            "default_value": null,
+            "display_name": "高度测量值",
+            "id": "measure",
+            "required": true,
+            "semantics": {
+              "coordinate_system": null,
+              "unit": "unspecified"
+            },
+            "type": {
+              "kind": "int64"
+            }
+          }
+        ],
+        "outputs": [],
+        "version": 1
+      },
+      "name": "高度工位",
+      "nodes": [
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "public_input",
+                  "value": {
+                    "group": null,
+                    "input": "measure",
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000612200"
+                  }
+                }
+              ],
+              "target": {
+                "id": "left",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "0"
+                  }
+                }
+              ],
+              "target": {
+                "id": "right",
+                "kind": "input"
+              }
+            }
+          ],
+          "configuration": {
+            "kind": "tool",
+            "config_version": 1,
+            "type": "visionpro.calc.int64"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000612201",
+          "join": "all_activated",
+          "name": "校正高度",
+          "resources": []
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "1"
+                  }
+                }
+              ],
+              "target": {
+                "id": "batch",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "string"
+                    },
+                    "value": "inspection.piece"
+                  }
+                }
+              ],
+              "target": {
+                "id": "domain",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "public_input",
+                  "value": {
+                    "group": null,
+                    "input": "piece",
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000612200"
+                  }
+                }
+              ],
+              "target": {
+                "id": "key",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "string"
+                    },
+                    "value": "height"
+                  }
+                }
+              ],
+              "target": {
+                "id": "source",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000612201",
+                    "output": {
+                      "id": "value",
+                      "kind": "port"
+                    },
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000612200"
+                  }
+                }
+              ],
+              "target": {
+                "id": "value",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "string"
+                    },
+                    "value": "inspection.dimensions"
+                  }
+                }
+              ],
+              "target": {
+                "id": "join",
+                "kind": "parameter"
+              }
+            }
+          ],
+          "configuration": {
+            "kind": "tool",
+            "config_version": 1,
+            "type": "visionpro.shared.join_dimensions"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000612202",
+          "join": "all_activated",
+          "name": "按工件汇合高度",
+          "resources": []
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "string"
+                    },
+                    "value": "inspection.piece"
+                  }
+                }
+              ],
+              "target": {
+                "id": "domain",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "public_input",
+                  "value": {
+                    "group": null,
+                    "input": "piece",
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000612200"
+                  }
+                }
+              ],
+              "target": {
+                "id": "key",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000612202",
+                    "output": {
+                      "id": "record",
+                      "kind": "port"
+                    },
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000612200"
+                  }
+                }
+              ],
+              "target": {
+                "id": "payload",
+                "kind": "input"
+              }
+            }
+          ],
+          "configuration": {
+            "kind": "tool",
+            "config_version": 1,
+            "type": "visionpro.shared.queue_send_dimensions",
+            "shared_targets": [
+              {
+                "id": "5ca4f87a-ea1e-4d62-89b0-000000612005",
+                "kind": "queue"
+              }
+            ]
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000612203",
+          "join": "all_activated",
+          "name": "交付配对结果",
+          "resources": []
+        },
+        {
+          "bindings": [],
+          "configuration": {
+            "kind": "tool",
+            "config_version": 1,
+            "type": "visionpro.shared.queue_receive_dimensions",
+            "shared_targets": [
+              {
+                "id": "5ca4f87a-ea1e-4d62-89b0-000000612005",
+                "kind": "queue"
+              }
+            ]
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000612206",
+          "join": "all_activated",
+          "name": "读取并追溯交付消息",
+          "resources": []
+        }
+      ],
+      "outputs": []
+    }
+  ]
+}

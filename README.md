@@ -11,6 +11,8 @@ VisionPro 是一个采用 C++20、Qt、OpenCV 和 CMake 的桌面视觉算法软
 
 ## 当前状态
 
+S6.12 软件综合验收已通过。三套方案完成 GUI 编辑、保存重载与独立 CLI 对照，桌面基准与并发负载已复测。工业相机、实物 PLC 及整线联动待现场验证。[S6.12 验收记录与复现](docs/s6-acceptance.md)
+
 S1 文档审查、S2 核心模型与绑定及 S3 无 GUI 执行与配置往返均已通过验收。S4 按本轮无 SHA-256 校验的范围完成验收和交接。固定方案覆盖真实视觉单链、五路汇合和旋转 ROI 继承。[S4 验收与样例复现](docs/s4-acceptance.md)
 
 2026-11-16，S5.1 已完成。桌面入口使用 Qt 6.11.1 Widgets 和 QtNodes 3.0.16，内置流程示例可验证控制线分叉、汇合、命名出口、Group 导航和统一撤销重做。[S5.1 验收记录](docs/development.md#95-s51-接入与验收记录)
@@ -145,7 +147,7 @@ S3.9 在 Windows x64、MSVC 19.51、CMake/CTest 4.4.0 环境完成 Release 验�
 3. 无 GUI 执行与配置往返验证。S3.1–S3.9 完成，26 项必验子范围全部通过。
 4. 无 GUI 视觉闭环。S4.1–S4.7 已完成，本轮 Release 回归 ON 97 项、OFF 81 项通过。见 [S4 验收范围](docs/s4-acceptance.md#release-回归范围)。
 5. 基础可视化界面。S5.1–S5.6 已完成，GUI/CLI 一致性、生命周期及负载测量见 [S5 验收与交接](docs/s5-acceptance.md)。
-6. S6.1–S6.9 已完成。S6.10、S6.11 的软件接入已实现，真实工业相机和 PLC 的设备项待现场验收。S6.12 为综合验收与交接。[S6 实施与验收计划](docs/s6-plan.md)
+6. S6.1–S6.9 已完成，S6.10、S6.11 已完成软件接入，S6.12 已完成软件综合验收。实机项及其验收条件见 [S6 交接记录](docs/s6-acceptance.md#待实机验证)。
 
 各阶段范围与验收标准见 [requirements.md](docs/requirements.md)。
 先用内存配置、模拟工具和测试图像验证核心，再完成保存加载及真实视觉处理。
@@ -174,6 +176,8 @@ S3.9 在 Windows x64、MSVC 19.51、CMake/CTest 4.4.0 环境完成 Release 验�
 不需要 Qt、OpenCV 或厂商 SDK。UUID 生成后端当前使用 Windows CNG，其他平台后端尚未实现。
 `visionpro_cli run` 接受 `solution.json`、流程 UUID 与本次输入，实际退出后输出 JSON 追溯摘要。
 `visionpro_cli save` 提交方案的新修订。见 [命令行用法与闭环复现](docs/development.md#316-s39-构建与命令行验证)。
+
+`visionpro_cli replay` 按给定顺序在同一会话运行多条流程，适合复现共享队列和工件汇合。[输入序列与重放命令](docs/s6-acceptance.md#复现)
 
 使用 `VISIONPRO_WITH_GUI=ON` 构建 `visionpro_gui`。打开桌面程序后，可从 **File** 新建或打开方案，从 **Tools** 添加节点，选中节点后在 **Properties** 编辑参数、绑定和 Group 边界。[S5.3 构建与编辑复现](docs/development.md#326-s53-release-构建与测试)
 

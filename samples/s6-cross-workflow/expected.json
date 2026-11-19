@@ -1,0 +1,48 @@
+{
+  "status": [
+    "Pending",
+    "Pending",
+    "Complete",
+    "Complete",
+    "Duplicate"
+  ],
+  "outlet": [
+    "waiting",
+    "waiting",
+    "ready",
+    "ready",
+    "ignored"
+  ],
+  "calls": [
+    2,
+    2,
+    4,
+    4,
+    2
+  ],
+  "baseline_deliveries": [
+    {
+      "piece": "B",
+      "width": 20,
+      "height": 2
+    },
+    {
+      "piece": "A",
+      "width": 10,
+      "height": 1
+    }
+  ],
+  "edited_width_offset": 1,
+  "edited_deliveries": [
+    {
+      "piece": "B",
+      "width": 21,
+      "height": 2
+    },
+    {
+      "piece": "A",
+      "width": 11,
+      "height": 1
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+[
+  {
+    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000612100",
+    "inputs": {
+      "piece": "A",
+      "measure": "10"
+    }
+  },
+  {
+    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000612200",
+    "inputs": {
+      "piece": "B",
+      "measure": "2"
+    }
+  },
+  {
+    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000612100",
+    "inputs": {
+      "piece": "B",
+      "measure": "20"
+    }
+  },
+  {
+    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000612200",
+    "inputs": {
+      "piece": "A",
+      "measure": "1"
+    }
+  },
+  {
+    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000612200",
+    "inputs": {
+      "piece": "A",
+      "measure": "1"
+    }
+  }
+]

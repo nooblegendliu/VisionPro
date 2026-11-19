@@ -596,6 +596,49 @@ void calculations(const fs::path& executable)
         "Formatter tolerance never consumes an upstream technical failure.");
 }
 
+void replay(const fs::path& executable)
+{
+    ScratchDirectory scratch;
+    const fs::path cross(VISIONPRO_CROSS_DIRECTORY);
+    const auto invoke_replay = [&](const fs::path& manifest, const fs::path& sequence) {
+        return invoke(executable, scratch.path, {L"replay", L"--solution", manifest.native(), L"--sequence", sequence.native()});
+    };
+    const auto results = success(invoke_replay(cross / "solution.json", cross / "runs.json")).at("runs");
+    const auto expected = Json::parse(read_file(cross / "expected.json"));
+    check(results.size() == expected.at("calls").size(), "Replay must report every input in order.");
+    std::set<Json> identities;
+    for (std::size_t i = 0; i < results.size(); ++i) {
+        const auto& run = results.at(i);
+        check(run.at("status") == "Succeeded" && run.at("quiescent") == true
+            && run.at("session") == results.front().at("session") && identities.insert(run.at("run")).second
+            && run.at("call_order").size() == expected.at("calls").at(i),
+            "Replayed workflows must share one session and have distinct completed runs.");
+    }
+
+    const fs::path calculation(VISIONPRO_CALCULATION_SAMPLE);
+    const auto workflow = Json::parse(read_file(calculation)).at("workflows").at(0).at("id");
+    const Json normal{{"workflow", workflow}};
+    const auto sequence = scratch.path / "runs.json";
+    auto invalid = normal;
+    invalid["inputs"] = {{"index", "2"}};
+    write_file(sequence, Json::array({normal, invalid, normal}).dump());
+    const auto interrupted = invoke_replay(calculation, sequence);
+    rejected(interrupted, 1, "IndexOutOfRange");
+    const auto completed = Json::parse(interrupted.output).at("runs");
+    check(completed.size() == 2 && completed.front().at("status") == "Succeeded"
+        && completed.back().at("status") == "Failed" && completed.back().at("quiescent") == true,
+        "Replay must retain the failed run and stop before the next request.");
+
+    invalid["inputs"]["index"] = "not-an-integer";
+    const std::string duplicate = "[{\"workflow\":" + workflow.dump() + ",\"inputs\":{\"index\":\"0\",\"index\":\"1\"}}]";
+    for (const auto& bad : {std::string("[]"), duplicate, Json::array({normal, invalid}).dump()}) {
+        write_file(sequence, bad);
+        const auto result = invoke_replay(calculation, sequence);
+        check(result.exit_code == 2 && result.output.empty() && Json::parse(result.error).at("stage") == "arguments",
+            "Malformed replay inputs must produce a usage diagnostic before any run is submitted.");
+    }
+}
+
 void shared_workflows(const fs::path& executable)
 {
     ScratchDirectory scratch;
@@ -1187,6 +1230,7 @@ int wmain(int argc, wchar_t** argv)
         else if (group == L"external-diagnostics") { diagnostics(cli, PayloadStorage::External); }
         else if (group == L"output-failures") { output_failures(cli); }
         else if (group == L"calculations") { calculations(cli); }
+        else if (group == L"replay") { replay(cli); }
         else if (group == L"camera") { cameras(cli); }
         else if (group == L"shared") { shared_workflows(cli); }
         else if (group == L"trigger") { trigger_replay(cli); }

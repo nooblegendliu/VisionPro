@@ -35,6 +35,7 @@
 #include <QTreeWidget>
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <cmath>
 #include <cstdint>
@@ -468,12 +469,15 @@ class AcceptanceParityTests final : public QObject {
 private Q_SLOTS:
     void compares_saved_s4_workflows();
     void compares_saved_blob_loop();
+    void compares_saved_loop_in_group();
     void imports_and_runs_blob_groups();
     void reproduces_saved_calculations();
     void reproduces_saved_shared_workflows();
+    void reproduces_interleaved_workpieces();
     void reproduces_saved_reentrant_workflows();
     void reproduces_saved_calibrated_measurement();
     void reproduces_saved_workpiece_inspection();
+    void sends_saved_five_lane_inspection_over_tcp();
     void configures_and_acquires_saved_camera();
     void configures_and_arms_saved_camera();
     void reproduces_saved_communication_data();
@@ -509,8 +513,8 @@ json complete_editor_run(EditorWindow& window, const char* command, std::optiona
     }
     action(window, command).trigger();
     require(!(threshold || accept_defaults) || accepted, "The editor did not accept the public inputs.");
-    require(QTest::qWaitFor([&] { return controller->can_start() && controller->runs().size() == previous + 1; }, 8000),
-        "The editor did not finish a new run: " + window.statusBar()->currentMessage().toStdString());
+    const bool finished = QTest::qWaitFor([&] { return controller->can_start() && controller->runs().size() == previous + 1; }, 8000);
+    require(finished, "The editor did not finish a new run: " + window.statusBar()->currentMessage().toStdString());
     const auto run = controller->runs().back();
     return take(app::summarize_run(run, take(run.inspect()), {}));
 }
@@ -707,6 +711,167 @@ void AcceptanceParityTests::reproduces_saved_shared_workflows()
 {
     try { compare_saved_workflows(VISIONPRO_S64_DIRECTORY); }
     catch (const std::exception& failure) { QFAIL(failure.what()); }
+}
+
+namespace {
+json replay_cli(const fs::path& package, const fs::path& sequence, const fs::path& scratch)
+{
+    QProcess cli;
+    cli.setWorkingDirectory(path_text(scratch));
+    cli.setStandardOutputFile(path_text(scratch / "replay.json"));
+    cli.start(QString::fromUtf8(VISIONPRO_TEST_CLI), {QStringLiteral("replay"), QStringLiteral("--solution"),
+        path_text(package / solution_manifest_name), QStringLiteral("--sequence"), path_text(sequence)});
+    const bool exited = cli.waitForFinished(15000);
+    require(exited && cli.exitStatus() == QProcess::NormalExit && cli.exitCode() == 0,
+        "CLI replay failed: " + cli.readAllStandardError().toStdString());
+    return json::parse(read_file(scratch / "replay.json").toStdString()).at("runs");
+}
+
+json replay_editor(EditorWindow& window, const json& steps)
+{
+    auto runs = json::array();
+    for (const auto& step : steps) {
+        require(scene(window).select_workflow(uuid<WorkflowId>(step.at("workflow"))), "Could not select the next station.");
+        QTimer::singleShot(0, &window, [&step] {
+            auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+            if (!dialog) { return; }
+            auto* piece = dialog->findChild<QPlainTextEdit*>(QStringLiteral("runInputValue.piece"));
+            auto* measure = dialog->findChild<QLineEdit*>(QStringLiteral("runInputValue.measure"));
+            if (!piece || !measure || !ok_button(*dialog)) { dialog->reject(); return; }
+            piece->setPlainText(QString::fromStdString(step.at("inputs").at("piece").get<std::string>()));
+            measure->setText(QString::fromStdString(step.at("inputs").at("measure").get<std::string>()));
+            ok_button(*dialog)->click();
+            if (dialog->result() != QDialog::Accepted) { dialog->reject(); }
+        });
+        runs.push_back(complete_editor_run(window, "runWorkflow"));
+    }
+    return runs;
+}
+
+json checked_workpiece_runs(json runs, const Solution& saved, const json& steps, const json& expected, bool edited)
+{
+    require(runs.size() == steps.size(), "Replay stopped before the final duplicate.");
+    const auto session = runs.front().at("session");
+    const auto& deliveries = expected.at(edited ? "edited_deliveries" : "baseline_deliveries");
+    std::set<WorkflowRunId> identities;
+    std::map<std::string, std::string> messages;
+    for (std::size_t i = 0; i < steps.size(); ++i) {
+        auto& run = runs.at(i);
+        const auto& step = steps.at(i);
+        require(run.at("session") == session && identities.insert(runtime_id<WorkflowRunId>(run.at("run"))).second
+            && run.at("solution") == saved.id.to_string() && run.at("workflow") == step.at("workflow")
+            && run.at("revision") == std::to_string(saved.revision) && run.at("quiescent") == true
+            && run.at("status") == "Succeeded" && run.at("load_diagnostics").empty() && run.at("diagnostics").empty(),
+            "Each step must run the requested saved workflow, in one session with a distinct run ID.");
+        const auto& flow = *find_workflow(saved, uuid<WorkflowId>(run.at("workflow")));
+        const auto& nodes = run.at("nodes");
+        const auto& measure = named(nodes, "id", flow.entries.front().to_string());
+        const auto& join = named(nodes, "id", flow.nodes.at(1).id.to_string());
+        const auto& send = named(nodes, "id", flow.nodes.at(2).id.to_string());
+        const auto& read = named(nodes, "id", flow.nodes.at(3).id.to_string());
+        const auto binding_source = [](const json& node, std::string_view target) -> const json& {
+            return named(node.at("bindings"), "target", std::string(target)).at("sources").at(0);
+        };
+        const auto& measured = binding_source(join, "value");
+        require(binding_source(measure, "left").at("input") == "measure" && binding_source(join, "key").at("input") == "piece"
+            && measured.at("node") == measure.at("id") && measured.at("output") == "value",
+            "The join must use the supplied workpiece key and this station's corrected measurement.");
+        const bool ready = expected.at("outlet").at(i) == "ready";
+        require(run.at("call_order").size() == expected.at("calls").at(i).get<std::size_t>()
+            && join.at("selected_outputs") == json::array({expected.at("outlet").at(i)})
+            && output(join, "status").at("member") == expected.at("status").at(i)
+            && named(run.at("control_links"), "id", flow.control_links.at(1).id.to_string()).at("status") == (ready ? "Arrived" : "Closed"),
+            "Unexpected invocation count or join outlet at step " + std::to_string(i + 1));
+        if (ready) {
+            const auto position = messages.size();
+            const auto& delivery = deliveries.at(position);
+            const auto sequence = std::to_string(position + 1);
+            const auto& record = output(join, "record");
+            const auto& received = output(read, "messages");
+            const auto message_id = output(send, "message_id").get<std::string>();
+            (void)uuid<MessageId>(message_id);
+            require(binding_source(send, "payload").at("node") == join.at("id") && binding_source(send, "payload").at("output") == "record"
+                && binding_source(send, "key").at("input") == "piece"
+                && record.at("width") == std::to_string(delivery.at("width").get<int>())
+                && record.at("height") == std::to_string(delivery.at("height").get<int>())
+                && received.size() == 1 && received.front().at("payload") == record
+                && received.front().at("key") == delivery.at("piece") && received.front().at("domain") == "inspection.piece"
+                && received.front().at("queue_id") == saved.queues.front().id.to_string()
+                && received.front().at("message_id") == message_id && received.front().at("sequence") == sequence
+                && output(send, "sequence") == sequence && messages.emplace(message_id, "delivery-" + sequence).second,
+                "The FIFO delivery must carry the matched workpiece record and its issuing message ID exactly once.");
+        } else {
+            require(send.at("status") == "Skipped" && read.at("status") == "Skipped"
+                && named(join.at("outputs"), "id", "record").at("status") == "NotProduced",
+                "An incomplete or duplicate workpiece produced a delivery.");
+        }
+        for (auto& node : run.at("nodes")) {
+            require(node.at("diagnostics").empty(), "Unexpected node diagnostic in workpiece replay.");
+            for (auto& binding : node.at("bindings")) {
+                for (auto& source : binding.at("sources")) {
+                    if (source.at("kind") == "result") { (void)check_producer(source, run, node); }
+                    if (source.at("kind") == "public_input") {
+                        require(has_run_identity(source, run) && source.at("origin") == "Provided"
+                            && step.at("inputs").contains(source.at("input").get<std::string>()),
+                            "Binding did not refer to a public input supplied to this run.");
+                        omit_run_ids(source);
+                    }
+                }
+            }
+        }
+        run = normalize(std::move(run));
+    }
+    require(messages.size() == deliveries.size(), "Replay did not deliver both complete workpieces.");
+    match_message_ids(runs, messages);
+    return runs;
+}
+}
+
+void AcceptanceParityTests::reproduces_interleaved_workpieces()
+{
+    try {
+        QTemporaryDir scratch;
+        QVERIFY(scratch.isValid());
+        const fs::path temp(scratch.path().toStdU16String());
+        const fs::path sample(VISIONPRO_S612_CROSS_DIRECTORY);
+        const auto saved = temp / "edited workstations";
+        const auto registry = take(app::make_tool_registry());
+        const auto original = take(load_solution(sample, registry));
+        const auto steps = json::parse(read_file(sample / "runs.json").toStdString());
+        const auto expected = json::parse(read_file(sample / "expected.json").toStdString());
+        EditorWindow window(original.solution(), registry);
+        window.show();
+        const auto compare = [&](const fs::path& package, bool edited) {
+            window.open_document(package);
+            wait_for_file(window);
+            const auto document = take(load_solution(package, registry));
+            require(document.diagnostics().empty(), "The saved workpiece solution produced load diagnostics.");
+            auto desktop = replay_editor(window, steps);
+            auto cli = replay_cli(package, sample / "runs.json", temp);
+            require(desktop.front().at("session") != cli.front().at("session"), "Independent hosts shared a session.");
+            desktop = checked_workpiece_runs(std::move(desktop), document.solution(), steps, expected, edited);
+            cli = checked_workpiece_runs(std::move(cli), document.solution(), steps, expected, edited);
+            require(desktop == cli, "Cross-workflow replay mismatch: " + json::diff(desktop, cli).dump().substr(0, 1800));
+            const auto shared = take(window.findChild<RunController*>()->shared_preview());
+            require(shared.has_value(), "Could not inspect the delivery queue after replay.");
+            const auto queue = take(shared->data->preview(document.solution().queues.front().id));
+            require(queue.enqueued == 2 && queue.received == 2 && queue.messages.empty() && !queue.rejected && !queue.dropped_oldest,
+                "Two physical enqueues and two FIFO reads are required with no drops or rejections.");
+        };
+        compare(sample, false);
+        const auto& width = original.solution().workflows.front();
+        QVERIFY(scene(window).select_workflow(width.id) && scene(window).reveal_node(width.entries.front()));
+        drive_dialog(window, "editBinding", QStringLiteral("right"), {set_source, source_kind(QStringLiteral("Constant")),
+            [&](QDialog& dialog) -> QPushButton* {
+            auto* value = qobject_cast<QInputDialog*>(&dialog);
+            if (!value) { return nullptr; }
+            value->setTextValue(QString::number(expected.at("edited_width_offset").get<int>()));
+            return ok_button(dialog);
+        }, accept_binding});
+        window.transfer_document(saved, SolutionTransfer::SaveAs);
+        wait_for_file(window);
+        compare(saved, true);
+    } catch (const std::exception& failure) { QFAIL(failure.what()); }
 }
 
 void AcceptanceParityTests::reproduces_saved_reentrant_workflows()
@@ -910,10 +1075,11 @@ struct LoopbackPeer {
     QProcess process;
     int port;
 
-    explicit LoopbackPeer(bool plc)
+    explicit LoopbackPeer(bool plc, bool record_tcp = false)
     {
         QStringList arguments{QStringLiteral("-u"), QStringLiteral("-B"), QStringLiteral(VISIONPRO_TEST_PEER),
             QStringLiteral("--protocol"), plc ? QStringLiteral("modbus") : QStringLiteral("tcp")};
+        if (record_tcp) { arguments << QStringLiteral("--record-tcp"); }
         if (plc) {
             arguments << QStringLiteral("--fault") << QStringLiteral("unknown-exception")
                       << QStringLiteral("--fault") << QStringLiteral("lost-ack");
@@ -1322,6 +1488,144 @@ void AcceptanceParityTests::reproduces_saved_workpiece_inspection()
     } catch (const std::exception& failure) { QFAIL(failure.what()); }
 }
 
+void AcceptanceParityTests::sends_saved_five_lane_inspection_over_tcp()
+{
+#if !defined(VISIONPRO_TEST_PYTHON) || !defined(VISIONPRO_S612_INSPECTION_FIXTURE)
+    QSKIP("This inspection acceptance requires Python and OpenCV.");
+#else
+    try {
+        QTemporaryDir scratch;
+        QVERIFY(scratch.isValid());
+        LoopbackPeer peer(false, true);
+        const fs::path root(scratch.path().toStdU16String());
+        const auto sample = root / "inspection";
+        const auto saved = root / "edited inspection";
+        QProcess prepare;
+        prepare.start(QStringLiteral(VISIONPRO_TEST_PYTHON), {QStringLiteral("-B"), QStringLiteral(VISIONPRO_S612_INSPECTION_FIXTURE),
+            path_text(sample), QStringLiteral("--port"), QString::number(peer.port)});
+        const bool prepared = prepare.waitForFinished(10000) && prepare.exitStatus() == QProcess::NormalExit && prepare.exitCode() == 0;
+        require(prepared, "Could not prepare inspection: " + prepare.readAllStandardError().toStdString());
+        const auto registry = take(app::make_tool_registry());
+        const auto document = take(load_solution(sample, registry));
+        const auto flow = uuid<WorkflowId>(inspection_id(6910));
+
+        for (const int part : {101, 102}) {
+            const bool passed = part == 102;
+            const std::string verdict = passed ? "OK" : "NG";
+            const auto measurements = verdict + " B=10,20,30,40,50";
+            const auto wire = std::string("工件=") + std::to_string(part) + " " + verdict;
+            const auto hex = QByteArray::fromStdString(wire).toHex().toStdString();
+            json desktop;
+            {
+                EditorWindow window(document.solution(), registry);
+                window.show();
+                window.open_document(passed ? saved : sample);
+                wait_for_file(window);
+                QVERIFY(scene(window).select_workflow(flow));
+                if (passed) {
+                    // Include lane 5's measured value in the closed acceptance interval.
+                    const auto* judge = find_node(*find_workflow(window.draft(), flow), uuid<NodeId>(inspection_id(6934)));
+                    QVERIFY(judge);
+                    select_node_properties(window, *judge);
+                    drive_dialog(window, "editBinding", QStringLiteral("maximum"), {set_source,
+                        [](QDialog& dialog) -> QPushButton* {
+                            auto* value = qobject_cast<QInputDialog*>(&dialog);
+                            if (!value) { return nullptr; }
+                            value->setTextValue(QStringLiteral("50"));
+                            return ok_button(dialog);
+                        }, accept_binding});
+                    window.save_document();
+                } else {
+                    window.transfer_document(saved, SolutionTransfer::SaveAs);
+                }
+                wait_for_file(window);
+                window.open_document(saved);
+                wait_for_file(window);
+                QVERIFY(scene(window).select_workflow(flow));
+                QTimer input;
+                connect(&input, &QTimer::timeout, [&] {
+                    auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+                    if (!dialog) { return; }
+                    input.stop();
+                    auto* field = dialog->findChild<QLineEdit*>(QStringLiteral("runInputValue.part"));
+                    if (!field || !ok_button(*dialog)) { dialog->reject(); return; }
+                    field->setText(QString::number(part));
+                    ok_button(*dialog)->click();
+                    if (dialog->result() != QDialog::Accepted) { dialog->reject(); }
+                });
+                input.start(10);
+                desktop = complete_editor_run(window, "runWorkflow");
+                const auto shared = take(window.findChild<RunController*>()->shared_preview());
+                QVERIFY(shared.has_value());
+                const auto queue = take(shared->data->preview(uuid<QueueId>(inspection_id(6904))));
+                const auto text_id = take(SchemaIdFactory::parse<FieldId>("text"));
+                QVERIFY(queue.enqueued == 1 && queue.messages.size() == 1);
+                const auto& message = queue.messages.front();
+                QCOMPARE(message.correlation.key(), "part-" + std::to_string(part));
+                const auto& queued = named(desktop.at("nodes"), "id", inspection_id(passed ? 6943 : 6945));
+                QCOMPARE(message.id.to_string(), output(queued, "message_id").get<std::string>());
+                const auto* text = message.payload.field(text_id);
+                QVERIFY(text && text->as_string() && *text->as_string() == measurements);
+            }
+            const auto check_peer = [&] {
+                require(peer.process.canReadLine() || peer.process.waitForReadyRead(5000), "No complete TCP connection transcript.");
+                require(json::parse(peer.process.readLine().toStdString()) == json::array({hex}),
+                    "The TCP peer did not receive exactly the expected UTF-8 workpiece verdict.");
+            };
+            check_peer();
+            auto cli = run_cli(saved, flow, {QStringLiteral("--input"), QStringLiteral("part=") + QString::number(part)});
+            check_peer();
+            QVERIFY(desktop.at("revision") == cli.at("revision") && desktop.at("session") != cli.at("session"));
+            std::array<json, 2> reports{std::move(desktop), std::move(cli)};
+            for (auto& run : reports) {
+                verify_inspection(run, 50, passed, measurements);
+                QVERIFY(run.at("quiescent") == true && run.at("diagnostics").empty() && run.at("load_diagnostics").empty());
+                const auto& order = run.at("call_order");
+                QVERIFY(order.size() == 20);
+                for (const auto& id : order) {
+                    const auto& node = named(run.at("nodes"), "id", id);
+                    QVERIFY(std::ranges::count(order, id) == 1 && node.at("status") == "Succeeded"
+                        && node.at("attempts").size() == 1 && node.at("diagnostics").empty());
+                    for (const auto& binding : node.at("bindings")) {
+                        for (const auto& trace : binding.at("sources")) {
+                            if (trace.at("kind") == "result") { (void)check_producer(trace, run, node); }
+                            else if (trace.at("kind") == "public_input") {
+                                QVERIFY(has_run_identity(trace, run) && trace.at("input") == "part" && trace.at("origin") == "Provided");
+                            }
+                        }
+                    }
+                }
+                const int label = passed ? 6971 : 6974;
+                const auto call = [&](int id) -> const json& { return named(run.at("nodes"), "id", inspection_id(id)); };
+                QVERIFY(output(call(6970), "text") == "part-" + std::to_string(part));
+                QVERIFY(output(call(label), "text") == wire && output(call(label + 1), "payload").at("hex") == hex);
+                QVERIFY(output(call(label + 2), "bytes_sent") == std::to_string(wire.size()));
+                QVERIFY(std::ranges::find(order, json(inspection_id(passed ? 6976 : 6973))) == order.end());
+                const auto id = output(call(passed ? 6943 : 6945), "message_id").get<std::string>();
+                (void)uuid<MessageId>(id);
+                match_message_ids(run, {{id, "delivery-for-part-" + std::to_string(part)}});
+                for (auto& node : run.at("nodes")) {
+                    if (node.contains("host_elapsed_ns")) {
+                        QVERIFY(node.at("id") == inspection_id(label + 2)
+                            && std::stoll(node.at("host_elapsed_ns").get<std::string>()) >= 0);
+                        node.erase("host_elapsed_ns");
+                    }
+                    for (auto& binding : node.at("bindings")) {
+                        for (auto& source : binding.at("sources")) {
+                            if (source.at("kind") == "public_input") { omit_run_ids(source); }
+                        }
+                    }
+                }
+                run = normalize(std::move(run));
+            }
+            require(reports[0] == reports[1], "Five-lane GUI/CLI reports differ: " + json::diff(reports[0], reports[1]).dump().substr(0, 1800));
+            qInfo().noquote() << QString::fromStdString(wire) << QString::fromStdString(measurements)
+                << "20 calls per run, one frame per GUI/CLI connection";
+        }
+    } catch (const std::exception& failure) { QFAIL(failure.what()); }
+#endif
+}
+
 void AcceptanceParityTests::compares_saved_blob_loop()
 {
     try {
@@ -1441,6 +1745,83 @@ void AcceptanceParityTests::compares_saved_blob_loop()
         action(window, "saveSolution").trigger();
         wait_for_file(window);
         compare(0);
+    } catch (const std::exception& failure) { QFAIL(failure.what()); }
+}
+
+void AcceptanceParityTests::compares_saved_loop_in_group()
+{
+    try {
+        QTemporaryDir scratch;
+        require(scratch.isValid(), "Temporary directory unavailable.");
+        const fs::path sample(QString::fromUtf8(VISIONPRO_S62_DIRECTORY).toStdU16String());
+        const auto saved = fs::path(scratch.path().toStdU16String()) / "group-with-loop";
+        const auto registry = take(app::make_tool_registry());
+        const auto original = take(load_solution(sample, registry));
+        const auto& flow = original.solution().workflows.at(0);
+        const auto group = flow.entries.at(0);
+        const auto threshold = uuid<NodeId>("5ca4f87a-ea1e-4d62-89b0-000000006202");
+        EditorWindow window(original.solution(), registry);
+        window.show();
+        window.open_document(sample);
+        wait_for_file(window);
+        window.transfer_document(saved, SolutionTransfer::SaveAs);
+        wait_for_file(window);
+
+        const auto comparable = [](const json& run, bool empty) {
+            require(run.at("call_order").size() == (empty ? 8u : 10u)
+                && run.at("diagnostics").empty() && run.at("load_diagnostics").empty(),
+                "Unexpected Group call count or diagnostics.");
+            for (const auto& iteration : run.at("iterations")) {
+                const auto& source = named(iteration.at("exports"), "output", "points").at("producer");
+                const auto& body = named(run.at("nodes"), "invocation", source.at("invocation"));
+                require(body.at("id") == source.at("node") && body.at("attempt") == source.at("attempt")
+                    && body.at("scope") == iteration.at("scope") && source.at("scope") == body.at("scope")
+                    && source.at("output") == "item" && source.at("selector").at(0).at("field") == "centroid",
+                    "Collected point did not originate in this iteration.");
+            }
+            auto copy = run;
+            // Relativize the three fresh run addresses, including those inside Group and loop exports.
+            // Keep the node, scope, invocation and attempt of every source in the full comparison.
+            const auto localize = [&](auto&& self, json& value) -> void {
+                if (value.is_object() && value.contains("session")) {
+                    for (const auto* key : {"session", "snapshot", "run"}) {
+                        require(value.at(key) == run.at(key), "A source points outside this run.");
+                        value.erase(key);
+                    }
+                }
+                if (value.is_structured()) {
+                    for (auto& child : value) { self(self, child); }
+                }
+            };
+            localize(localize, copy);
+            return copy;
+        };
+        const auto compare = [&](bool empty) {
+            window.open_document(saved);
+            wait_for_file(window);
+            require(scene(window).select_workflow(flow.id), "Could not open the saved workflow.");
+            const auto gui = complete_editor_run(window, "runWorkflow");
+            const auto cli = run_cli(saved, flow.id);
+            require(gui.at("session") != cli.at("session"), "Expected independent GUI and CLI sessions.");
+            check_blob_group(gui, group, 1, empty);
+            check_blob_group(cli, group, 1, empty);
+            const auto desktop_report = comparable(gui, empty);
+            const auto cli_report = comparable(cli, empty);
+            require(desktop_report == cli_report,
+                "Group/loop report differs: " + json::diff(desktop_report, cli_report).dump());
+        };
+        compare(false);
+        require(scene(window).reveal_node(threshold), "Could not open the threshold inside the Group.");
+        drive_dialog(window, "editBinding", QStringLiteral("threshold"), {set_source, source_kind(QStringLiteral("Constant")),
+            [](QDialog& dialog) -> QPushButton* {
+                auto* value = qobject_cast<QInputDialog*>(&dialog);
+                if (!value) { return nullptr; }
+                value->setTextValue(QStringLiteral("255"));
+                return ok_button(dialog);
+            }, accept_binding});
+        action(window, "saveSolution").trigger();
+        wait_for_file(window);
+        compare(true);
     } catch (const std::exception& failure) { QFAIL(failure.what()); }
 }
 

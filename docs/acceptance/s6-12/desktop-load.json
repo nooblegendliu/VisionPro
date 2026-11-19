@@ -1,0 +1,396 @@
+{
+    "environment": {
+        "canvas_input": "Synthetic QMouseEvent sequence to Qt canvas viewport",
+        "canvas_viewport_size_at_run": [
+            210,
+            538
+        ],
+        "canvas_zoom_percent": 100,
+        "device_pixel_ratio": 1,
+        "image_viewport_size_at_run": [
+            1420,
+            188
+        ],
+        "platform": "offscreen",
+        "qt_version": "6.11.1",
+        "window_size": [
+            1440,
+            900
+        ]
+    },
+    "fixture": {
+        "background": 24,
+        "blob_area_pixels": 230400,
+        "control_edges": 300,
+        "foreground": 220,
+        "image_file": "PNG",
+        "image_height": 1080,
+        "image_width": 1920,
+        "nodes": 100,
+        "rectangle_xywh": [
+            320,
+            240,
+            640,
+            360
+        ],
+        "sample_format": "UInt8 Mono",
+        "simulation_nodes": 97,
+        "threshold": 128,
+        "vision_nodes": 3
+    },
+    "memory_samples": [
+        {
+            "display_logical_image_bytes_outside_history": 0,
+            "dropped_notifications": 0,
+            "private_bytes": 96587776,
+            "retained_distinct_image_buffers": 0,
+            "retained_logical_image_bytes": 0,
+            "retained_runs": 0,
+            "stage": "before_runs",
+            "working_set_bytes": 53239808
+        },
+        {
+            "display_logical_image_bytes_outside_history": 0,
+            "dropped_notifications": 68,
+            "private_bytes": 112300032,
+            "retained_distinct_image_buffers": 3,
+            "retained_logical_image_bytes": 6220800,
+            "retained_runs": 1,
+            "stage": "run_1",
+            "working_set_bytes": 71057408
+        },
+        {
+            "display_logical_image_bytes_outside_history": 0,
+            "dropped_notifications": 138,
+            "private_bytes": 120606720,
+            "retained_distinct_image_buffers": 6,
+            "retained_logical_image_bytes": 12441600,
+            "retained_runs": 2,
+            "stage": "run_2",
+            "working_set_bytes": 79257600
+        },
+        {
+            "display_logical_image_bytes_outside_history": 0,
+            "dropped_notifications": 208,
+            "private_bytes": 127983616,
+            "retained_distinct_image_buffers": 9,
+            "retained_logical_image_bytes": 18662400,
+            "retained_runs": 3,
+            "stage": "run_3",
+            "working_set_bytes": 86757376
+        },
+        {
+            "display_logical_image_bytes_outside_history": 0,
+            "dropped_notifications": 278,
+            "private_bytes": 134168576,
+            "retained_distinct_image_buffers": 12,
+            "retained_logical_image_bytes": 24883200,
+            "retained_runs": 4,
+            "stage": "run_4",
+            "working_set_bytes": 92700672
+        },
+        {
+            "display_logical_image_bytes_outside_history": 0,
+            "dropped_notifications": 348,
+            "private_bytes": 141152256,
+            "retained_distinct_image_buffers": 15,
+            "retained_logical_image_bytes": 31104000,
+            "retained_runs": 5,
+            "stage": "run_5",
+            "working_set_bytes": 99655680
+        },
+        {
+            "display_logical_image_bytes_outside_history": 0,
+            "dropped_notifications": 418,
+            "private_bytes": 148160512,
+            "retained_distinct_image_buffers": 18,
+            "retained_logical_image_bytes": 37324800,
+            "retained_runs": 6,
+            "stage": "run_6",
+            "working_set_bytes": 106622976
+        },
+        {
+            "display_logical_image_bytes_outside_history": 0,
+            "dropped_notifications": 488,
+            "private_bytes": 155779072,
+            "retained_distinct_image_buffers": 21,
+            "retained_logical_image_bytes": 43545600,
+            "retained_runs": 7,
+            "stage": "run_7",
+            "working_set_bytes": 114429952
+        },
+        {
+            "display_logical_image_bytes_outside_history": 0,
+            "dropped_notifications": 558,
+            "private_bytes": 162639872,
+            "retained_distinct_image_buffers": 24,
+            "retained_logical_image_bytes": 49766400,
+            "retained_runs": 8,
+            "stage": "run_8",
+            "working_set_bytes": 121036800
+        },
+        {
+            "display_logical_image_bytes_outside_history": 0,
+            "dropped_notifications": 628,
+            "private_bytes": 170012672,
+            "retained_distinct_image_buffers": 27,
+            "retained_logical_image_bytes": 55987200,
+            "retained_runs": 9,
+            "stage": "run_9",
+            "working_set_bytes": 128598016
+        },
+        {
+            "display_logical_image_bytes_outside_history": 0,
+            "dropped_notifications": 698,
+            "private_bytes": 176361472,
+            "retained_distinct_image_buffers": 30,
+            "retained_logical_image_bytes": 62208000,
+            "retained_runs": 10,
+            "stage": "run_10",
+            "working_set_bytes": 134721536
+        },
+        {
+            "display_logical_image_bytes_outside_history": 0,
+            "dropped_notifications": 768,
+            "private_bytes": 183119872,
+            "retained_distinct_image_buffers": 33,
+            "retained_logical_image_bytes": 68428800,
+            "retained_runs": 11,
+            "stage": "run_11",
+            "working_set_bytes": 141467648
+        },
+        {
+            "display_logical_image_bytes_outside_history": 0,
+            "dropped_notifications": 838,
+            "private_bytes": 190480384,
+            "retained_distinct_image_buffers": 36,
+            "retained_logical_image_bytes": 74649600,
+            "retained_runs": 12,
+            "stage": "run_12",
+            "working_set_bytes": 149106688
+        },
+        {
+            "display_logical_image_bytes_outside_history": 0,
+            "dropped_notifications": 908,
+            "private_bytes": 197066752,
+            "retained_distinct_image_buffers": 39,
+            "retained_logical_image_bytes": 80870400,
+            "retained_runs": 13,
+            "stage": "run_13",
+            "working_set_bytes": 155394048
+        },
+        {
+            "display_logical_image_bytes_outside_history": 0,
+            "dropped_notifications": 978,
+            "private_bytes": 204713984,
+            "retained_distinct_image_buffers": 42,
+            "retained_logical_image_bytes": 87091200,
+            "retained_runs": 14,
+            "stage": "run_14",
+            "working_set_bytes": 163237888
+        },
+        {
+            "display_logical_image_bytes_outside_history": 0,
+            "dropped_notifications": 1048,
+            "private_bytes": 210976768,
+            "retained_distinct_image_buffers": 45,
+            "retained_logical_image_bytes": 93312000,
+            "retained_runs": 15,
+            "stage": "run_15",
+            "working_set_bytes": 169267200
+        },
+        {
+            "display_logical_image_bytes_outside_history": 0,
+            "dropped_notifications": 1118,
+            "private_bytes": 218570752,
+            "retained_distinct_image_buffers": 48,
+            "retained_logical_image_bytes": 99532800,
+            "retained_runs": 16,
+            "stage": "run_16",
+            "working_set_bytes": 177078272
+        },
+        {
+            "display_logical_image_bytes_outside_history": 0,
+            "dropped_notifications": 1188,
+            "private_bytes": 218763264,
+            "retained_distinct_image_buffers": 48,
+            "retained_logical_image_bytes": 99532800,
+            "retained_runs": 16,
+            "stage": "run_17",
+            "working_set_bytes": 177029120
+        },
+        {
+            "display_logical_image_bytes_outside_history": 0,
+            "dropped_notifications": 1258,
+            "private_bytes": 219107328,
+            "retained_distinct_image_buffers": 48,
+            "retained_logical_image_bytes": 99532800,
+            "retained_runs": 16,
+            "stage": "run_18",
+            "working_set_bytes": 177303552
+        },
+        {
+            "display_logical_image_bytes_outside_history": 2073600,
+            "dropped_notifications": 1258,
+            "private_bytes": 114839552,
+            "retained_distinct_image_buffers": 0,
+            "retained_logical_image_bytes": 0,
+            "retained_runs": 0,
+            "stage": "history_cleared",
+            "working_set_bytes": 71135232
+        },
+        {
+            "display_logical_image_bytes_outside_history": 0,
+            "dropped_notifications": 1258,
+            "private_bytes": 104435712,
+            "retained_distinct_image_buffers": 0,
+            "retained_logical_image_bytes": 0,
+            "retained_runs": 0,
+            "stage": "display_released",
+            "working_set_bytes": 60760064
+        }
+    ],
+    "policy": {
+        "drags_per_load": 4,
+        "dropped_notifications": 1258,
+        "history_limit": 16,
+        "io_rounds": 5,
+        "observation_capacity": 32,
+        "retained_runs": 16,
+        "rounds": 18
+    },
+    "timings_ms": {
+        "blob_show_to_paint": {
+            "max": 16.3713,
+            "p50": 14.8059,
+            "p95": 16.3713,
+            "sample_count": 18,
+            "samples": [
+                13.236,
+                16.101,
+                16.3713,
+                11.5027,
+                13.6013,
+                13.9413,
+                12.7325,
+                15.3676,
+                15.1887,
+                12.918,
+                15.4359,
+                14.2862,
+                14.8059,
+                14.3769,
+                15.0582,
+                15.9618,
+                15.2164,
+                14.9058
+            ]
+        },
+        "canvas_drag_to_paint": {
+            "max": 104.4808,
+            "p50": 51.9364,
+            "p95": 104.1891,
+            "sample_count": 20,
+            "samples": [
+                104.4808,
+                51.907,
+                51.5058,
+                53.7876,
+                103.3765,
+                49.824,
+                51.4513,
+                52.5194,
+                104.1891,
+                49.8809,
+                51.7284,
+                53.0894,
+                102.108,
+                51.278,
+                51.5866,
+                53.7279,
+                90.552,
+                51.7368,
+                51.9364,
+                52.7144
+            ]
+        },
+        "load_to_ready": {
+            "max": 50.9705,
+            "p50": 39.2735,
+            "p95": 50.9705,
+            "sample_count": 5,
+            "samples": [
+                50.9705,
+                39.2735,
+                38.3913,
+                40.4778,
+                38.5463
+            ]
+        },
+        "run_to_quiescent_ui": {
+            "max": 157.1244,
+            "p50": 79.0768,
+            "p95": 157.1244,
+            "sample_count": 18,
+            "samples": [
+                157.1244,
+                80.5535,
+                79.4449,
+                79.7891,
+                79.56,
+                80.1763,
+                79.0295,
+                79.0672,
+                79.2578,
+                79.4624,
+                77.9334,
+                78.393,
+                78.7715,
+                79.3286,
+                78.7433,
+                78.0745,
+                77.5911,
+                79.0768
+            ]
+        },
+        "save_to_committed": {
+            "max": 78.5762,
+            "p50": 63.5429,
+            "p95": 78.5762,
+            "sample_count": 5,
+            "samples": [
+                63.0982,
+                62.793,
+                63.5429,
+                64.1654,
+                78.5762
+            ]
+        },
+        "threshold_show_to_paint": {
+            "max": 28.0612,
+            "p50": 27.3611,
+            "p95": 28.0612,
+            "sample_count": 18,
+            "samples": [
+                27.7278,
+                13.3208,
+                13.7551,
+                27.6627,
+                27.8288,
+                27.6657,
+                27.9545,
+                27.9113,
+                27.7897,
+                23.7619,
+                26.8239,
+                28.0612,
+                26.9181,
+                27.3611,
+                27.3892,
+                26.6287,
+                27.3549,
+                27.1176
+            ]
+        }
+    }
+}

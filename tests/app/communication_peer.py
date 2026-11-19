@@ -2,6 +2,7 @@
 
 import argparse
 from collections import deque
+import json
 import socket
 import socketserver
 import struct
@@ -26,8 +27,9 @@ def frame(data):
 class Peer(socketserver.ThreadingTCPServer):
     daemon_threads = True
 
-    def __init__(self, protocol, port=0, fault=None):
+    def __init__(self, protocol, port=0, fault=None, record_tcp=False):
         self.protocol = protocol
+        self.record_tcp = record_tcp
         self.faults = deque([fault] if isinstance(fault, str) else (fault or []))
         self.lock = threading.Condition()
         self.connections = 0
@@ -52,6 +54,7 @@ class Handler(socketserver.BaseRequestHandler):
         self.request.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         with self.server.lock:
             self.server.connections += 1
+        self.transcript = []
         try:
             if self.server.protocol == "tcp":
                 self.tcp()
@@ -59,6 +62,9 @@ class Handler(socketserver.BaseRequestHandler):
                 self.modbus()
         except (EOFError, ConnectionError, TimeoutError):
             pass
+        finally:
+            if self.server.record_tcp:
+                print(json.dumps(self.transcript), flush=True)
 
     def tcp(self):
         if self.server.take_fault("resume-frame"):
@@ -68,6 +74,8 @@ class Handler(socketserver.BaseRequestHandler):
             if length > 65536:
                 return
             payload = receive_exact(self.request, length)
+            if self.server.record_tcp:
+                self.transcript.append(payload.hex())
             with self.server.lock:
                 self.server.messages.append(payload)
                 self.server.lock.notify_all()
@@ -133,10 +141,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--protocol", choices=("tcp", "modbus"), required=True)
     parser.add_argument("--port", type=int, default=0)
+    parser.add_argument("--record-tcp", action="store_true", help="print one JSON array of payload hex per closed TCP connection")
     parser.add_argument("--fault", action="append", choices=("mid-frame", "oversize", "lost-ack", "lost-read",
                                                             "exception", "unknown-exception", "wrong-transaction", "wrong-echo"))
     args = parser.parse_args()
-    with Peer(args.protocol, args.port, args.fault) as peer:
+    with Peer(args.protocol, args.port, args.fault, args.record_tcp) as peer:
         print(peer.server_address[1], flush=True)
         try:
             peer.serve_forever()

@@ -149,6 +149,15 @@ add_executable(visionpro_workflow_observation_tests workflow_observation_tests.c
 target_link_libraries(visionpro_workflow_observation_tests PRIVATE visionpro_workflow visionpro_build_options Threads::Threads)
 add_test(NAME workflow.run_observations COMMAND visionpro_workflow_observation_tests)
 
+if(WIN32)
+    add_executable(visionpro_acceptance_concurrent_load acceptance_concurrent_load.cpp)
+    target_compile_definitions(visionpro_acceptance_concurrent_load PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+    target_include_directories(visionpro_acceptance_concurrent_load SYSTEM PRIVATE
+        "${PROJECT_SOURCE_DIR}/third_party/nlohmann_json/include")
+    target_link_libraries(visionpro_acceptance_concurrent_load PRIVATE
+        visionpro_workflow visionpro_shared_tools visionpro_build_options Threads::Threads psapi)
+endif()
+
 add_executable(visionpro_workflow_session_tests workflow_session_tests.cpp)
 target_link_libraries(visionpro_workflow_session_tests PRIVATE visionpro_workflow visionpro_build_options Threads::Threads)
 add_test(NAME workflow.session_lifecycle COMMAND visionpro_workflow_session_tests)

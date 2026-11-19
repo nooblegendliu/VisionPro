@@ -76,6 +76,7 @@ target_compile_definitions(visionpro_acceptance_parity_tests PRIVATE
     "VISIONPRO_S69_DIRECTORY=\"${PROJECT_SOURCE_DIR}/samples/s6-inspection\""
     "VISIONPRO_S610_DIRECTORY=\"${PROJECT_SOURCE_DIR}/samples/s6-camera\""
     "VISIONPRO_S611_DIRECTORY=\"${PROJECT_SOURCE_DIR}/samples/s6-communication\""
+    "VISIONPRO_S612_CROSS_DIRECTORY=\"${PROJECT_SOURCE_DIR}/samples/s6-cross-workflow\""
     "VISIONPRO_TEST_CLI=\"$<TARGET_FILE:visionpro_cli>\"")
 target_link_libraries(visionpro_acceptance_parity_tests PRIVATE
     visionpro_ui visionpro_app_tools visionpro_infrastructure visionpro_build_options Qt6::Test)
@@ -84,7 +85,9 @@ add_test(NAME visionpro_camera_acquisition_parity_tests COMMAND visionpro_accept
     configures_and_acquires_saved_camera)
 add_test(NAME visionpro_camera_trigger_parity_tests COMMAND visionpro_acceptance_parity_tests -platform offscreen
     configures_and_arms_saved_camera)
-list(APPEND ui_tests visionpro_camera_acquisition_parity_tests visionpro_camera_trigger_parity_tests)
+add_test(NAME visionpro_cross_workflow_handoff_tests COMMAND visionpro_acceptance_parity_tests -platform offscreen
+    reproduces_interleaved_workpieces -o cross-workflow-handoff.log,txt)
+list(APPEND ui_tests visionpro_camera_acquisition_parity_tests visionpro_camera_trigger_parity_tests visionpro_cross_workflow_handoff_tests)
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_Interpreter_FOUND)
     target_compile_definitions(visionpro_acceptance_parity_tests PRIVATE
@@ -95,6 +98,13 @@ if(Python3_Interpreter_FOUND)
     add_test(NAME visionpro_plc_parity_tests COMMAND visionpro_acceptance_parity_tests -platform offscreen
         reproduces_saved_communication:modbus -o plc-parity.log,txt)
     set(communication_ui_tests visionpro_tcp_parity_tests visionpro_plc_parity_tests)
+    if(VISIONPRO_WITH_OPENCV)
+        target_compile_definitions(visionpro_acceptance_parity_tests PRIVATE
+            "VISIONPRO_S612_INSPECTION_FIXTURE=\"${PROJECT_SOURCE_DIR}/samples/s6-acceptance/prepare_inspection.py\"")
+        add_test(NAME visionpro_inspection_tcp_handoff_tests COMMAND visionpro_acceptance_parity_tests -platform offscreen
+            sends_saved_five_lane_inspection_over_tcp -o inspection-tcp-handoff.log,txt)
+        list(APPEND communication_ui_tests visionpro_inspection_tcp_handoff_tests)
+    endif()
     list(APPEND ui_tests ${communication_ui_tests})
 endif()
 
@@ -103,6 +113,8 @@ if(VISIONPRO_WITH_OPENCV)
         compares_saved_s4_workflows -o acceptance-parity.log,txt)
     add_test(NAME visionpro_loop_parity_tests COMMAND visionpro_acceptance_parity_tests -platform offscreen
         compares_saved_blob_loop)
+    add_test(NAME visionpro_group_loop_handoff_tests COMMAND visionpro_acceptance_parity_tests -platform offscreen
+        compares_saved_loop_in_group -o group-loop-handoff.log,txt)
     add_test(NAME visionpro_group_parity_tests COMMAND visionpro_acceptance_parity_tests -platform offscreen
         imports_and_runs_blob_groups -o group-parity.log,txt)
     add_test(NAME visionpro_calculation_parity_tests COMMAND visionpro_acceptance_parity_tests -platform offscreen
@@ -117,7 +129,7 @@ if(VISIONPRO_WITH_OPENCV)
         reproduces_saved_workpiece_inspection)
     list(APPEND ui_tests visionpro_visual_tests visionpro_acceptance_parity_tests visionpro_loop_parity_tests
         visionpro_group_parity_tests visionpro_calculation_parity_tests visionpro_shared_parity_tests visionpro_concurrency_parity_tests
-        visionpro_calibration_parity_tests visionpro_inspection_parity_tests)
+        visionpro_calibration_parity_tests visionpro_inspection_parity_tests visionpro_group_loop_handoff_tests)
 
     if(WIN32)
         add_executable(visionpro_acceptance_load acceptance_load.cpp)
@@ -136,7 +148,7 @@ if(VISIONPRO_WITH_OPENCV)
     set_property(TEST visionpro_editor_tests visionpro_inspector_tests visionpro_editor_run_tests visionpro_run_lifecycle_tests visionpro_visual_tests
         visionpro_acceptance_parity_tests visionpro_loop_parity_tests visionpro_group_parity_tests visionpro_calculation_parity_tests visionpro_shared_parity_tests visionpro_concurrency_parity_tests
         visionpro_calibration_parity_tests visionpro_inspection_parity_tests visionpro_camera_acquisition_parity_tests
-        visionpro_camera_trigger_parity_tests ${communication_ui_tests}
+        visionpro_camera_trigger_parity_tests visionpro_cross_workflow_handoff_tests visionpro_group_loop_handoff_tests ${communication_ui_tests}
         APPEND PROPERTY ENVIRONMENT_MODIFICATION
         "PATH=path_list_prepend:$<TARGET_FILE_DIR:opencv_core>")
 endif()

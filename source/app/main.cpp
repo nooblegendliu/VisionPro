@@ -12,7 +12,9 @@
 
 #include <algorithm>
 #include <charconv>
+#include <fstream>
 #include <iostream>
+#include <set>
 #include <stdexcept>
 
 namespace visionpro::app {
@@ -23,8 +25,13 @@ using namespace workflow;
 using nlohmann::json;
 namespace fs = std::filesystem;
 
-enum class Command { Run, Save, Trigger };
+enum class Command { Run, Save, Trigger, Replay };
 struct InputArgument { InputId id; std::string text; };
+struct ManualRun {
+    WorkflowId workflow;
+    std::optional<NodeId> group;
+    std::vector<InputArgument> inputs;
+};
 struct Arguments {
     Command command;
     fs::path manifest{};
@@ -33,6 +40,7 @@ struct Arguments {
     std::vector<InputArgument> inputs{};
     std::vector<NamedResourceRoot> roots{};
     TriggerSequence sequence{};
+    fs::path replay_sequence{};
 };
 
 class UsageError final : public std::runtime_error {
@@ -43,6 +51,8 @@ public:
 constexpr auto usage =
     "visionpro_cli cameras\n"
     "visionpro_cli run --solution <solution.json> --workflow <uuid> [--group <uuid>] [--input <id>=<value>]... [--root <id>=<directory>]...\n"
+    "visionpro_cli replay --solution <solution.json> --sequence <runs.json> [--root <id>=<directory>]...\n"
+    "Replay runs in order in one session. The sequence is a JSON array of {\"workflow\":\"uuid\",\"inputs\":{\"id\":\"value\"}}.\n"
     "visionpro_cli save --solution <solution.json> [--root <id>=<directory>]...\n"
     "visionpro_cli trigger --solution <solution.json> --workflow <uuid> [--frame <int64>]... [--stop drain|cancel] [--root <id>=<directory>]...\n"
     "For a continuous entry, use --advance-ms <uint32> repeatedly to advance its controlled clock. Default stop mode is drain.\n"
@@ -92,11 +102,12 @@ template<class T> T number(std::string_view text)
 
 Arguments parse_arguments(std::span<wchar_t*> args)
 {
-    if (args.empty()) { throw UsageError("Choose run, save, trigger or cameras. See --help."); }
+    if (args.empty()) { throw UsageError("Choose run, replay, save, trigger or cameras. See --help."); }
     const std::wstring_view command{args.front()};
     Arguments parsed{Command::Run};
     if (command == L"save") { parsed.command = Command::Save; }
     else if (command == L"trigger") { parsed.command = Command::Trigger; }
+    else if (command == L"replay") { parsed.command = Command::Replay; }
     else if (command != L"run") { throw UsageError("Unknown command. See --help."); }
     for (std::size_t index = 1; index < args.size(); index += 2) {
         const std::wstring_view option{args[index]};
@@ -115,7 +126,10 @@ Arguments parse_arguments(std::span<wchar_t*> args)
                 throw UsageError("Each named root requires one directory.");
             }
             parsed.roots.push_back({id, fs::absolute(fs::path(path))});
-        } else if (parsed.command != Command::Save && option == L"--workflow") {
+        } else if (parsed.command == Command::Replay && option == L"--sequence") {
+            if (!parsed.replay_sequence.empty() || value.empty()) { throw UsageError("Specify one replay sequence file."); }
+            parsed.replay_sequence = fs::absolute(fs::path(value));
+        } else if ((parsed.command == Command::Run || parsed.command == Command::Trigger) && option == L"--workflow") {
             if (parsed.workflow) { throw UsageError("Specify one workflow ID."); }
             parsed.workflow = argument_value(IdFactory::parse<WorkflowId>(utf8(value)));
         } else if (parsed.command == Command::Trigger && option == L"--frame") {
@@ -146,7 +160,10 @@ Arguments parse_arguments(std::span<wchar_t*> args)
         }
     }
     if (parsed.manifest.empty()) { throw UsageError("Specify --solution <solution.json>."); }
-    if (parsed.command != Command::Save && !parsed.workflow) { throw UsageError("Specify --workflow <uuid>."); }
+    if (parsed.command == Command::Replay && parsed.replay_sequence.empty()) { throw UsageError("Specify --sequence <runs.json>."); }
+    if ((parsed.command == Command::Run || parsed.command == Command::Trigger) && !parsed.workflow) {
+        throw UsageError("Specify --workflow <uuid>.");
+    }
     return parsed;
 }
 
@@ -169,7 +186,42 @@ DataValue input_value(const InputDescriptor& input, std::string_view text)
     }
 }
 
-std::vector<RunInput> fixed_inputs(const Arguments& args, const PublicInterface& interface)
+std::vector<ManualRun> read_sequence(const fs::path& path)
+{
+    std::ifstream input(path, std::ios::binary);
+    if (!input) { throw UsageError("Could not open the replay sequence file."); }
+    std::vector<std::set<std::string>> object_keys;
+    const auto reject_duplicates = [&](int, json::parse_event_t event, json& parsed) {
+        if (event == json::parse_event_t::object_start) { object_keys.emplace_back(); }
+        if (event == json::parse_event_t::object_end) { object_keys.pop_back(); }
+        if (event == json::parse_event_t::key && !object_keys.back().insert(parsed.get_ref<const std::string&>()).second) {
+            throw UsageError("Duplicate replay field: " + parsed.get<std::string>());
+        }
+        return true;
+    };
+    const auto steps = json::parse(input, reject_duplicates, false);
+    if (!steps.is_array() || steps.empty()) { throw UsageError("The replay sequence must be a nonempty JSON array."); }
+    std::vector<ManualRun> runs;
+    for (const auto& step : steps) {
+        if (!step.is_object() || !step.contains("workflow") || !step.at("workflow").is_string()
+            || step.size() != (step.contains("inputs") ? 2u : 1u)) {
+            throw UsageError("Each replay step requires a workflow UUID and optional inputs.");
+        }
+        ManualRun run{argument_value(IdFactory::parse<WorkflowId>(step.at("workflow").get_ref<const std::string&>())), {}, {}};
+        if (step.contains("inputs")) {
+            const auto& inputs = step.at("inputs");
+            if (!inputs.is_object()) { throw UsageError("Replay inputs must be an object of ID/text pairs."); }
+            for (const auto& [name, value] : inputs.items()) {
+                if (!value.is_string()) { throw UsageError("A replay input value must be text, as for --input."); }
+                run.inputs.push_back({argument_value(SchemaIdFactory::parse<InputId>(name)), value.get<std::string>()});
+            }
+        }
+        runs.push_back(std::move(run));
+    }
+    return runs;
+}
+
+std::vector<RunInput> fixed_inputs(const ManualRun& args, const PublicInterface& interface)
 {
     std::vector<RunInput> inputs;
     inputs.reserve(args.inputs.size());
@@ -213,15 +265,15 @@ int save(const SolutionDocument& document)
     return finish_output();
 }
 
-int run(const Arguments& args, const SolutionDocument& document, const ToolRegistry& registry)
+Result<RunRequest> manual_request(const ManualRun& args, const ConfigSnapshot& snapshot)
 {
-    const auto* flow = find_workflow(document.solution(), *args.workflow);
+    const auto* flow = find_workflow(snapshot.solution(), args.workflow);
     if (!flow) {
         DiagnosticLocation location;
-        location.solution = document.solution().id;
+        location.solution = snapshot.solution().id;
         location.workflow = args.workflow;
-        return report_failure("request", {ErrorCode::InvalidRunRequest, Severity::Error, std::move(location),
-            "The selected workflow ID is absent from the solution."});
+        return Diagnostic{ErrorCode::InvalidRunRequest, Severity::Error, std::move(location),
+            "The selected workflow ID is absent from the solution."};
     }
     RunTarget target = WorkflowTarget{flow->id};
     const auto* interface = &flow->interface;
@@ -232,21 +284,21 @@ int run(const Arguments& args, const SolutionDocument& document, const ToolRegis
             DiagnosticLocation location;
             location.workflow = flow->id;
             location.node = args.group;
-            return report_failure("request", {ErrorCode::InvalidRunRequest, Severity::Error, std::move(location),
-                "The selected node must be a composite Group in this workflow."});
+            return Diagnostic{ErrorCode::InvalidRunRequest, Severity::Error, std::move(location),
+                "The selected node must be a composite Group in this workflow."};
         }
         target = NodeTarget{flow->id, node->id};
         interface = &group->interface;
     }
     const auto inputs = fixed_inputs(args, *interface);
-    auto opened = open_solution_execution(document, registry);
-    if (const auto* failure = std::get_if<Diagnostic>(&opened)) { return report_failure("load", *failure); }
-    const auto& execution = std::get<LoadedSolutionExecution>(opened);
     const auto trigger = argument_value(SchemaIdFactory::parse<SchemaId>("visionpro.cli"));
-    auto request = RunRequest::create(execution.snapshot, target, inputs,
+    return RunRequest::create(snapshot, target, inputs,
         {args.group ? TriggerKind::Debug : TriggerKind::Manual, trigger});
-    if (const auto* failure = std::get_if<Diagnostic>(&request)) { return report_failure("request", *failure); }
-    auto submitted = execution.engine->submit(std::get<RunRequest>(request));
+}
+
+int execute_run(const RunRequest& request, WorkflowEngine& engine, std::span<const Diagnostic> diagnostics, json& report)
+{
+    auto submitted = engine.submit(request);
     if (const auto* failure = std::get_if<RunRejected>(&submitted)) { return report_failure("admission", failure->diagnostic); }
     const auto* handle = std::get_if<RunHandle>(&submitted);
     if (!handle) {
@@ -258,13 +310,42 @@ int run(const Arguments& args, const SolutionDocument& document, const ToolRegis
     if (wait.outcome != RunWaitOutcome::Satisfied) {
         return report_failure("execute", {ErrorCode::ExecutionBoundaryFailure, Severity::Error, {}, "The run has not exited."});
     }
-    auto summary = summarize_run(*handle, wait.progress, document.diagnostics());
+    auto summary = summarize_run(*handle, wait.progress, diagnostics);
     if (const auto* failure = std::get_if<Diagnostic>(&summary)) { return report_failure("report", *failure); }
-    std::cout << std::get<json>(summary).dump(2) << '\n';
-    if (const auto output_error = finish_output(); output_error != 0) { return output_error; }
+    report = std::get<json>(std::move(summary));
     if (wait.progress.status == ExecutionStatus::Succeeded) { return 0; }
     std::cerr << json{{"stage", "execute"}, {"diagnostics", diagnostics_json(wait.progress.diagnostics)}}.dump(2) << '\n';
     return 1;
+}
+
+int run(const Arguments& args, const SolutionDocument& document, const ToolRegistry& registry)
+{
+    const bool replay = args.command == Command::Replay;
+    const auto steps = replay ? read_sequence(args.replay_sequence)
+        : std::vector<ManualRun>{{*args.workflow, args.group, args.inputs}};
+    auto opened = open_solution_execution(document, registry);
+    if (const auto* failure = std::get_if<Diagnostic>(&opened)) { return report_failure("load", *failure); }
+    const auto& execution = std::get<LoadedSolutionExecution>(opened);
+    std::vector<RunRequest> requests;
+    for (const auto& step : steps) {
+        auto request = manual_request(step, execution.snapshot);
+        if (const auto* failure = std::get_if<Diagnostic>(&request)) { return report_failure("request", *failure); }
+        requests.push_back(std::get<RunRequest>(std::move(request)));
+    }
+    json runs = json::array();
+    int status = 0;
+    for (const auto& request : requests) {
+        json report;
+        status = execute_run(request, *execution.engine, document.diagnostics(), report);
+        if (!report.is_null()) { runs.push_back(std::move(report)); }
+        if (status != 0) { break; }
+    }
+    if (replay || !runs.empty()) {
+        const auto report = replay ? json{{"runs", std::move(runs)}} : std::move(runs.front());
+        std::cout << report.dump(2) << '\n';
+        if (const auto output_error = finish_output(); output_error != 0) { return output_error; }
+    }
+    return status;
 }
 
 int execute(std::span<wchar_t*> args)
