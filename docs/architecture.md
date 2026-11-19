@@ -604,7 +604,9 @@ core 声明工具所需的最小资源能力接口，app 在无 GUI 和 GUI 入�
 ToolInstance 通过 ResourceId 获取受控访问或租约，只执行采集、发送等具体操作。
 节点释放不默认断开其他节点正在使用的连接，资源服务负责最终关闭与清理。
 共享连接不代表设备可重入；独占、串行访问、超时和断连恢复在接入该资源前确定。
-S6.10 的 `CameraLease` 按适配器和序列号独占物理设备，资源别名也共用该限制。采集节点在工作线程取得一帧并关闭；流程触发入口在布防期间持有租约，每取得一帧就把该帧的图像和帧号交给同一轮运行。停止入口先关闭新轮准入，再取消等待，等待读取与设备关闭后归还租约。重连需重新布防，取得新的订阅身份。MVS 适配器在归还 SDK 缓冲前复制像素，SDK 类型只在 infrastructure 内部使用。通信适配器留待 S6.11。[相机接口](../include/visionpro/infrastructure/camera.hpp) · [触发流](../source/infrastructure/camera_trigger.cpp)
+S6.10 的 `CameraLease` 按适配器和序列号独占物理设备，资源别名也共用该限制。采集节点在工作线程取得一帧并关闭；流程触发入口在布防期间持有租约，每取得一帧就把该帧的图像和帧号交给同一轮运行。停止入口先关闭新轮准入，再取消等待，等待读取与设备关闭后归还租约。重连需重新布防，取得新的订阅身份。MVS 适配器在归还 SDK 缓冲前复制像素，SDK 类型只在 infrastructure 内部使用。[相机接口](../include/visionpro/infrastructure/camera.hpp) · [触发流](../source/infrastructure/camera_trigger.cpp)
+
+S6.11 在资源提供方内按资源 ID 保存 `CommunicationLease`。加载和预检只校验端点配置，首次显式 I/O 在工作线程连接，后续节点可以沿同一连接继续读取。租约将单次操作串行化，等待访问、连接、收发共用一个单调时钟截止时间。断流或响应损坏时关闭该连接并丢弃残帧，下次显式操作重新建立连接。Modbus 读写在同一次操作内核对事务及响应。通用 TCP 的发送和接收是分开的节点，需要由调用方案安排顺序或在载荷中携带工件键。资源提供方和运行释放引用后关闭套接字。[端点接口](../include/visionpro/infrastructure/communication.hpp) · [套接字与协议实现](../source/infrastructure/communication.cpp)
 
 资源目录区分托管版本、外部文件、目录/图像序列、设备逻辑引用和输出路径/命名。
 固定模板/标定版本随计划锁定；动态输入在采集时读取并追溯实际来源。

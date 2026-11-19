@@ -18,6 +18,22 @@ target_link_libraries(visionpro_camera_stream_tests PRIVATE visionpro_app_tools 
 add_test(NAME app.camera_stream_lifecycle COMMAND visionpro_camera_stream_tests)
 set_tests_properties(app.cli_camera app.camera_stream_lifecycle PROPERTIES TIMEOUT 45)
 
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+    foreach(protocol IN ITEMS tcp plc)
+        add_test(NAME app.cli_${protocol}_communication COMMAND "${Python3_EXECUTABLE}" -B
+            "${CMAKE_CURRENT_SOURCE_DIR}/communication_cli_tests.py" ${protocol}
+            $<TARGET_FILE:visionpro_cli> "${PROJECT_SOURCE_DIR}/samples/s6-communication/solution.json")
+        set_tests_properties(app.cli_${protocol}_communication PROPERTIES TIMEOUT 60)
+        if(VISIONPRO_WITH_OPENCV)
+            set_property(TEST app.cli_${protocol}_communication APPEND PROPERTY
+                ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:opencv_core>")
+        endif()
+    endforeach()
+else()
+    message(STATUS "S6.11 loopback CLI tests require a Python 3 interpreter")
+endif()
+
 add_executable(visionpro_shared_package_tests shared_package_tests.cpp)
 target_compile_definitions(visionpro_shared_package_tests PRIVATE VISIONPRO_SHARED_DIRECTORY="${PROJECT_SOURCE_DIR}/samples/s6-shared")
 target_link_libraries(visionpro_shared_package_tests PRIVATE visionpro_app_tools visionpro_infrastructure visionpro_build_options)

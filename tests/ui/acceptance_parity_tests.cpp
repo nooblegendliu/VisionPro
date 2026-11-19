@@ -10,6 +10,7 @@
 #include <visionpro/core/shared_data.hpp>
 #include <visionpro/infrastructure/subgraph_package.hpp>
 #include <visionpro/infrastructure/camera.hpp>
+#include <visionpro/infrastructure/communication.hpp>
 
 #include <QAction>
 #include <QApplication>
@@ -23,6 +24,7 @@
 #include <QLineEdit>
 #include <QLabel>
 #include <QProcess>
+#include <QPlainTextEdit>
 #include <QPushButton>
 #include <QScopeGuard>
 #include <QSpinBox>
@@ -30,6 +32,7 @@
 #include <QTemporaryDir>
 #include <QTest>
 #include <QTimer>
+#include <QTreeWidget>
 
 #include <algorithm>
 #include <charconv>
@@ -37,6 +40,7 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <ranges>
 #include <set>
 #include <span>
 #include <stdexcept>
@@ -472,6 +476,8 @@ private Q_SLOTS:
     void reproduces_saved_workpiece_inspection();
     void configures_and_acquires_saved_camera();
     void configures_and_arms_saved_camera();
+    void reproduces_saved_communication_data();
+    void reproduces_saved_communication();
 };
 
 namespace {
@@ -889,6 +895,232 @@ void AcceptanceParityTests::configures_and_arms_saved_camera()
             check_camera_frame(event.at("result"), flow.entries.front(), device, number);
         }
     } catch (const std::exception& failure) { QFAIL(failure.what()); }
+}
+
+void AcceptanceParityTests::reproduces_saved_communication_data()
+{
+    QTest::addColumn<bool>("plc");
+    QTest::newRow("tcp") << false;
+    QTest::newRow("modbus") << true;
+}
+
+#ifdef VISIONPRO_TEST_PYTHON
+namespace {
+struct LoopbackPeer {
+    QProcess process;
+    int port;
+
+    explicit LoopbackPeer(bool plc)
+    {
+        QStringList arguments{QStringLiteral("-u"), QStringLiteral("-B"), QStringLiteral(VISIONPRO_TEST_PEER),
+            QStringLiteral("--protocol"), plc ? QStringLiteral("modbus") : QStringLiteral("tcp")};
+        if (plc) {
+            arguments << QStringLiteral("--fault") << QStringLiteral("unknown-exception")
+                      << QStringLiteral("--fault") << QStringLiteral("lost-ack");
+        }
+        process.start(QStringLiteral(VISIONPRO_TEST_PYTHON), arguments);
+        require(process.waitForStarted(5000), "Could not launch the loopback peer: " + process.errorString().toStdString());
+        require(process.canReadLine() || process.waitForReadyRead(5000), "The loopback peer did not announce a port.");
+        bool valid{};
+        port = process.readLine().trimmed().toInt(&valid);
+        require(valid && port > 0 && port <= 65535, "Invalid loopback peer port.");
+    }
+    ~LoopbackPeer() { process.kill(); process.waitForFinished(3000); }
+};
+
+void select_node_properties(EditorWindow& window, const Node& node)
+{
+    require(scene(window).reveal_node(node.id), "Could not select the communication node.");
+    require(QTest::qWaitFor([&] {
+        auto* name = inspector_button(window, "renameNode", {});
+        return name && name->toolTip() == QString::fromStdString(node.name);
+    }, 3000), "The selected node's inspector did not open.");
+}
+
+void select_result(EditorWindow& window, const Node& node)
+{
+    auto* tree = window.findChild<QTreeWidget*>(QStringLiteral("runNodes"));
+    require(tree && QTest::qWaitFor([&] {
+        for (int row = 0; row < tree->topLevelItemCount(); ++row) {
+            auto* item = tree->topLevelItem(row);
+            if (item->toolTip(0) == QString::fromStdString(node.id.to_string())) { tree->setCurrentItem(item); return true; }
+        }
+        return false;
+    }, 3000), "Could not select the node in Run and Results.");
+}
+}
+#endif
+
+void AcceptanceParityTests::reproduces_saved_communication()
+{
+#ifndef VISIONPRO_TEST_PYTHON
+    QSKIP("This loopback acceptance test needs Python 3.");
+#else
+    QFETCH(bool, plc);
+    try {
+        QTemporaryDir scratch;
+        QVERIFY(scratch.isValid());
+        LoopbackPeer peer(plc);
+        const auto sample = fs::path(VISIONPRO_S611_DIRECTORY);
+        const auto saved = fs::path(scratch.path().toStdU16String()) / "edited communication";
+        const auto registry = take(app::make_tool_registry());
+        const auto document = take(load_solution(sample, registry));
+        const auto& flow = document.solution().workflows.at(plc ? 1 : 0);
+        const auto& sender = flow.nodes.front();
+        const auto title = plc ? QStringLiteral("桌面测试寄存器") : QStringLiteral("桌面二进制收发");
+        EditorWindow window(document.solution(), registry);
+        window.show();
+        window.open_document(sample);
+        wait_for_file(window);
+        QVERIFY(scene(window).select_workflow(flow.id));
+        select_node_properties(window, sender);
+        // TCP creates a new resource and both receives select it. PLC edits its shared endpoint in place.
+        drive_dialog(window, plc ? "editEndpoint" : "newEndpoint", {}, {[&](QDialog& dialog) -> QPushButton* {
+            auto* name = dialog.findChild<QLineEdit*>(QStringLiteral("endpointName"));
+            auto* host = dialog.findChild<QLineEdit*>(QStringLiteral("endpointHost"));
+            auto* port = dialog.findChild<QSpinBox*>(QStringLiteral("endpointPort"));
+            auto* unit = dialog.findChild<QSpinBox*>(QStringLiteral("endpointUnit"));
+            if (!name || !host || !port || !unit || unit->isVisible() != plc) { return nullptr; }
+            name->setText(title);
+            host->setText(QStringLiteral("127.0.0.256"));
+            port->setValue(peer.port);
+            if (plc) { unit->setValue(7); }
+            return ok_button(dialog);
+        }, [](QDialog& dialog) -> QPushButton* {
+            auto* warning = dialog.findChild<QLabel*>(QStringLiteral("endpointError"));
+            if (!warning || !warning->isVisible()) { return nullptr; }
+            dialog.findChild<QLineEdit*>(QStringLiteral("endpointHost"))->setText(QStringLiteral("127.0.0.1"));
+            return ok_button(dialog);
+        }});
+        const auto bound = find_node(*find_workflow(window.draft(), flow.id), sender.id)->resources.front().resource.id;
+        QVERIFY((bound == sender.resources.front().resource.id) == plc);
+        if (!plc) {
+            for (const auto& receiver : flow.nodes | std::views::drop(1)) {
+                select_node_properties(window, receiver);
+                drive_dialog(window, "selectNodeResource", {}, {[&](QDialog& dialog) -> QPushButton* {
+                    auto* choices = dialog.findChild<QComboBox*>(QStringLiteral("choice"));
+                    if (!choices || choices->findText(QStringLiteral("PLC"), Qt::MatchContains) >= 0) { return nullptr; }
+                    const auto index = choices->findText(title, Qt::MatchContains);
+                    if (index < 0) { return nullptr; }
+                    choices->setCurrentIndex(index);
+                    return ok_button(dialog);
+                }});
+            }
+            // Exercise the public Binary run input independently of a persisted literal.
+            QTimer::singleShot(0, [] {
+                auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+                if (!dialog) { return; }
+                auto* mode = dialog->findChild<QComboBox*>(QStringLiteral("runInputMode.packet"));
+                auto* value = dialog->findChild<QPlainTextEdit*>(QStringLiteral("runInputValue.packet"));
+                if (!mode || !value) { dialog->reject(); return; }
+                mode->setCurrentIndex(1);
+                value->setPlainText(QStringLiteral("43 00 ff"));
+                ok_button(*dialog)->click();
+            });
+            const auto supplied = complete_editor_run(window, "runWorkflow");
+            const auto& echoed = output(named(supplied.at("nodes"), "id", flow.nodes.at(1).id.to_string()), "payload");
+            QVERIFY(echoed.at("hex") == "4300ff" && echoed.at("size") == 3);
+            select_node_properties(window, sender);
+            drive_dialog(window, "editBinding", QStringLiteral("payload"), {set_source, source_kind(QStringLiteral("Constant")),
+                [](QDialog& dialog) -> QPushButton* {
+                    auto* hex = dialog.findChild<QPlainTextEdit*>(QStringLiteral("binaryHexEditor"));
+                    if (!hex) { return nullptr; }
+                    hex->setPlainText(QStringLiteral("4g"));
+                    return ok_button(dialog);
+                }, [](QDialog& dialog) -> QPushButton* {
+                    auto* error = dialog.findChild<QLabel*>(QStringLiteral("binaryHexError"));
+                    if (!error || !error->isVisible()) { return nullptr; }
+                    dialog.findChild<QPlainTextEdit*>(QStringLiteral("binaryHexEditor"))->setPlainText(QStringLiteral("41 00\n42"));
+                    return ok_button(dialog);
+                }, accept_binding});
+        }
+        window.transfer_document(saved, SolutionTransfer::SaveAs);
+        wait_for_file(window);
+        window.open_document(saved);
+        wait_for_file(window);
+        QVERIFY(scene(window).select_workflow(flow.id));
+        const auto& catalog = window.draft().resources;
+        const auto entry = std::ranges::find(catalog, bound, &ResourceDefinition::id);
+        QVERIFY(entry != catalog.end());
+        QCOMPARE(QString::fromStdString(entry->name), title);
+        const auto config = take(communication_endpoint(*entry));
+        QCOMPARE(config.host, "127.0.0.1");
+        QCOMPARE(config.port, peer.port);
+        if (plc) { QCOMPARE(config.unit, 7); }
+        for (const auto& node : find_workflow(window.draft(), flow.id)->nodes) { QCOMPARE(node.resources.front().resource.id, bound); }
+        auto* details = window.findChild<QPlainTextEdit*>(QStringLiteral("runDetails"));
+        QVERIFY(details);
+        if (plc) {
+            const auto failed = complete_editor_run(window, "runWorkflow");
+            QVERIFY(failed.at("status") == "Failed");
+            select_result(window, sender);
+            QTRY_VERIFY(details->toPlainText().contains(QStringLiteral("modbus.exception"))
+                && details->toPlainText().contains(QStringLiteral("code 66 (unmapped)")));
+
+            const auto lost = complete_editor_run(window, "runWorkflow");
+            QVERIFY(lost.at("status") == "Failed" && lost.at("quiescent") == true);
+            const auto& write = named(lost.at("nodes"), "id", sender.id.to_string());
+            QVERIFY(write.at("attempts").size() == 1 && named(write.at("outputs"), "id", "confirmed").at("status") == "NotProduced");
+            const auto& uncertain = named(write.at("diagnostics"), "code", "ExternalEffectUnknown");
+            const auto& operation = uncertain.at("operation_key");
+            QVERIFY(operation.at("session") == lost.at("session") && operation.at("run") == lost.at("run")
+                && operation.at("node") == write.at("id") && operation.at("scope") == write.at("scope")
+                && operation.at("invocation") == write.at("invocation"));
+            QVERIFY(uncertain.at("external").at("provider_domain") == "winsock.status" && uncertain.at("external").at("raw_code") == "0");
+            const auto part = [&](const char* key) { return QString::fromStdString(operation.at(key).get<std::string>()); };
+            const auto displayed_key = QStringLiteral("operation · Session %1 · Run %2 · Node %3 · Scope %4 · Invocation %5")
+                .arg(part("session"), part("run"), part("node"), part("scope"), part("invocation"));
+            select_result(window, sender);
+            QTRY_VERIFY(details->toPlainText().contains(QStringLiteral("ExternalEffectUnknown"))
+                && details->toPlainText().contains(QStringLiteral("winsock.status · code 0 (mapped)"))
+                && details->toPlainText().contains(QStringLiteral("confirmed = Not produced"))
+                && details->toPlainText().contains(displayed_key));
+
+            const auto verification = uuid<WorkflowId>("5ca4f87a-ea1e-4d62-89b0-000000061140");
+            const auto* read_only = find_workflow(window.draft(), verification);
+            QVERIFY(read_only && read_only->nodes.size() == 1 && scene(window).select_workflow(verification));
+            const auto& reader = read_only->nodes.front();
+            QVERIFY(std::get<ToolConfiguration>(reader.configuration).type.text() == "visionpro.plc.read");
+            const auto readback = complete_editor_run(window, "runWorkflow");
+            QVERIFY(readback.at("status") == "Succeeded"
+                && output(named(readback.at("nodes"), "id", reader.id.to_string()), "value") == "4660");
+            select_result(window, reader);
+            QTRY_VERIFY(details->toPlainText().contains(QStringLiteral("value = 4660")));
+            QVERIFY(scene(window).select_workflow(flow.id));
+        }
+        const auto desktop = complete_editor_run(window, "runWorkflow", {}, !plc);
+        const auto cli = run_cli(saved, flow.id);
+        for (const auto* report : {&desktop, &cli}) {
+            QVERIFY(report->at("quiescent") == true && report->at("status") == "Succeeded");
+            const auto& first = named(report->at("nodes"), "id", sender.id.to_string());
+            const auto& second = named(report->at("nodes"), "id", flow.nodes.at(1).id.to_string());
+            if (plc) {
+                QVERIFY(output(first, "confirmed") == true && output(second, "value") == "4660");
+            } else {
+                const auto& last = named(report->at("nodes"), "id", flow.nodes.at(2).id.to_string());
+                QVERIFY(output(first, "bytes_sent") == "3" && output(second, "payload") == json({{"hex", "410042"}, {"size", 3}})
+                    && output(last, "payload") == json({{"hex", "4e455854"}, {"size", 4}}));
+            }
+            QVERIFY(!first.at("host_elapsed_ns").is_null() && first.at("adapter_duration") == json({{"unit", "unknown"}, {"value", nullptr}}));
+        }
+        select_result(window, flow.nodes.at(1));
+        QTRY_VERIFY(details->toPlainText().contains(QStringLiteral("Adapter duration: unknown · unit unknown")));
+        if (!plc) {
+            QTRY_VERIFY(details->toPlainText().contains(QStringLiteral("41 00 42")));
+            auto* bytes = window.findChild<QPushButton*>(QStringLiteral("showRunBytes"));
+            QVERIFY(bytes && bytes->isVisible());
+            QString displayed;
+            QTimer::singleShot(0, [&] {
+                auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+                if (!dialog) { return; }
+                if (auto* view = dialog->findChild<QPlainTextEdit*>(QStringLiteral("binaryHexOutput"))) { displayed = view->toPlainText(); }
+                dialog->accept();
+            });
+            bytes->click();
+            QCOMPARE(displayed, QStringLiteral("41 00 42"));
+        }
+    } catch (const std::exception& failure) { QFAIL(failure.what()); }
+#endif
 }
 
 void AcceptanceParityTests::reproduces_saved_calibrated_measurement()

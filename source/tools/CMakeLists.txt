@@ -1,3 +1,7 @@
+add_library(visionpro_communication_tools STATIC communication_tools.cpp communication_tools.hpp)
+target_include_directories(visionpro_communication_tools PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>")
+target_link_libraries(visionpro_communication_tools PUBLIC visionpro_core PRIVATE visionpro_infrastructure visionpro_build_options Threads::Threads)
+
 add_library(visionpro_camera_tools STATIC camera_tools.cpp camera_tools.hpp)
 target_include_directories(visionpro_camera_tools PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>")
 target_link_libraries(visionpro_camera_tools PUBLIC visionpro_core PRIVATE visionpro_infrastructure visionpro_build_options Threads::Threads)

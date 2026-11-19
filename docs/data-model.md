@@ -1492,6 +1492,14 @@ S3.6 通过模拟适配验证各域的成功码、未知原码和分范围耗时
 core 的路径检查为词法校验。S3.7 的 infrastructure 负责文件系统定位、实际摘要验证和只读文件租约。
 目录序列的采集、设备连接和输出写入按各自后续阶段接入。
 
+### 10.1.2 S6.11 通信端点、帧和寄存器
+
+`DeviceResource` 的适配器可为 `visionpro.tcp` 或 `visionpro.modbus.tcp`，配置采用 `visionpro.communication.endpoint` v1。记录按顺序包含 `host: String`（点分十进制 IPv4）、`port: Int64`（1–65535）、`unit: Int64`（0–255，仅进入 Modbus 报文）。节点绑定 `endpoint` 槽并配置 `timeout_ms`（1–60000 ms，默认 1000）。套接字、事务号、未完成的帧均为运行期状态。
+
+`visionpro.tcp.send` 接受 Binary 输入 `payload`，`bytes_sent` 记录交给本地 TCP 栈的有效载荷字节数。`visionpro.tcp.receive` 每次返回一帧的 Binary。线上帧由 4 字节大端无符号长度和 0–65536 字节的载荷组成。`visionpro.text.encode_utf8` 将已格式化的 String 按完整 UTF-8 字节编码，接收和发送的二进制可以含零字节。方案中 Binary 使用十六进制字符串，CLI 摘要提供 `size` 和 `hex`。
+
+`visionpro.plc.read` 和 `visionpro.plc.write` 用零基 `address` 访问一个 UInt16 保持寄存器，地址与值在模型中以 0–65535 的 Int64 表达。FC03 获取值；FC06 仅在收到匹配事务、单元、功能、地址和值的响应后发布 `confirmed=true`。外部效果未知的诊断包括逻辑操作键；已收到的协议异常保留原始异常码。读操作可按配置重试，写、发送与消费式接收均单次执行。[相应功能码规范 §6.3、§6.6](https://www.modbus.org/docs/Modbus_Application_Protocol_V1_1b3.pdf)
+
 ### 10.2 格式与加载
 
 首个存储后端采用目录加 JSON 清单，配置编码与内存布局分开；

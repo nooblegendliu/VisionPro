@@ -41,7 +41,7 @@ private:
     void select_history(int row);
     void refresh_run();
     void refresh_call();
-    void refresh_image_button();
+    void refresh_output_buttons();
     void reset_display();
     void show_details(const QString& text);
     void show_refresh_failure();
@@ -58,6 +58,7 @@ private:
     QLabel* judgement_{};
     QComboBox* outputs_{};
     QPushButton* show_image_{};
+    QPushButton* show_bytes_{};
     QPlainTextEdit* details_{};
 
     std::vector<workflow::RunHandle> runs_;

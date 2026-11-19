@@ -3,6 +3,7 @@
 #include "trigger_command.hpp"
 
 #include <visionpro/core/id_factory.hpp>
+#include <visionpro/core/text.hpp>
 #include <visionpro/core/schema_id_factory.hpp>
 #include <visionpro/infrastructure/solution_file.hpp>
 #include <visionpro/infrastructure/mvs_camera.hpp>
@@ -52,7 +53,7 @@ constexpr auto usage =
 #ifdef VISIONPRO_WITH_OPENCV
     "Image tools include visionpro.image.read_file, visionpro.image.threshold and visionpro.image.blob.\n"
 #endif
-    "Explicit inputs support Bool, Int64, Float64 and String.\n";
+    "Explicit inputs support Bool, Int64, Float64, String and Binary (two hex digits per byte).\n";
 
 std::string utf8(std::wstring_view text)
 {
@@ -159,7 +160,12 @@ DataValue input_value(const InputDescriptor& input, std::string_view text)
     case TypeKind::Int64: return DataValue::integer(number<std::int64_t>(text));
     case TypeKind::Float64: return argument_value(DataValue::real(number<double>(text)));
     case TypeKind::String: return argument_value(DataValue::string(text));
-    default: throw UsageError("Explicit CLI inputs support Bool, Int64, Float64 and String.");
+    case TypeKind::Binary: {
+        auto bytes = decode_hex(text);
+        if (!bytes) { throw UsageError("A Binary input requires two hex digits per byte."); }
+        return DataValue::binary(*bytes);
+    }
+    default: throw UsageError("Explicit CLI inputs support Bool, Int64, Float64, String and Binary.");
     }
 }
 

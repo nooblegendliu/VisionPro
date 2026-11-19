@@ -1,0 +1,964 @@
+{
+  "format": "visionpro.solution",
+  "format_version": 1,
+  "id": "5ca4f87a-ea1e-4d62-89b0-000000061100",
+  "name": "S6.11 TCP 与 Modbus 通信",
+  "revision": "1",
+  "coordinates": [],
+  "resources": [
+    {
+      "id": "5ca4f87a-ea1e-4d62-89b0-000000061101",
+      "name": "二进制 TCP 对端",
+      "kind": "device",
+      "location": {
+        "kind": "device",
+        "adapter": "visionpro.tcp",
+        "configuration": {
+          "type": {
+            "kind": "record",
+            "schema": "visionpro.communication.endpoint",
+            "version": 1,
+            "fields": [
+              {
+                "id": "host",
+                "type": {
+                  "kind": "string"
+                }
+              },
+              {
+                "id": "port",
+                "type": {
+                  "kind": "int64"
+                }
+              },
+              {
+                "id": "unit",
+                "type": {
+                  "kind": "int64"
+                }
+              }
+            ]
+          },
+          "value": [
+            {
+              "id": "host",
+              "value": {
+                "type": {
+                  "kind": "string"
+                },
+                "value": "127.0.0.1"
+              }
+            },
+            {
+              "id": "port",
+              "value": {
+                "type": {
+                  "kind": "int64"
+                },
+                "value": "16111"
+              }
+            },
+            {
+              "id": "unit",
+              "value": {
+                "type": {
+                  "kind": "int64"
+                },
+                "value": "1"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "5ca4f87a-ea1e-4d62-89b0-000000061102",
+      "name": "Modbus 测试 PLC",
+      "kind": "device",
+      "location": {
+        "kind": "device",
+        "adapter": "visionpro.modbus.tcp",
+        "configuration": {
+          "type": {
+            "kind": "record",
+            "schema": "visionpro.communication.endpoint",
+            "version": 1,
+            "fields": [
+              {
+                "id": "host",
+                "type": {
+                  "kind": "string"
+                }
+              },
+              {
+                "id": "port",
+                "type": {
+                  "kind": "int64"
+                }
+              },
+              {
+                "id": "unit",
+                "type": {
+                  "kind": "int64"
+                }
+              }
+            ]
+          },
+          "value": [
+            {
+              "id": "host",
+              "value": {
+                "type": {
+                  "kind": "string"
+                },
+                "value": "127.0.0.1"
+              }
+            },
+            {
+              "id": "port",
+              "value": {
+                "type": {
+                  "kind": "int64"
+                },
+                "value": "16112"
+              }
+            },
+            {
+              "id": "unit",
+              "value": {
+                "type": {
+                  "kind": "int64"
+                },
+                "value": "1"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "queues": [],
+  "variables": [],
+  "layouts": [
+    {
+      "workflow": "5ca4f87a-ea1e-4d62-89b0-000000061110",
+      "nodes": [
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000061111",
+          "x": 45,
+          "y": 90
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000061112",
+          "x": 320,
+          "y": 90
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000061113",
+          "x": 595,
+          "y": 90
+        }
+      ]
+    },
+    {
+      "workflow": "5ca4f87a-ea1e-4d62-89b0-000000061120",
+      "nodes": [
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000061121",
+          "x": 45,
+          "y": 90
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000061122",
+          "x": 320,
+          "y": 90
+        }
+      ]
+    },
+    {
+      "workflow": "5ca4f87a-ea1e-4d62-89b0-000000061130",
+      "nodes": [
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000061131",
+          "x": 45,
+          "y": 90
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000061132",
+          "x": 320,
+          "y": 90
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000061133",
+          "x": 595,
+          "y": 90
+        }
+      ]
+    },
+    {
+      "workflow": "5ca4f87a-ea1e-4d62-89b0-000000061140",
+      "nodes": [
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000061141",
+          "x": 45,
+          "y": 90
+        }
+      ]
+    }
+  ],
+  "workflows": [
+    {
+      "id": "5ca4f87a-ea1e-4d62-89b0-000000061110",
+      "name": "TCP 二进制收发",
+      "enabled": true,
+      "interface": {
+        "id": "s611.sample.tcp",
+        "version": 1,
+        "inputs": [
+          {
+            "id": "packet",
+            "display_name": "packet",
+            "type": {
+              "kind": "binary"
+            },
+            "required": false,
+            "default_value": {
+              "type": {
+                "kind": "binary"
+              },
+              "value": "410042"
+            },
+            "semantics": {
+              "unit": "unspecified",
+              "coordinate_system": null
+            },
+            "binding": {
+              "allowed_conversions": [
+                "exact"
+              ],
+              "allowed_sources": [
+                "constant",
+                "run_output",
+                "public_input"
+              ],
+              "cardinality": "single_source",
+              "time": "before_invocation"
+            },
+            "constraints": {
+              "allowed_values": [],
+              "integer_range": null,
+              "max_length": null,
+              "real_range": null
+            }
+          }
+        ],
+        "outputs": [
+          {
+            "id": "first",
+            "display_name": "first",
+            "type": {
+              "kind": "binary"
+            },
+            "semantics": {
+              "unit": "unspecified",
+              "coordinate_system": null
+            },
+            "required": true,
+            "allowed_absence": []
+          },
+          {
+            "id": "second",
+            "display_name": "second",
+            "type": {
+              "kind": "binary"
+            },
+            "semantics": {
+              "unit": "unspecified",
+              "coordinate_system": null
+            },
+            "required": true,
+            "allowed_absence": []
+          }
+        ],
+        "control_outputs": []
+      },
+      "nodes": [
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000061111",
+          "name": "发送二进制帧",
+          "configuration": {
+            "kind": "tool",
+            "type": "visionpro.tcp.send",
+            "config_version": 1
+          },
+          "bindings": [
+            {
+              "target": {
+                "kind": "input",
+                "id": "payload"
+              },
+              "sources": [
+                {
+                  "kind": "public_input",
+                  "value": {
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000061110",
+                    "group": null,
+                    "input": "packet",
+                    "selector": []
+                  }
+                }
+              ],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "accepted_absence": []
+            }
+          ],
+          "resources": [
+            {
+              "slot": "endpoint",
+              "resource": {
+                "id": "5ca4f87a-ea1e-4d62-89b0-000000061101",
+                "kind": "device",
+                "revision": null
+              }
+            }
+          ],
+          "enabled": true,
+          "join": "all_activated"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000061112",
+          "name": "接收第一帧",
+          "configuration": {
+            "kind": "tool",
+            "type": "visionpro.tcp.receive",
+            "config_version": 1
+          },
+          "bindings": [],
+          "resources": [
+            {
+              "slot": "endpoint",
+              "resource": {
+                "id": "5ca4f87a-ea1e-4d62-89b0-000000061101",
+                "kind": "device",
+                "revision": null
+              }
+            }
+          ],
+          "enabled": true,
+          "join": "all_activated"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000061113",
+          "name": "接收第二帧",
+          "configuration": {
+            "kind": "tool",
+            "type": "visionpro.tcp.receive",
+            "config_version": 1
+          },
+          "bindings": [],
+          "resources": [
+            {
+              "slot": "endpoint",
+              "resource": {
+                "id": "5ca4f87a-ea1e-4d62-89b0-000000061101",
+                "kind": "device",
+                "revision": null
+              }
+            }
+          ],
+          "enabled": true,
+          "join": "all_activated"
+        }
+      ],
+      "entries": [
+        "5ca4f87a-ea1e-4d62-89b0-000000061111"
+      ],
+      "control_links": [
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000061116",
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000061111",
+          "output": null,
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000061112"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000061117",
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000061112",
+          "output": null,
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000061113"
+        }
+      ],
+      "control_exports": [],
+      "containment": [],
+      "outputs": [
+        {
+          "output": "first",
+          "source": {
+            "node": "5ca4f87a-ea1e-4d62-89b0-000000061112",
+            "workflow": "5ca4f87a-ea1e-4d62-89b0-000000061110",
+            "output": {
+              "kind": "port",
+              "id": "payload"
+            },
+            "selector": []
+          }
+        },
+        {
+          "output": "second",
+          "source": {
+            "node": "5ca4f87a-ea1e-4d62-89b0-000000061113",
+            "workflow": "5ca4f87a-ea1e-4d62-89b0-000000061110",
+            "output": {
+              "kind": "port",
+              "id": "payload"
+            },
+            "selector": []
+          }
+        }
+      ]
+    },
+    {
+      "id": "5ca4f87a-ea1e-4d62-89b0-000000061120",
+      "name": "Modbus 保持寄存器写入与读回",
+      "enabled": true,
+      "interface": {
+        "id": "s611.sample.plc",
+        "version": 1,
+        "inputs": [],
+        "outputs": [
+          {
+            "id": "confirmed",
+            "display_name": "confirmed",
+            "type": {
+              "kind": "bool"
+            },
+            "semantics": {
+              "unit": "unspecified",
+              "coordinate_system": null
+            },
+            "required": true,
+            "allowed_absence": []
+          },
+          {
+            "id": "value",
+            "display_name": "value",
+            "type": {
+              "kind": "int64"
+            },
+            "semantics": {
+              "unit": "unspecified",
+              "coordinate_system": null
+            },
+            "required": true,
+            "allowed_absence": []
+          }
+        ],
+        "control_outputs": []
+      },
+      "nodes": [
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000061121",
+          "name": "写入寄存器 16",
+          "configuration": {
+            "kind": "tool",
+            "type": "visionpro.plc.write",
+            "config_version": 1
+          },
+          "bindings": [
+            {
+              "target": {
+                "kind": "parameter",
+                "id": "address"
+              },
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "16"
+                  }
+                }
+              ],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "accepted_absence": []
+            },
+            {
+              "target": {
+                "kind": "input",
+                "id": "value"
+              },
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "4660"
+                  }
+                }
+              ],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "accepted_absence": []
+            }
+          ],
+          "resources": [
+            {
+              "slot": "endpoint",
+              "resource": {
+                "id": "5ca4f87a-ea1e-4d62-89b0-000000061102",
+                "kind": "device",
+                "revision": null
+              }
+            }
+          ],
+          "enabled": true,
+          "join": "all_activated"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000061122",
+          "name": "读回寄存器 16",
+          "configuration": {
+            "kind": "tool",
+            "type": "visionpro.plc.read",
+            "config_version": 1
+          },
+          "bindings": [
+            {
+              "target": {
+                "kind": "parameter",
+                "id": "address"
+              },
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "16"
+                  }
+                }
+              ],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "accepted_absence": []
+            }
+          ],
+          "resources": [
+            {
+              "slot": "endpoint",
+              "resource": {
+                "id": "5ca4f87a-ea1e-4d62-89b0-000000061102",
+                "kind": "device",
+                "revision": null
+              }
+            }
+          ],
+          "enabled": true,
+          "join": "all_activated"
+        }
+      ],
+      "entries": [
+        "5ca4f87a-ea1e-4d62-89b0-000000061121"
+      ],
+      "control_links": [
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000061126",
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000061121",
+          "output": null,
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000061122"
+        }
+      ],
+      "control_exports": [],
+      "containment": [],
+      "outputs": [
+        {
+          "output": "confirmed",
+          "source": {
+            "node": "5ca4f87a-ea1e-4d62-89b0-000000061121",
+            "workflow": "5ca4f87a-ea1e-4d62-89b0-000000061120",
+            "output": {
+              "kind": "port",
+              "id": "confirmed"
+            },
+            "selector": []
+          }
+        },
+        {
+          "output": "value",
+          "source": {
+            "node": "5ca4f87a-ea1e-4d62-89b0-000000061122",
+            "workflow": "5ca4f87a-ea1e-4d62-89b0-000000061120",
+            "output": {
+              "kind": "port",
+              "id": "value"
+            },
+            "selector": []
+          }
+        }
+      ]
+    },
+    {
+      "id": "5ca4f87a-ea1e-4d62-89b0-000000061130",
+      "name": "按工件号格式化并发送",
+      "enabled": true,
+      "interface": {
+        "id": "s611.sample.workpiece",
+        "version": 1,
+        "inputs": [
+          {
+            "id": "part",
+            "display_name": "part",
+            "type": {
+              "kind": "int64"
+            },
+            "required": true,
+            "default_value": null,
+            "semantics": {
+              "unit": "unspecified",
+              "coordinate_system": null
+            },
+            "binding": {
+              "allowed_conversions": [
+                "exact"
+              ],
+              "allowed_sources": [
+                "constant",
+                "run_output",
+                "public_input"
+              ],
+              "cardinality": "single_source",
+              "time": "before_invocation"
+            },
+            "constraints": {
+              "allowed_values": [],
+              "integer_range": null,
+              "max_length": null,
+              "real_range": null
+            }
+          }
+        ],
+        "outputs": [
+          {
+            "id": "text",
+            "display_name": "text",
+            "type": {
+              "kind": "string"
+            },
+            "semantics": {
+              "unit": "unspecified",
+              "coordinate_system": null
+            },
+            "required": true,
+            "allowed_absence": []
+          },
+          {
+            "id": "bytes_sent",
+            "display_name": "bytes_sent",
+            "type": {
+              "kind": "int64"
+            },
+            "semantics": {
+              "unit": "unspecified",
+              "coordinate_system": null
+            },
+            "required": true,
+            "allowed_absence": []
+          }
+        ],
+        "control_outputs": []
+      },
+      "nodes": [
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000061131",
+          "name": "格式化工件号",
+          "configuration": {
+            "kind": "tool",
+            "type": "visionpro.format.int64_list",
+            "config_version": 1
+          },
+          "bindings": [
+            {
+              "target": {
+                "kind": "input",
+                "id": "values"
+              },
+              "sources": [
+                {
+                  "kind": "public_input",
+                  "value": {
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000061130",
+                    "group": null,
+                    "input": "part",
+                    "selector": []
+                  }
+                }
+              ],
+              "cardinality": "multiple_sources",
+              "conversion": "exact",
+              "accepted_absence": []
+            },
+            {
+              "target": {
+                "kind": "parameter",
+                "id": "format"
+              },
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "string"
+                    },
+                    "value": "工件={value}"
+                  }
+                }
+              ],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "accepted_absence": []
+            }
+          ],
+          "resources": [],
+          "enabled": true,
+          "join": "all_activated"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000061132",
+          "name": "编码为 UTF-8",
+          "configuration": {
+            "kind": "tool",
+            "type": "visionpro.text.encode_utf8",
+            "config_version": 1
+          },
+          "bindings": [
+            {
+              "target": {
+                "kind": "input",
+                "id": "text"
+              },
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000061131",
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000061130",
+                    "output": {
+                      "kind": "port",
+                      "id": "text"
+                    },
+                    "selector": []
+                  }
+                }
+              ],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "accepted_absence": []
+            }
+          ],
+          "resources": [],
+          "enabled": true,
+          "join": "all_activated"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000061133",
+          "name": "发送工件消息",
+          "configuration": {
+            "kind": "tool",
+            "type": "visionpro.tcp.send",
+            "config_version": 1
+          },
+          "bindings": [
+            {
+              "target": {
+                "kind": "input",
+                "id": "payload"
+              },
+              "sources": [
+                {
+                  "kind": "run_output",
+                  "value": {
+                    "node": "5ca4f87a-ea1e-4d62-89b0-000000061132",
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000061130",
+                    "output": {
+                      "kind": "port",
+                      "id": "payload"
+                    },
+                    "selector": []
+                  }
+                }
+              ],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "accepted_absence": []
+            }
+          ],
+          "resources": [
+            {
+              "slot": "endpoint",
+              "resource": {
+                "id": "5ca4f87a-ea1e-4d62-89b0-000000061101",
+                "kind": "device",
+                "revision": null
+              }
+            }
+          ],
+          "enabled": true,
+          "join": "all_activated"
+        }
+      ],
+      "entries": [
+        "5ca4f87a-ea1e-4d62-89b0-000000061131"
+      ],
+      "control_links": [
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000061136",
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000061131",
+          "output": null,
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000061132"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000061137",
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000061132",
+          "output": null,
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000061133"
+        }
+      ],
+      "control_exports": [],
+      "containment": [],
+      "outputs": [
+        {
+          "output": "text",
+          "source": {
+            "node": "5ca4f87a-ea1e-4d62-89b0-000000061131",
+            "workflow": "5ca4f87a-ea1e-4d62-89b0-000000061130",
+            "output": {
+              "kind": "port",
+              "id": "text"
+            },
+            "selector": []
+          }
+        },
+        {
+          "output": "bytes_sent",
+          "source": {
+            "node": "5ca4f87a-ea1e-4d62-89b0-000000061133",
+            "workflow": "5ca4f87a-ea1e-4d62-89b0-000000061130",
+            "output": {
+              "kind": "port",
+              "id": "bytes_sent"
+            },
+            "selector": []
+          }
+        }
+      ],
+      "trigger": {
+        "mode": "external",
+        "source": "s611.workpiece",
+        "frame_input": "part",
+        "interval_ms": 0
+      },
+      "admission": {
+        "max_in_flight": 1,
+        "queue_capacity": 4,
+        "overflow": "reject"
+      }
+    },
+    {
+      "id": "5ca4f87a-ea1e-4d62-89b0-000000061140",
+      "name": "仅读取测试寄存器",
+      "enabled": true,
+      "interface": {
+        "id": "s611.sample.readback",
+        "version": 1,
+        "inputs": [],
+        "outputs": [
+          {
+            "id": "value",
+            "display_name": "value",
+            "type": {
+              "kind": "int64"
+            },
+            "semantics": {
+              "unit": "unspecified",
+              "coordinate_system": null
+            },
+            "required": true,
+            "allowed_absence": []
+          }
+        ],
+        "control_outputs": []
+      },
+      "nodes": [
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000061141",
+          "name": "读回寄存器 16",
+          "configuration": {
+            "kind": "tool",
+            "type": "visionpro.plc.read",
+            "config_version": 1
+          },
+          "bindings": [
+            {
+              "target": {
+                "kind": "parameter",
+                "id": "address"
+              },
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "16"
+                  }
+                }
+              ],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "accepted_absence": []
+            }
+          ],
+          "resources": [
+            {
+              "slot": "endpoint",
+              "resource": {
+                "id": "5ca4f87a-ea1e-4d62-89b0-000000061102",
+                "kind": "device",
+                "revision": null
+              }
+            }
+          ],
+          "enabled": true,
+          "join": "all_activated"
+        }
+      ],
+      "entries": [
+        "5ca4f87a-ea1e-4d62-89b0-000000061141"
+      ],
+      "control_links": [],
+      "control_exports": [],
+      "containment": [],
+      "outputs": [
+        {
+          "output": "value",
+          "source": {
+            "node": "5ca4f87a-ea1e-4d62-89b0-000000061141",
+            "workflow": "5ca4f87a-ea1e-4d62-89b0-000000061140",
+            "output": {
+              "kind": "port",
+              "id": "value"
+            },
+            "selector": []
+          }
+        }
+      ]
+    }
+  ]
+}

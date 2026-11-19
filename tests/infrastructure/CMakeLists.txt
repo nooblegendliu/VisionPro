@@ -1,3 +1,9 @@
+add_executable(visionpro_communication_lease_tests communication_tests.cpp)
+target_compile_definitions(visionpro_communication_lease_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_link_libraries(visionpro_communication_lease_tests PRIVATE visionpro_infrastructure visionpro_build_options Threads::Threads ws2_32)
+add_test(NAME infrastructure.communication_lease COMMAND visionpro_communication_lease_tests)
+set_tests_properties(infrastructure.communication_lease PROPERTIES TIMEOUT 15)
+
 add_executable(visionpro_camera_tests camera_tests.cpp)
 target_link_libraries(visionpro_camera_tests PRIVATE visionpro_infrastructure visionpro_camera_tools visionpro_build_options Threads::Threads)
 add_test(NAME infrastructure.camera_lease COMMAND visionpro_camera_tests lease)

@@ -2,6 +2,7 @@
 
 #include "geometry_codec.hpp"
 #include "resource_codec.hpp"
+#include <visionpro/core/text.hpp>
 
 #include <stdexcept>
 
@@ -49,38 +50,11 @@ ConfigFieldValue decode_field_value(const Reader& reader)
     return {read_id<FieldId>(reader.field("id")), decode_value(reader.field("value"))};
 }
 
-std::string encode_binary(const std::vector<std::uint8_t>& bytes)
-{
-    constexpr std::string_view digits = "0123456789abcdef";
-    std::string hex;
-    hex.reserve(bytes.size() * 2);
-    for (const auto byte : bytes) {
-        hex.push_back(digits[byte >> 4]);
-        hex.push_back(digits[byte & 0x0f]);
-    }
-    return hex;
-}
-
-std::uint8_t hex_digit(char character, const Reader& reader)
-{
-    if (character >= '0' && character <= '9') { return static_cast<std::uint8_t>(character - '0'); }
-    if (character >= 'a' && character <= 'f') { return static_cast<std::uint8_t>(character - 'a' + 10); }
-    if (character >= 'A' && character <= 'F') { return static_cast<std::uint8_t>(character - 'A' + 10); }
-    reader.fail(ErrorCode::InvalidValue, "Binary requires hexadecimal digits.");
-}
-
 std::vector<std::uint8_t> decode_binary(const Reader& reader)
 {
-    const auto text = reader.text();
-    if (text.size() % 2 != 0) { reader.fail(ErrorCode::InvalidValue, "Binary requires two hexadecimal digits per byte."); }
-    std::vector<std::uint8_t> bytes;
-    bytes.reserve(text.size() / 2);
-    for (std::size_t index = 0; index < text.size(); index += 2) {
-        const auto high = hex_digit(text[index], reader);
-        const auto low = hex_digit(text[index + 1], reader);
-        bytes.push_back(static_cast<std::uint8_t>((high << 4) | low));
-    }
-    return bytes;
+    auto bytes = decode_hex(reader.text());
+    if (!bytes) { reader.fail(ErrorCode::InvalidValue, "Binary requires two hexadecimal digits per byte."); }
+    return std::move(*bytes);
 }
 
 Json encode_payload(const ConfigValue& value)
@@ -90,7 +64,7 @@ Json encode_payload(const ConfigValue& value)
     case TypeKind::Int64: return std::to_string(*value.as_int64());
     case TypeKind::Float64: return *value.as_float64();
     case TypeKind::String: return *value.as_string();
-    case TypeKind::Binary: return encode_binary(*value.as_binary());
+    case TypeKind::Binary: return encode_hex(*value.as_binary());
     case TypeKind::Enum: return write_id(*value.as_enum());
     case TypeKind::Record: return write_array(*value.fields(), encode_field_value);
     case TypeKind::List: return write_array(*value.elements(), encode_value);

@@ -1,6 +1,7 @@
 #include "windows_path.hpp"
 #include <visionpro/infrastructure/file_resources.hpp>
 #include <visionpro/infrastructure/camera.hpp>
+#include <visionpro/infrastructure/communication.hpp>
 #include <visionpro/workflow/execution_plan.hpp>
 
 #include "managed_cleanup.hpp"
@@ -476,6 +477,7 @@ Check probe(const ResourceDefinition& resource, const ResourcePaths& paths)
 struct Entry {
     ResourceDefinition definition;
     std::optional<Result<FileContents>> locked;
+    std::optional<Result<std::shared_ptr<CommunicationLease>>> communication{};
 };
 
 using ResourceEntries = std::map<ResourceId, Entry>;
@@ -511,6 +513,10 @@ Check verify_selected_resource(const ResourceReference& ref, const Solution& sna
         const auto* now = std::get_if<DeviceResource>(&current->location);
         if (!before || !now || before->adapter != now->adapter || before->configuration != now->configuration) {
             return error(ErrorCode::ResourceVersionMismatch, "Device configuration differs from the captured snapshot.");
+        }
+        if (entry.communication) {
+            if (const auto* failure = std::get_if<Diagnostic>(&*entry.communication)) { return *failure; }
+            return std::monostate{};
         }
         auto serial = camera_serial(*current);
         if (const auto* failure = std::get_if<Diagnostic>(&serial)) { return *failure; }
@@ -856,6 +862,12 @@ Result<std::shared_ptr<FileResourceProvider>> FileResourceProvider::create(const
         };
         for (const auto& resource : solution.resources) {
             auto& entry = storage->entries.emplace(resource.id, Entry{resource, {}}).first->second;
+            const auto* device = std::get_if<DeviceResource>(&resource.location);
+            if (device && is_communication_adapter(device->adapter)) {
+                entry.communication = open_communication(resource);
+                if (const auto* failure = std::get_if<Diagnostic>(&*entry.communication)) { report(*failure, resource.id); }
+                continue;
+            }
             const auto file = file_declaration(resource);
             if (file && file->locked) {
                 entry.locked = read_file(*file, storage->paths);
@@ -946,6 +958,10 @@ Result<std::shared_ptr<const ResourceLease>> FileResourceProvider::acquire(
         if (const auto* invalid = std::get_if<Diagnostic>(&found)) { return fail(*invalid); }
         const auto& entry = *std::get<const Entry*>(found);
         if (binding.resource.kind == ResourceKind::Device) {
+            if (entry.communication) {
+                if (const auto* failure = std::get_if<Diagnostic>(&*entry.communication)) { return fail(*failure); }
+                return std::shared_ptr<const ResourceLease>(std::get<std::shared_ptr<CommunicationLease>>(*entry.communication));
+            }
             auto camera = open_camera(entry.definition);
             if (auto* failure = std::get_if<Diagnostic>(&camera)) { return fail(std::move(*failure)); }
             return std::shared_ptr<const ResourceLease>(std::get<std::shared_ptr<CameraLease>>(std::move(camera)));

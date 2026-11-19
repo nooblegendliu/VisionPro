@@ -1,4 +1,5 @@
 #include "run_inputs.hpp"
+#include "binary_editor.hpp"
 
 #include <QComboBox>
 #include <QDialog>
@@ -47,6 +48,7 @@ QString type_label(TypeKind kind)
     case TypeKind::Int64: return QStringLiteral("Int64");
     case TypeKind::Float64: return QStringLiteral("Float64");
     case TypeKind::String: return QStringLiteral("String");
+    case TypeKind::Binary: return QStringLiteral("Binary");
     case TypeKind::Image: return QStringLiteral("Image");
     default: return {};
     }
@@ -58,6 +60,7 @@ QString default_label(const ConfigValue& value)
     if (const auto* flag = value.as_bool()) { shown = *flag ? QStringLiteral("true") : QStringLiteral("false"); }
     else if (const auto* integer = value.as_int64()) { shown = QString::number(*integer); }
     else if (const auto* real = value.as_float64()) { shown = QString::number(*real, 'g', 17); }
+    else if (const auto* bytes = value.as_binary()) { shown = binary_summary(*bytes); }
     else if (const auto* string = value.as_string()) {
         shown = string->empty() ? QStringLiteral("empty string") : text(*string).simplified();
         if (shown.size() > 48) { shown = shown.left(48) + QStringLiteral("…"); }
@@ -149,8 +152,9 @@ InputControls add_input(QWidget* parent, QFormLayout& form, const workflow::Solu
         field.value = choice;
     } else if (kind == TypeKind::Int64 || kind == TypeKind::Float64) {
         field.value = new QLineEdit(entry);
-    } else if (kind == TypeKind::String) {
+    } else if (kind == TypeKind::String || kind == TypeKind::Binary) {
         auto* string = new QPlainTextEdit(entry);
+        if (kind == TypeKind::Binary) { string->setPlaceholderText(QStringLiteral("Hexadecimal bytes (for example, 41 00 42)")); }
         string->setMaximumHeight(76);
         field.value = string;
     } else {
@@ -229,6 +233,11 @@ Result<DataValue> scalar_input(const InputControls& field)
         auto value = static_cast<QPlainTextEdit*>(field.value)->document()->toRawText();
         value.replace(QChar::ParagraphSeparator, QLatin1Char('\n'));
         return checked_scalar(input, value.toStdString(), ConfigValue::string, DataValue::string);
+    }
+    case TypeKind::Binary: {
+        auto bytes = parse_hex_bytes(static_cast<QPlainTextEdit*>(field.value)->toPlainText());
+        if (const auto* issue = std::get_if<Diagnostic>(&bytes)) { return *issue; }
+        return checked_scalar(input, std::get<std::vector<std::uint8_t>>(std::move(bytes)), ConfigValue::binary, DataValue::binary);
     }
     default:
         return invalid_input("This input type has no scalar editor.");

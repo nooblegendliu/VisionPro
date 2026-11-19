@@ -1,5 +1,6 @@
 #include "run_summary.hpp"
 #include <visionpro/core/class_map.hpp>
+#include <visionpro/core/text.hpp>
 
 #include <algorithm>
 #include <array>
@@ -596,6 +597,7 @@ json data_json(const DataValue& data)
     if (const auto* number = data.as_int64()) { return std::to_string(*number); }
     if (const auto* number = data.as_float64()) { return *number; }
     if (const auto* value = data.as_string()) { return *value; }
+    if (const auto* bytes = data.as_binary()) { return {{"size", bytes->size()}, {"hex", encode_hex(*bytes)}}; }
     if (const auto* member = data.as_enum()) {
         return {{"schema", id_text(*data.type().schema_id())}, {"version", data.type().schema_version()},
             {"member", id_text(*member)}};

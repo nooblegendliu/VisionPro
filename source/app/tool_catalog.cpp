@@ -2,6 +2,7 @@
 
 #include "simulation.hpp"
 #include "camera_tools.hpp"
+#include "communication_tools.hpp"
 #include "list_item.hpp"
 #include "logic_tools.hpp"
 #include "shared_tools.hpp"
@@ -18,6 +19,7 @@ core::Result<core::ToolRegistry> make_tool_registry()
 {
     auto registrations = tools::simulation_registrations();
     for (auto& registration : tools::camera_registrations()) { registrations.push_back(std::move(registration)); }
+    for (auto& registration : tools::communication_registrations()) { registrations.push_back(std::move(registration)); }
     for (auto& registration : tools::logic_registrations()) { registrations.push_back(std::move(registration)); }
     for (auto& registration : tools::shared_registrations()) { registrations.push_back(std::move(registration)); }
     registrations.push_back(tools::list_item_registration("visionpro.list.int64_at", "Integer list item",

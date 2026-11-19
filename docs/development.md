@@ -2536,3 +2536,49 @@ ctest --test-dir $headlessBuild -C Release -R 'camera' --output-on-failure --no-
 ```
 
 现场目前没有工业相机。实机验收需记录型号、序列号、驱动与固件版本，选用设备支持的原生 Mono8 或 BGR8Packed 格式，逐项验证 Single、Continuous、Software 和 Line0 硬触发。记录每种模式的帧号、时间来源、收帧与受理计数、缺帧与拒绝、停止状态，并在拔插重连后核对首帧保留及新订阅的触发次数。
+
+### 10.11 S6.11 TCP 与 Modbus 通信
+
+2026-11-19，Windows x64 Release 全量 CTest 通过。启用 Qt、OpenCV 和 MVS 的构建为 **171/171** 项，关闭三者的无 GUI 构建为 **130/130** 项。TCP 对端和 Modbus TCP 模拟器独立于生产客户端。桌面使用 Qt Widgets offscreen，从属性面板创建或编辑端点、另存并重开，独立 CLI 加载保存后的方案。现场没有实物 PLC。[固定方案](../samples/s6-communication/solution.json) · [测试对端](../tests/app/communication_peer.py) · [独立 CLI 验收](../tests/app/communication_cli_tests.py)
+
+| 场景 | 观测结果 |
+|---|---|
+| TCP 拆包、粘包 | 对端拆开发送第一帧的头和载荷，再把第一帧尾部与完整第二帧一次发送。两次接收分别取到 `41 00 42`、`4e 45 58 54`。桌面还核对了输入 `43 00 ff` 和含零常量。空帧和 65536 字节边界均有覆盖。 |
+| TCP 中途断连 | 对端声明 5 字节，只交付前三个字节就关闭。第一次接收未发布载荷，错误出口上的第二次接收建立新连接并取得 `fresh`。对端只收到一次原始发送请求。 |
+| 按工件发送 | 外部触发工件 41、42。格式化节点和 UTF-8 编码节点将两条带工件号的消息交给 TCP 发送。对端依次只收到一条“工件=41”和一条“工件=42”，CLI 保留每轮关联键。 |
+| 正常 PLC 写读 | 单元 1、零基地址 16，FC06 写入 `0x1234`。请求后六字节为 `01 06 00 10 12 34`，应答逐字节回显。随后 FC03 读取一个保持寄存器，响应 PDU 为 `03 02 12 34`，返回 4660。 |
+| 已写入、应答丢失 | 模拟器先改变寄存器，再关闭连接。写调用只尝试一次，`confirmed` 未产生，`ExternalEffectUnknown` 带逻辑操作键和 Winsock `recv` 原码 0。桌面在运行详情中核对诊断后，切换到只读流程读回 4660。CLI 通过显式错误出口重连并读回 4660，随后独立只读流程得到同一值，模拟器对该场景记录的总写入次数为 1。 |
+| 异常应答与重试 | 异常码 `02` 保留为已知地址错误，未知的 `42` 保留原码并标为未映射。错事务号或错回显不会确认写入。单独丢弃一次读应答时，配置重试的 FC03 再读成功，FC06 次数仍为 1。写节点配置自动重试时，预检报告 `MissingCapability`，对端收到 0 个请求。 |
+
+一次独立 CLI 验收记录到 FC06 请求与应答均为 `000100000006010600101234`，主机调用耗时 24,221,900 ns。FC03 请求为 `000200000006010300100001`，应答为 `0002000000050103021234`。这两种应答均不携带设备处理耗时，报告为 `value=null, unit=unknown`。主机耗时随本机调度和连接状态变化。
+
+按 [§3.28](#328-s55-release-构建与测试) 配置 Release 构建目录。客户端使用 Windows 自带的 Winsock，无 GUI 构建也包含四个通信节点。回环 CLI 和桌面验收使用 Python 3 标准库。CTest 夹具自动选择本机临时端口。
+
+```powershell
+$guiBuild = 'out/build/s67-gui'
+$headlessBuild = 'out/build/s67-headless'
+cmake --build $guiBuild --config Release
+cmake --build $headlessBuild --config Release
+ctest --test-dir $guiBuild -C Release -R 'communication|visionpro_(tcp|plc)_parity' --output-on-failure --no-tests=error
+ctest --test-dir $headlessBuild -C Release -R 'communication' -V --no-tests=error
+```
+
+手工复现时，在两个终端分别运行以下两条命令，保留两个对端进程。它们仅监听本机回环地址。
+
+```powershell
+python -B tests/app/communication_peer.py --protocol tcp --port 16111
+python -B tests/app/communication_peer.py --protocol modbus --port 16112
+```
+
+桌面打开通信样例，在对应流程选择 **Run → Run Workflow**。节点的 **Properties → Resources → Edit device…** 可编辑地址、端口及 Modbus 单元号。TCP 输入可填十六进制，在运行面板中选择接收节点并用 **Show Bytes** 核对原始字节。在第三个终端执行下面的 CLI 命令即可对照。复现丢应答时，可在启动 Modbus 模拟器时附加 `--fault lost-ack`，先运行写读流程，再执行最后一条只读命令。结束后在两个对端终端按 Ctrl+C。
+
+```powershell
+$cli = 'out/build/s67-headless/source/app/visionpro_cli.exe'
+$solution = 'samples/s6-communication/solution.json'
+& $cli run --solution $solution --workflow 5ca4f87a-ea1e-4d62-89b0-000000061110 --input packet=410042
+& $cli trigger --solution $solution --workflow 5ca4f87a-ea1e-4d62-89b0-000000061130 --frame 41 --frame 42
+& $cli run --solution $solution --workflow 5ca4f87a-ea1e-4d62-89b0-000000061120
+& $cli run --solution $solution --workflow 5ca4f87a-ea1e-4d62-89b0-000000061140
+```
+
+接入实物 PLC 后，需按现场约定的单元号和可写测试寄存器，另行核对设备型号、寄存器映射、应答、拔插恢复和设备端写入次数。

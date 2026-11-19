@@ -1,4 +1,5 @@
 #include "run_panel.hpp"
+#include "binary_editor.hpp"
 #include "coordinate_text.hpp"
 #include <visionpro/core/class_map.hpp>
 
@@ -147,9 +148,10 @@ QString diagnostic_text(const Diagnostic& item)
     if (item.location.output) { location.append(QStringLiteral("output %1").arg(id_text(item.location.output))); }
     if (item.location.resource) { location.append(QStringLiteral("resource %1").arg(id_text(item.location.resource))); }
     if (const auto& raw = item.external) {
-        location.append(QStringLiteral("%1 · %2 · %3 · code %4").arg(id_text(raw->provider), text(raw->operation),
+        location.append(QStringLiteral("%1 · %2 · %3 · code %4 (%5)").arg(id_text(raw->provider), text(raw->operation),
             raw->provider_domain ? id_text(*raw->provider_domain) : enum_text(raw->domain, std::array{"Unknown", "Call", "Algorithm",
-                "Output", "Resource", "Judgement"})).arg(raw->raw_code));
+                "Output", "Resource", "Judgement"})).arg(raw->raw_code).arg(raw->mapping == ExternalCodeMapping::Mapped
+                    ? QStringLiteral("mapped") : QStringLiteral("unmapped")));
     }
     if (const auto& operation = item.operation_key) {
         location.append(QStringLiteral("operation · Session %1 · Run %2 · %3")
@@ -212,7 +214,7 @@ QString value_text(const BasicValue<Domain>& value, bool preview_list = true)
         if (list->size() > limit) { items.append(QStringLiteral("…")); }
         return summary + QStringLiteral(" [") + items.join(QStringLiteral(", ")) + QStringLiteral("]");
     }
-    if (const auto* bytes = value.as_binary()) { return QStringLiteral("Binary (%1 bytes)").arg(bytes->size()); }
+    if (const auto* bytes = value.as_binary()) { return binary_summary(*bytes); }
     if (value.type().kind() == TypeKind::Optional) {
         const auto* item = value.optional_value();
         return item ? value_text(*item, preview_list) : QStringLiteral("None");
@@ -348,6 +350,9 @@ RunPanel::RunPanel(QWidget* parent)
     show_image_ = new QPushButton(QStringLiteral("Show Image"), call);
     show_image_->setObjectName(QStringLiteral("showRunImage"));
     result_row->addWidget(show_image_);
+    show_bytes_ = new QPushButton(QStringLiteral("Show Bytes"), call);
+    show_bytes_->setObjectName(QStringLiteral("showRunBytes"));
+    result_row->addWidget(show_bytes_);
     details_ = new QPlainTextEdit(call);
     details_->setObjectName(QStringLiteral("runDetails"));
     details_->setReadOnly(true);
@@ -357,8 +362,14 @@ RunPanel::RunPanel(QWidget* parent)
 
     connect(history_, &QComboBox::currentIndexChanged, this, &RunPanel::select_history);
     connect(nodes_, &QTreeWidget::currentItemChanged, this, &RunPanel::refresh_call);
-    connect(outputs_, &QComboBox::currentIndexChanged, this, &RunPanel::refresh_image_button);
+    connect(outputs_, &QComboBox::currentIndexChanged, this, &RunPanel::refresh_output_buttons);
     connect(show_image_, &QPushButton::clicked, this, &RunPanel::image_requested);
+    connect(show_bytes_, &QPushButton::clicked, this, [this] {
+        if (const auto output = selected_output()) {
+            const auto* slot = displayed_result_->output(*output);
+            if (const auto* value = std::get_if<DataValue>(&slot->content)) { show_binary(this, *value); }
+        }
+    });
     clear();
 }
 
@@ -659,6 +670,12 @@ void RunPanel::refresh_call()
             const auto& result = displayed_result_->data();
             if (!node || node->attempts.empty()) { lines.append(QStringLiteral("Attempt %1").arg(id_text(result.identity.attempt))); }
             if (result.elapsed) { lines.append(QStringLiteral("Elapsed: %1 ns").arg(result.elapsed->count())); }
+            for (const auto& timing : result.timings) {
+                if (timing.source != TimingSource::AdapterReported || timing.scope != TimingScope::ToolModule) { continue; }
+                lines.append(QStringLiteral("Adapter duration: %1 · unit %2").arg(
+                    timing.value ? QString::number(*timing.value, 'g', 15) : QStringLiteral("unknown"),
+                    enum_text(timing.unit, std::array{"unknown", "ns", "µs", "ms", "s"})));
+            }
             if (!result.outputs.empty()) { lines.append(QStringLiteral("Outputs")); }
             for (const auto& output : result.outputs) { lines.append(output_text(output)); }
             if (!result.selected_control_outputs.empty()) {
@@ -679,18 +696,24 @@ void RunPanel::refresh_call()
         if (!progress_->diagnostics.empty()) { lines.append(QStringLiteral("Run diagnostics")); }
         for (const auto& item : progress_->diagnostics) { lines.append(diagnostic_text(item)); }
         show_details(lines.join(QLatin1Char('\n')));
-        refresh_image_button();
+        refresh_output_buttons();
     } catch (...) { show_refresh_failure(); }
 }
 
-void RunPanel::refresh_image_button()
+void RunPanel::refresh_output_buttons()
 {
     try {
         bool available = false;
+        bool binary = false;
         if (displayed_result_ && outputs_->currentIndex() >= 0) {
             const auto& result = displayed_result_->data();
             const auto index = static_cast<std::size_t>(outputs_->currentIndex());
-            if (index < result.outputs.size()) { available = is_image(result.outputs[index]); }
+            if (index < result.outputs.size()) {
+                const auto& output = result.outputs[index];
+                available = is_image(output);
+                const auto* value = std::get_if<DataValue>(&output.content);
+                binary = value && value->as_binary();
+            }
             if (const auto run = selected_run(); !available && run && result.status == ExecutionStatus::Succeeded) {
                 const auto* flow = find_workflow(run->request().snapshot().solution(), run->identity().workflow);
                 const auto* node = flow ? find_node(*flow, result.identity.invocation.node) : nullptr;
@@ -699,6 +722,8 @@ void RunPanel::refresh_image_button()
             }
         }
         show_image_->setEnabled(available);
+        show_image_->setVisible(!binary);
+        show_bytes_->setVisible(binary);
     } catch (...) { show_refresh_failure(); }
 }
 
@@ -714,6 +739,8 @@ void RunPanel::reset_display()
     outputs_->setEnabled(false);
     judgement_->setText(QStringLiteral("Judgement: —"));
     show_image_->setEnabled(false);
+    show_image_->show();
+    show_bytes_->hide();
 }
 
 void RunPanel::show_details(const QString& value)

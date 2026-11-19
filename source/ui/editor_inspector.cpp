@@ -1,4 +1,6 @@
 #include "editor_inspector.hpp"
+#include "binary_editor.hpp"
+#include "endpoint_editor.hpp"
 #include "camera_editor.hpp"
 #include "class_palette.hpp"
 #include <visionpro/core/class_map.hpp>
@@ -216,6 +218,7 @@ QString constant_text(const ConfigValue& value)
     if (const auto* integer = value.as_int64()) { return QString::number(*integer); }
     if (const auto* real = value.as_float64()) { return QString::number(*real, 'g', 17); }
     if (const auto* string = value.as_string()) { return qtext(*string); }
+    if (const auto* bytes = value.as_binary()) { return binary_summary(*bytes); }
     if (const auto* member = value.as_enum()) { return id_text(*member); }
     if (const auto* list = value.elements(); list && value.type().element_type()->kind() == TypeKind::String) {
         QJsonArray strings;
@@ -668,6 +671,7 @@ std::optional<ConfigValue> edit_constant(QWidget* owner, const RoiEditContext& c
         }
         return std::nullopt;
     }
+    case TypeKind::Binary: return edit_binary(owner, prior);
     case TypeKind::Bool: {
         const Choices<bool> values{{QStringLiteral("False"), false}, {QStringLiteral("True"), true}};
         const auto value = choose(owner, QStringLiteral("Constant"), QStringLiteral("Value"), values,
@@ -1535,10 +1539,11 @@ void select_resource(const InspectorContext& context, const WorkflowId& id, cons
     const auto old = found == node->resources.end() ? std::nullopt : std::optional{found->resource};
     const auto* config = std::get_if<ToolConfiguration>(&node->configuration);
     const bool camera = config && config->type.text() == "visionpro.camera.acquire" && slot.kind == ResourceKind::Device;
+    const auto endpoint = config && slot.kind == ResourceKind::Device ? endpoint_adapter(config->type) : std::nullopt;
     Choices<std::optional<ResourceReference>> choices{{QStringLiteral("Unbound"), std::nullopt}};
     std::size_t current = 0;
     for (const auto& resource : solution.resources) {
-        if (resource.kind != slot.kind || (camera && !is_camera_device(resource))) { continue; }
+        if (resource.kind != slot.kind || (camera && !is_camera_device(resource)) || (endpoint && !matches_endpoint(resource, *endpoint))) { continue; }
         auto pin = old && old->id == resource.id ? old->revision : std::nullopt;
         if ((slot.kind == ResourceKind::Calibration || slot.kind == ResourceKind::Template) && !pin) {
             if (const auto* file = std::get_if<ManagedResource>(&resource.location)) { pin = file->revision; }
@@ -1546,7 +1551,9 @@ void select_resource(const InspectorContext& context, const WorkflowId& id, cons
         }
         ResourceReference ref{resource.id, resource.kind, pin};
         if (old && old->id == resource.id) { current = choices.size(); }
-        choices.emplace_back(QStringLiteral("%1 [%2]").arg(qtext(resource.name), short_id(resource.id)), ref);
+        auto label = QStringLiteral("%1 [%2]").arg(qtext(resource.name), short_id(resource.id));
+        if (endpoint) { label += QStringLiteral(" · ") + endpoint_address(resource); }
+        choices.emplace_back(std::move(label), ref);
     }
     auto choice = choose(context.owner, QStringLiteral("Choose resource"), QStringLiteral("Resource"), choices, current);
     if (!choice || *choice == old) { return; }
@@ -1584,8 +1591,18 @@ void resource_row(QFormLayout& form, QWidget* owner, const InspectorContext& con
     const Node& node, const ResourceRequirement& slot)
 {
     const auto bound = std::ranges::find(node.resources, slot.slot, &NodeResourceBinding::slot);
-    const auto summary = bound == node.resources.end() ? QStringLiteral("Unbound")
+    const auto* configuration = std::get_if<ToolConfiguration>(&node.configuration);
+    const auto endpoint = configuration && slot.kind == ResourceKind::Device ? endpoint_adapter(configuration->type) : std::nullopt;
+    auto summary = bound == node.resources.end() ? QStringLiteral("Unbound")
         : source_text(context.model.draft(), bound->resource);
+    bool compatible_endpoint = true;
+    if (endpoint && bound != node.resources.end()) {
+        const auto& resources = context.model.draft().resources;
+        const auto item = std::ranges::find(resources, bound->resource.id, &ResourceDefinition::id);
+        compatible_endpoint = item != resources.end() && matches_endpoint(*item, *endpoint);
+        summary += compatible_endpoint ? QStringLiteral(" · ") + endpoint_address(*item)
+                                       : QStringLiteral(" · Expected %1").arg(qtext(*endpoint));
+    }
     auto* row = new QHBoxLayout;
     auto* edit = action(owner, button_text(summary), "selectNodeResource", [context, id = flow.id, selected = node.id, slot] {
         select_resource(context, id, selected, slot);
@@ -1597,15 +1614,17 @@ void resource_row(QFormLayout& form, QWidget* owner, const InspectorContext& con
         row->addWidget(action(owner, QStringLiteral("File…"), "chooseExternalResource",
             [context, id = flow.id, selected = node.id, slot] { select_external_file(context, id, selected, slot); }));
     }
-    const auto* configuration = std::get_if<ToolConfiguration>(&node.configuration);
-    if (configuration && configuration->type.text() == "visionpro.camera.acquire" && slot.kind == ResourceKind::Device) {
-        const auto save_device = [context, id = flow.id, selected = node.id, slot](std::optional<ResourceId> original) {
+    const bool camera = configuration && configuration->type.text() == "visionpro.camera.acquire" && slot.kind == ResourceKind::Device;
+    if (camera || endpoint) {
+        const auto save_device = [context, id = flow.id, selected = node.id, slot, endpoint](std::optional<ResourceId> original) {
             const auto& catalog = context.model.draft().resources;
             const auto found = original ? std::ranges::find(catalog, *original, &ResourceDefinition::id) : catalog.end();
-            if (original && (found == catalog.end() || !is_camera_device(*found))) { return; }
-            auto edited = edit_camera_device(context.owner, original ? &*found : nullptr);
+            if (original && (found == catalog.end() || (endpoint ? !matches_endpoint(*found, *endpoint) : !is_camera_device(*found)))) { return; }
+            const auto* previous = original ? &*found : nullptr;
+            auto edited = endpoint ? edit_endpoint(context.owner, *endpoint, previous) : edit_camera_device(context.owner, previous);
             if (!edited) { return; }
-            context.edit_node(id, selected, QStringLiteral("Configure camera device"), [&](Solution& solution, Workflow&, Node& draft) -> Check {
+            context.edit_node(id, selected, endpoint ? QStringLiteral("Configure endpoint") : QStringLiteral("Configure camera device"),
+                [&](Solution& solution, Workflow&, Node& draft) -> Check {
                 const auto entry = std::ranges::find(solution.resources, edited->id, &ResourceDefinition::id);
                 if (entry == solution.resources.end()) { solution.resources.push_back(*edited); }
                 else { *entry = *edited; }
@@ -1613,9 +1632,9 @@ void resource_row(QFormLayout& form, QWidget* owner, const InspectorContext& con
                 return std::monostate{};
             });
         };
-        row->addWidget(action(owner, QStringLiteral("New…"), "newCameraDevice", [save_device] { save_device({}); }));
-        if (bound != node.resources.end()) {
-            row->addWidget(action(owner, QStringLiteral("Edit device…"), "editCameraDevice",
+        row->addWidget(action(owner, QStringLiteral("New…"), endpoint ? "newEndpoint" : "newCameraDevice", [save_device] { save_device({}); }));
+        if (bound != node.resources.end() && compatible_endpoint) {
+            row->addWidget(action(owner, QStringLiteral("Edit device…"), endpoint ? "editEndpoint" : "editCameraDevice",
                 [save_device, resource = bound->resource.id] { save_device(resource); }));
         }
     }
@@ -1800,7 +1819,7 @@ Choices<PortType> input_types(const ToolRegistry& registry)
 {
     Choices<PortType> types;
     for (const auto type : {DataType::boolean(), DataType::integer(), DataType::real(), DataType::string(),
-        DataType::image(), DataType::resource_reference()}) {
+        DataType::binary(), DataType::image(), DataType::resource_reference()}) {
         types.emplace_back(type_text(type), PortType{type, {}});
     }
     const auto append = [&](const auto& item) {
