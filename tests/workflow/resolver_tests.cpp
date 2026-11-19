@@ -368,6 +368,13 @@ void resolver_availability()
         check(result->value.type() == f.input().type && !result->value.optional_value(), "absence is a correctly typed None");
         check(result->sources.size() == 1 && result->sources[0].accepted_absence == MissingReason::NotSelected, "accepted absence preserves its reason");
     }
+    for (const auto cause : {UpstreamFailure::Failed, UpstreamFailure::TimedOut}) {
+        absent.context.sources[0].state = cause;
+        const auto binding = absent.resolve();
+        const auto* rejected = std::get_if<BindingFailure>(&binding);
+        const auto code = cause == UpstreamFailure::TimedOut ? ErrorCode::SourceTimedOut : ErrorCode::SourceFailed;
+        check(rejected && rejected->diagnostic.code == code, "Optional inputs cannot accept a producer skipped by upstream failure");
+    }
     absent.context.sources[0].state = AwaitingSource{};
     check(std::holds_alternative<PendingBinding>(absent.resolve()), "Optional and accepted absence never swallow pending work");
     f.flow().nodes[0].enabled = false;

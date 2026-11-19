@@ -88,7 +88,9 @@ enum class ToolInstanceLifetime { Invocation, WorkflowRun, SolutionSession };
 enum class ToolReentrancy { Serialized, Reentrant };
 enum class ToolEffects { None, State, External };
 enum class ToolCancellation { Unsupported, Cooperative };
-enum class ToolRetry { Never, Idempotent };
+// Idempotent is for pure computation. ProtocolDeduplicated requires an external
+// endpoint that deduplicates by logical operation across delivery attempts.
+enum class ToolRetry { Never, Idempotent, ProtocolDeduplicated };
 struct ToolExecutionPolicy {
     ToolExecutionMode mode{ToolExecutionMode::Synchronous};
     ToolInstanceLifetime lifetime{ToolInstanceLifetime::Invocation};

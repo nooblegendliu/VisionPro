@@ -134,17 +134,20 @@ std::vector<core::ToolRegistration> simulation_registrations()
     reader.outputs = {value};
 
     auto adder = descriptor("visionpro.sim.add", "Simulated addition");
+    adder.execution.retry = ToolRetry::Idempotent;
     const std::vector integer_sources{BindingSourceKind::Constant, BindingSourceKind::RunOutput, BindingSourceKind::PublicInput};
     adder.inputs = {input("left", integer, integer_sources), input("right", integer, integer_sources)};
     adder.outputs = {value};
 
     auto selector = descriptor("visionpro.sim.select", "Simulated branch selection");
+    selector.execution.retry = ToolRetry::Idempotent;
     auto mask = input("mask", integer, {BindingSourceKind::PublicInput, BindingSourceKind::Constant});
     mask.constraints.integer_range = IntegerRange{0, 3};
     selector.inputs = {std::move(mask)};
     selector.control_outputs = {{key<ControlOutputId>("left"), "Left"}, {key<ControlOutputId>("right"), "Right"}};
 
     auto collect = descriptor("visionpro.sim.collect", "Simulated collection");
+    collect.execution.retry = ToolRetry::Idempotent;
     auto collection = input("values", list, {BindingSourceKind::RunOutput});
     collection.binding.cardinality = BindingCardinality::MultipleSources;
     collect.inputs = {std::move(collection)};

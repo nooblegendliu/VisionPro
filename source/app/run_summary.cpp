@@ -279,9 +279,18 @@ json diagnostic_json(const Diagnostic& diagnostic)
     locate("queue", source.queue);
     locate("region", source.region);
     locate("control_link", source.control_link);
+    if (const auto& call = source.invocation) {
+        location["call"] = {{"run", id_text(call->workflow_run)}, {"node", id_text(call->node)},
+            {"scope", id_text(call->scope)}, {"invocation", id_text(call->invocation)}};
+    }
     if (!source.path.empty()) { location["path"] = diagnostic_path_json(source.path); }
     json result{{"code", error_code_name(diagnostic.code)}, {"severity", name(diagnostic.severity)},
         {"message", diagnostic.message}, {"location", std::move(location)}};
+    if (const auto& key = diagnostic.operation_key) {
+        const auto& call = key->key;
+        result["operation_key"] = {{"session", id_text(key->session)}, {"run", id_text(call.workflow_run)},
+            {"node", id_text(call.node)}, {"scope", id_text(call.scope)}, {"invocation", id_text(call.invocation)}};
+    }
     if (const auto& external = diagnostic.external) {
         result["external"] = {{"provider", id_text(external->provider)}, {"operation", external->operation},
             {"domain", static_cast<int>(external->domain)}, {"raw_code", std::to_string(external->raw_code)},
@@ -604,6 +613,11 @@ json node_json(const RunNodeProgress& node, const std::optional<NodeResult>& res
         trace["invocation"] = id_text(call->invocation);
         trace["scope"] = id_text(call->scope);
     }
+    trace["error_handled"] = node.error_handled;
+    trace["attempts"] = array_json(node.attempts, [](const RunAttempt& attempt) {
+        return json{{"attempt", id_text(attempt.attempt)}, {"status", name(attempt.status)},
+            {"diagnostics", diagnostics_json(attempt.diagnostics)}};
+    });
     if (result) {
         const auto& data = result->data();
         trace["attempt"] = id_text(data.identity.attempt);

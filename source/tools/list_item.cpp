@@ -48,6 +48,7 @@ core::ToolRegistration list_item_registration(std::string_view id, std::string n
         {{key<InputId>("list"), "List", DataType::list(element), true, {}, {}, binding, {}},
          {key<InputId>("index"), "Index", DataType::integer(), true, {}, {}, binding, {}}},
         {{key<OutputId>("item"), "Selected item", element, {}}}, {}, {}, {}, {}, {}, {}, {}};
+    tool.execution.retry = ToolRetry::Idempotent;
     return {std::move(tool), {schema, 1, 1, {}}, std::make_shared<ListItemFactory>()};
 }
 } // namespace visionpro::tools

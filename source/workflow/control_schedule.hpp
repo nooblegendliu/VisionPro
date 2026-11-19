@@ -25,9 +25,11 @@ public:
     [[nodiscard]] std::optional<std::size_t> take_ready() noexcept;
     void wait_for_data(std::size_t index) noexcept;
     void source_ready(std::size_t index);
-    void complete(std::size_t index, std::span<const core::ControlOutputId> selected);
+    [[nodiscard]] bool has_error_route(std::size_t index) const;
+    void complete(std::size_t index, std::span<const core::ControlOutputId> selected,
+        std::optional<ControlCloseReason> failure = {});
     void stop(ControlCloseReason reason) noexcept;
-    [[nodiscard]] std::optional<MissingReason> source_absence(std::size_t index) const noexcept;
+    [[nodiscard]] std::optional<SourceSelection::State> source_absence(std::size_t index) const noexcept;
     [[nodiscard]] std::vector<std::pair<std::size_t, NodeSkipReason>> take_skipped();
 
 private:
@@ -37,7 +39,9 @@ private:
         bool enabled{true};
         bool arrived{false};
         bool not_selected{false};
+        std::optional<ControlCloseReason> upstream_failure;
         bool data_ready{false};
+        std::optional<core::ControlOutputId> error_output;
         std::size_t pending{0};
         std::vector<std::size_t> outgoing;
         std::vector<std::size_t> producers;

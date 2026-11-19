@@ -51,6 +51,12 @@ struct GroupConfiguration {
 };
 struct NodeResourceBinding { core::SchemaId slot; core::ResourceReference resource; };
 enum class JoinPolicy { AllActivated };
+struct NodeExecutionPolicy {
+    std::uint32_t timeout_ms{0}; // Per attempt. Zero disables the deadline.
+    std::uint32_t max_retries{0}; // Additional attempts after the initial call.
+    std::optional<core::ControlOutputId> error_output{};
+    bool operator==(const NodeExecutionPolicy&) const = default;
+};
 struct Node {
     core::NodeId id;
     std::string name;
@@ -59,6 +65,7 @@ struct Node {
     std::vector<NodeResourceBinding> resources;
     bool enabled{true};
     JoinPolicy join{JoinPolicy::AllActivated};
+    NodeExecutionPolicy execution_policy{};
 };
 struct ControlLink {
     core::ControlLinkId id;
@@ -121,6 +128,8 @@ struct Solution {
 [[nodiscard]] core::Result<std::monostate> validate_public_interface(const PublicInterface& interface);
 [[nodiscard]] core::Result<std::monostate> validate_workflow_admission(const WorkflowAdmission& admission);
 [[nodiscard]] core::Result<std::monostate> validate_workflow_trigger(const Workflow& workflow);
+[[nodiscard]] core::Result<std::monostate> validate_node_execution_policy(const NodeExecutionPolicy& policy,
+    const core::ToolDescriptor& tool);
 // Solution envelope, stable identities and the shared definition catalogs.
 [[nodiscard]] core::Result<std::monostate> validate_global_invariants(const Solution& solution);
 // Local shape, identity and containment checks only. Not proof of executability:

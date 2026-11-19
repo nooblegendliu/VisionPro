@@ -363,6 +363,10 @@ Evaluation Resolution::output(const OutputReference& reference, std::size_t inde
     traces_.push_back({index, ResultTrace{reference, context_.run, selection->scope,
         invocation ? std::optional{*invocation} : std::nullopt, {}}, {}});
     if (std::holds_alternative<AwaitingSource>(selection->state)) { return {{}, true, {}, {}, {}}; }
+    if (const auto* upstream = std::get_if<UpstreamFailure>(&selection->state)) {
+        const auto code = *upstream == UpstreamFailure::TimedOut ? ErrorCode::SourceTimedOut : ErrorCode::SourceFailed;
+        return invalid(error(code, "The source did not run because an upstream control path failed."));
+    }
     if (const auto* missing = std::get_if<MissingReason>(&selection->state)) {
         return {{}, false, {{*missing == MissingReason::Disabled ? OutputAbsenceReason::Disabled : OutputAbsenceReason::NotSelected, trace_index}}, {}, {}};
     }

@@ -6,6 +6,7 @@
 #include <mutex>
 #include <set>
 #include <type_traits>
+#include <utility>
 
 namespace visionpro::core {
 namespace {
@@ -372,6 +373,7 @@ struct InvocationState {
     std::shared_ptr<InvocationControl> control;
     std::weak_ptr<InvocationControl> registered_control;
     std::optional<ToolCompletion> completion;
+    std::optional<std::chrono::steady_clock::time_point> completed_at;
     std::optional<std::weak_ptr<InvocationWakeup>> completion_wakeup;
     std::optional<std::weak_ptr<InvocationWakeup>> exit_wakeup;
     bool exited{false};
@@ -381,9 +383,9 @@ struct InvocationState {
     bool starting{true};
     bool cancelling{false};
     ~InvocationState() { if (instance) { instance->active_.fetch_sub(1); } }
-    InvocationProgress progress() const { return {completion, exited, cancelled}; }
+    InvocationProgress progress() const { return {starting ? std::nullopt : completion, exited, cancelled, completed_at}; }
     bool reached(InvocationWaitTarget target) const
-    { return target == InvocationWaitTarget::LogicalCompletion ? completion.has_value() : exited; }
+    { return target == InvocationWaitTarget::LogicalCompletion ? completed_at.has_value() : exited; }
     std::optional<std::weak_ptr<InvocationWakeup>>& wakeup(InvocationWaitTarget target)
     { return target == InvocationWaitTarget::LogicalCompletion ? completion_wakeup : exit_wakeup; }
     std::shared_ptr<InvocationWakeup> take_wakeup(InvocationWaitTarget target)
@@ -490,6 +492,7 @@ Result<std::monostate> InvocationCompletion::register_control(std::shared_ptr<In
         || state_->context->data().configuration.data().tool.execution.mode != ToolExecutionMode::Asynchronous) {
         return error(ErrorCode::InvalidState, "Asynchronous startup requires one non-null control registration before activity begins.");
     }
+    if (state_->cancelled) { return error(ErrorCode::SourceCancelled, "Invocation was cancelled before control registration."); }
     state_->control = control; state_->registered_control = control; state_->registered = true;
     return std::monostate{};
 }
@@ -503,7 +506,10 @@ Result<std::monostate> InvocationCompletion::complete(const ToolCompletion& resu
         if (auto checked = validate_tool_completion(*state->context, result); failed(checked)) { return checked; }
         state->completion = result; // Detach caller-owned containers; DataValue owns immutable nested payloads.
         if (const auto& access = state->context->data().state) { access->seal(); }
-        listener = state->take_wakeup(InvocationWaitTarget::LogicalCompletion);
+        if (!state->starting) {
+            state->completed_at = std::chrono::steady_clock::now();
+            listener = state->take_wakeup(InvocationWaitTarget::LogicalCompletion);
+        }
         state->changed.notify_all();
     }
     if (listener) { listener->signal(state->identity, InvocationWaitTarget::LogicalCompletion); }
@@ -525,10 +531,26 @@ Result<std::monostate> InvocationCompletion::mark_exited() const
 bool InvocationCompletion::cancellation_requested() const
 { std::lock_guard lock(state_->mutex); return state_->cancelled; }
 
-Result<InvocationOperation> InvocationOperation::start(std::shared_ptr<ToolInstance> instance, const InvocationContext& context)
+namespace {
+thread_local const ToolInvocationIdentity* executing_call{};
+struct BackendCallScope {
+    explicit BackendCallScope(const ToolInvocationIdentity& current) : previous(std::exchange(executing_call, &current)) {}
+    ~BackendCallScope() { executing_call = previous; }
+    const ToolInvocationIdentity* previous;
+};
+}
+
+bool InvocationOperation::on_backend_thread(SolutionSessionId session) noexcept
+{ return executing_call && executing_call->session == session; }
+
+Result<InvocationOperation> InvocationOperation::start(std::shared_ptr<ToolInstance> instance, const InvocationContext& context,
+    std::jthread* begin_worker)
 {
     const auto& configuration = context.data().configuration.data();
     const auto fail = [&](Diagnostic diagnostic) -> Result<InvocationOperation> { return contextualize(std::move(diagnostic), configuration); };
+    if (begin_worker && begin_worker->joinable()) {
+        return fail(error(ErrorCode::InvalidState, "Tool startup requires an unused dispatch thread."));
+    }
     if (!instance || &instance->configuration().data() != &configuration) {
         return fail(error(ErrorCode::InvalidState, "Invocation instance is not bound to this fixed configuration."));
     }
@@ -542,23 +564,41 @@ Result<InvocationOperation> InvocationOperation::start(std::shared_ptr<ToolInsta
         std::size_t expected = 0;
         if (!instance->active_.compare_exchange_strong(expected, 1)) { return fail(error(ErrorCode::InvalidState, "Serialized instance still has an invocation before physical exit.")); }
     } else { instance->active_.fetch_add(1); }
-    state->instance = instance;
+    state->instance = std::move(instance);
     if (access && access->started_.exchange(true)) {
         return fail(error(ErrorCode::InvalidState, "State access can be used by only one invocation operation."));
     }
+    if (begin_worker) {
+        try { *begin_worker = std::jthread([state] { begin(state); }); }
+        catch (...) { return fail(error(ErrorCode::ExecutionBoundaryFailure, "Could not dispatch the tool invocation.")); }
+    } else { begin(state); }
+    return InvocationOperation{std::move(state)};
+}
+
+void InvocationOperation::begin(const std::shared_ptr<detail::InvocationState>& state)
+{
+    const BackendCallScope scope(state->identity);
+    const auto& context = *state->context;
+    const auto& configuration = context.data().configuration.data();
+    const auto& access = context.data().state;
     InvocationCompletion completion{state};
     const auto expose = [&] {
-        instance.reset();
         bool clean;
+        std::shared_ptr<InvocationWakeup> listener;
         {
             std::lock_guard lock(state->mutex);
             state->starting = false;
+            if (state->completion) {
+                state->completed_at = std::chrono::steady_clock::now();
+                listener = state->take_wakeup(InvocationWaitTarget::LogicalCompletion);
+                state->changed.notify_all();
+            }
             clean = state->ready_for_cleanup();
         }
+        if (listener) { listener->signal(state->identity, InvocationWaitTarget::LogicalCompletion); }
         if (clean) { state->finish_exit(); }
-        return InvocationOperation{state};
     };
-    const auto startup_failed = [&](Diagnostic diagnostic) -> Result<InvocationOperation> {
+    const auto startup_failed = [&](Diagnostic diagnostic) {
         diagnostic = contextualize(std::move(diagnostic), configuration);
         diagnostic.severity = Severity::Error;
         if (!is_valid_diagnostic(diagnostic)) {
@@ -569,8 +609,7 @@ Result<InvocationOperation> InvocationOperation::start(std::shared_ptr<ToolInsta
         bool exited;
         {
             std::lock_guard lock(state->mutex);
-            // No operation is exposed before begin returns. Callback completion
-            // during startup is provisional and cannot hide a startup failure.
+            // Callback completion during startup is provisional until begin returns.
             const bool already_sealed = state->completion.has_value();
             state->completion = ToolCompletion{context.data().identity, ToolCompletionStatus::Failed,
                 ToolJudgement::NotEvaluated, {}, {diagnostic}};
@@ -582,7 +621,15 @@ Result<InvocationOperation> InvocationOperation::start(std::shared_ptr<ToolInsta
         return expose();
     };
     try {
-        auto begun = instance->begin(state->context, completion);
+        if (completion.cancellation_requested()) {
+            // Cooperative cancellation may arrive before a threaded begin is scheduled.
+            auto stopped = completion.complete({state->identity, ToolCompletionStatus::Cancelled,
+                ToolJudgement::NotEvaluated, {}, {}});
+            if (const auto* failure = std::get_if<Diagnostic>(&stopped)) { return startup_failed(*failure); }
+            static_cast<void>(completion.mark_exited());
+            return expose();
+        }
+        auto begun = state->instance->begin(state->context, completion);
         if (const auto* failure = std::get_if<Diagnostic>(&begun)) { return startup_failed(*failure); }
         auto& start = std::get<InvocationStart>(begun);
         if (const auto* synchronous = std::get_if<ToolCompletion>(&start)) {
@@ -643,6 +690,7 @@ Result<InvocationWaitResult> InvocationOperation::wait_for(InvocationWaitTarget 
 Result<CancellationRequest> InvocationOperation::request_cancel() const
 {
     const auto state = state_;
+    const BackendCallScope scope(state->identity);
     std::shared_ptr<InvocationControl> control;
     {
         std::lock_guard lock(state->mutex);

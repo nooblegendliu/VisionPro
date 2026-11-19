@@ -1,0 +1,273 @@
+{
+  "coordinates": [],
+  "format": "visionpro.solution",
+  "format_version": 1,
+  "id": "5ca4f87a-ea1e-4d62-89b0-000000006700",
+  "layouts": [
+    {
+      "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006710",
+      "nodes": [
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000006711",
+          "x": 40,
+          "y": 120
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000006712",
+          "x": 370,
+          "y": 30
+        },
+        {
+          "node": "5ca4f87a-ea1e-4d62-89b0-000000006713",
+          "x": 370,
+          "y": 230
+        }
+      ]
+    }
+  ],
+  "name": "S6.7 整数计算与错误恢复",
+  "queues": [],
+  "resources": [],
+  "revision": "1",
+  "variables": [],
+  "workflows": [
+    {
+      "containment": [],
+      "control_exports": [],
+      "control_links": [
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000006714",
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000006711",
+          "output": null,
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000006712"
+        },
+        {
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000006715",
+          "source": "5ca4f87a-ea1e-4d62-89b0-000000006711",
+          "output": "error",
+          "target": "5ca4f87a-ea1e-4d62-89b0-000000006713"
+        }
+      ],
+      "enabled": true,
+      "entries": [
+        "5ca4f87a-ea1e-4d62-89b0-000000006711"
+      ],
+      "id": "5ca4f87a-ea1e-4d62-89b0-000000006710",
+      "interface": {
+        "control_outputs": [],
+        "id": "s67.recovery",
+        "inputs": [
+          {
+            "binding": {
+              "allowed_conversions": [
+                "exact"
+              ],
+              "allowed_sources": [
+                "constant",
+                "run_output",
+                "public_input"
+              ],
+              "cardinality": "single_source",
+              "time": "before_invocation"
+            },
+            "constraints": {
+              "allowed_values": [],
+              "integer_range": null,
+              "max_length": null,
+              "real_range": null
+            },
+            "default_value": {
+              "type": {
+                "kind": "int64"
+              },
+              "value": "1"
+            },
+            "display_name": "加数",
+            "id": "delta",
+            "required": false,
+            "semantics": {
+              "coordinate_system": null,
+              "unit": "unspecified"
+            },
+            "type": {
+              "kind": "int64"
+            }
+          }
+        ],
+        "outputs": [],
+        "version": 1
+      },
+      "name": "溢出恢复",
+      "nodes": [
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "9223372036854775807"
+                  }
+                }
+              ],
+              "target": {
+                "id": "left",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "public_input",
+                  "value": {
+                    "group": null,
+                    "input": "delta",
+                    "selector": [],
+                    "workflow": "5ca4f87a-ea1e-4d62-89b0-000000006710"
+                  }
+                }
+              ],
+              "target": {
+                "id": "right",
+                "kind": "input"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "type": "visionpro.calc.int64"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000006711",
+          "join": "all_activated",
+          "name": "检查整数溢出",
+          "resources": [],
+          "execution_policy": {
+            "timeout_ms": 0,
+            "max_retries": 1,
+            "error_output": "error"
+          }
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "10"
+                  }
+                }
+              ],
+              "target": {
+                "id": "left",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "0"
+                  }
+                }
+              ],
+              "target": {
+                "id": "right",
+                "kind": "input"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "type": "visionpro.calc.int64"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000006712",
+          "join": "all_activated",
+          "name": "正常值",
+          "resources": []
+        },
+        {
+          "bindings": [
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "-1"
+                  }
+                }
+              ],
+              "target": {
+                "id": "left",
+                "kind": "input"
+              }
+            },
+            {
+              "accepted_absence": [],
+              "cardinality": "single_source",
+              "conversion": "exact",
+              "sources": [
+                {
+                  "kind": "constant",
+                  "value": {
+                    "type": {
+                      "kind": "int64"
+                    },
+                    "value": "0"
+                  }
+                }
+              ],
+              "target": {
+                "id": "right",
+                "kind": "input"
+              }
+            }
+          ],
+          "configuration": {
+            "config_version": 1,
+            "kind": "tool",
+            "type": "visionpro.calc.int64"
+          },
+          "enabled": true,
+          "id": "5ca4f87a-ea1e-4d62-89b0-000000006713",
+          "join": "all_activated",
+          "name": "恢复值",
+          "resources": []
+        }
+      ],
+      "outputs": []
+    }
+  ]
+}

@@ -1,7 +1,6 @@
 #pragma once
 
-#include <visionpro/core/id.hpp>
-#include <visionpro/core/schema_id.hpp>
+#include <visionpro/core/runtime_id.hpp>
 
 #include <cstdint>
 #include <optional>
@@ -91,6 +90,7 @@ enum class ErrorCode : std::uint32_t {
     InvalidRunHandle = 1901,
     ExecutionBoundaryFailure = 1902,
     RunQueueFull = 1903,
+    ExternalEffectUnknown = 1904,
     IdGenerationFailed = 2001,
     SolutionIoFailure = 2101,
     InvalidSolutionManifest = 2102,
@@ -128,6 +128,7 @@ struct DiagnosticLocation {
     std::optional<QueueId> queue;
     std::optional<RegionId> region;
     std::optional<ControlLinkId> control_link;
+    std::optional<InvocationKey> invocation{};
 };
 
 enum class ExternalStatusDomain { Unknown, Call, Algorithm, Output, Resource, Judgement };
@@ -150,6 +151,8 @@ struct Diagnostic {
     DiagnosticLocation location;
     std::string message;
     std::optional<ExternalDiagnostic> external{};
+    // Identifies the logical operation across attempts when its external effect is uncertain.
+    std::optional<SessionInvocationKey> operation_key{};
 
     [[nodiscard]] ErrorCategory category() const noexcept { return error_category(code); }
 };

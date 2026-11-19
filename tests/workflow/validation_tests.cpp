@@ -92,6 +92,37 @@ const ScopeDependencies& root_scope(const ValidationIndex& index)
 
 void validation_graph()
 {
+    auto recovery = fixture();
+    auto& policy = recovery.at(1).execution_policy;
+    const auto error_outlet = key<ControlOutputId>("fault");
+    policy = {25, 1, error_outlet};
+    recovery.edge(1, 2);
+    recovery.flow().control_links.front().output = error_outlet;
+    rejected(recovery.validate(), "Automatic retries require an explicit tool capability.", recovery.at(1).id);
+    auto& execution = recovery.tools.front().execution;
+    execution.retry = ToolRetry::Idempotent;
+    check(ok(recovery.validate()), "A pure tool may retry and use a separately named error link.");
+    policy.error_output = key<ControlOutputId>("complete");
+    rejected(recovery.validate(), "An error outlet may not shadow a success outlet.", recovery.at(1).id);
+    policy.error_output = error_outlet;
+    execution.effects = ToolEffects::External;
+    rejected(recovery.validate(), "External effects cannot use the pure computation retry capability.");
+    execution.retry = ToolRetry::ProtocolDeduplicated;
+    check(ok(recovery.validate()), "An explicit deduplicating protocol may retry its own external operation.");
+    recovery.tools.front().requires_correlation_join = true;
+    rejected(recovery.validate(), "Replaying an external protocol must not duplicate a correlation join contribution.");
+    recovery.tools.front().requires_correlation_join = false;
+    recovery.tools.front().shared_target = SharedTargetRequirement{SharedTargetKind::Queue,
+        take(DataType::record(key<SchemaId>("test.queue.message"), 1, {{key<FieldId>("id"), DataType::integer()}}))};
+    check(!ok(validate_descriptor(recovery.tools.front())), "Protocol deduplication does not make consuming a local queue replayable.");
+    recovery.tools.front().shared_target.reset();
+    execution.effects = ToolEffects::State;
+    rejected(recovery.validate(), "Mutable state cannot claim protocol deduplication.");
+    execution.retry = ToolRetry::Never;
+    policy.max_retries = 0;
+    policy.error_output.reset();
+    rejected(recovery.validate(), "An edge referencing a removed error outlet must be diagnosed.");
+
     auto five = fixture(13);
     for (unsigned branch = 2; branch <= 6; ++branch) {
         five.edge(1, branch); five.edge(branch, branch + 5, true); five.edge(branch + 5, 12);
@@ -438,7 +469,10 @@ void validation_groups()
         check(index.scopes.size() == 3, "nested Groups have distinct scope indexes");
         check(root_scope(index).reachable.size() == 2, "Group internals are not flattened into root activation range");
     }
-    auto changed = original; changed.read(2, 5);
+    auto changed = original;
+    changed.at(1).execution_policy.timeout_ms = 10;
+    rejected(changed.validate(), "A Group cannot silently ignore a tool-attempt policy.", uuid<NodeId>(1));
+    changed = original; changed.read(2, 5);
     rejected(changed.validate(), "outer consumer cannot read nested internal result", uuid<NodeId>(2));
     changed = original; changed.read(5, 3);
     rejected(changed.validate(), "inner consumer cannot bypass the Group input boundary", uuid<NodeId>(5));

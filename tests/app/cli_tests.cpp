@@ -656,6 +656,39 @@ void trigger_replay(const fs::path& executable)
         "A rejected frame remains traceable without suppressing accepted frames on either side.");
 }
 
+void error_recovery(const fs::path& executable)
+{
+    ScratchDirectory scratch;
+    const auto manifest = scratch.path / "recovery" / "solution.json";
+    write_file(manifest, read_file(VISIONPRO_RECOVERY_SAMPLE));
+    success(invoke(executable, scratch.path, {L"save", L"--solution", manifest.native()}));
+    const auto flow = Json::parse(read_file(manifest)).at("workflows").at(0);
+    const auto id = flow.at("id").get<std::string>();
+    const std::vector<std::wstring> base{L"run", L"--solution", manifest.native(), L"--workflow", {id.begin(), id.end()}};
+    const auto recovered = success(invoke(executable, scratch.path, base));
+    const auto& failed = find_by(recovered.at("nodes"), "id", flow.at("entries").at(0).get<std::string>());
+    check(recovered.at("status") == "Succeeded" && recovered.at("diagnostics").size() >= 1
+        && failed.at("status") == "Failed" && failed.at("error_handled") == true
+        && !failed.at("diagnostics").empty() && failed.at("outputs").at(0).at("status") == "NotProduced"
+        && failed.at("outputs").at(0).at("reason") == "Failed",
+        "A handled technical failure remains visible alongside the successful run outcome.");
+    const auto& attempts = failed.at("attempts");
+    check(attempts.size() == 2 && attempts.at(0).at("attempt") == "0" && attempts.at(1).at("attempt") == "1"
+        && attempts.at(0).at("status") == "Failed" && attempts.at(1).at("status") == "Failed"
+        && failed.at("attempt") == "1", "A retry shares the logical result address and records both attempts.");
+    const auto& recovery = find_by(recovered.at("nodes"), "id", "5ca4f87a-ea1e-4d62-89b0-000000006713");
+    check(produced(recovery) == "-1" && recovered.at("call_order").size() == 2,
+        "Only the configured error successor runs after retries are exhausted.");
+    auto args = base;
+    args.insert(args.end(), {L"--input", L"delta=0"});
+    const auto normal = success(invoke(executable, scratch.path, args));
+    const auto& source = find_by(normal.at("nodes"), "id", flow.at("entries").at(0).get<std::string>());
+    const auto& next = find_by(normal.at("nodes"), "id", "5ca4f87a-ea1e-4d62-89b0-000000006712");
+    check(source.at("attempts").size() == 1 && source.at("error_handled") == false && produced(next) == "10"
+        && normal.at("call_order").size() == 2 && normal.at("diagnostics").empty(),
+        "Success selects the normal edge without retrying or activating recovery.");
+}
+
 void output_failures(const fs::path& executable)
 {
     const Fixture fixture(executable, PayloadStorage::External);
@@ -1038,6 +1071,7 @@ int wmain(int argc, wchar_t** argv)
         else if (group == L"calculations") { calculations(cli); }
         else if (group == L"shared") { shared_workflows(cli); }
         else if (group == L"trigger") { trigger_replay(cli); }
+        else if (group == L"recovery") { error_recovery(cli); }
 #ifdef VISIONPRO_WITH_OPENCV
         else if (group == L"vision-roundtrip") { vision_roundtrip(cli); }
         else if (group == L"vision-diagnostics") { vision_diagnostics(cli); }

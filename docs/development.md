@@ -2425,3 +2425,29 @@ $solution = (Resolve-Path 'samples/s6-trigger/solution.json').Path
 ctest --test-dir out/build/s66-headless -C Release -R 'workflow\.trigger_|app\.cli_trigger_replay' --output-on-failure
 ctest --test-dir out/build/s66-gui -C Release -R 'visionpro_(editor_run|run_lifecycle)_tests' --output-on-failure
 ```
+
+### 10.7 S6.7 超时、错误出口和安全重试
+
+2026-11-19 完成 Windows x64 Release 构建。启用 Qt 和 OpenCV 的配置通过 **152/152** 项 CTest，关闭二者的配置通过 **123/123** 项。设备行为由可以分别控制发送、响应和退出的模拟端点验证。[故障注入测试](../tests/workflow/attempt_tests.cpp)
+
+| 场景 | 验收结果 |
+|---|---|
+| 首次超时后重试 | 第一次超时后仍持有独占租约。发布输入 900 的新配置，再让旧尝试退出，第二次仍使用原输入 73 和同一逻辑调用。两次尝试的编号为 0、1，租约同时持有数最高为 1。迟到通知后，最终结果发布一次，正常后继执行一次。 |
+| 超时与取消 | 同步启动阻塞时，逻辑结果先成为 `TimedOut`，退出后才释放资源。两个异步节点并行时，一个节点的取消回调阻塞，另一个仍能按期超时。两次均超时保留末次 `TimedOut`。在两次尝试之间取消则提交 `Cancelled`，停止重试与恢复调度。 |
+| 最终失败与 NG | 重试耗尽后，接通的错误出口只激活一次，原节点保留失败诊断。错误出口未连接或只连到禁用节点时，流程失败。检测 NG 保留成功的技术状态，首次执行即走正常路径。 |
+| 发送成功、响应丢失 | 普通端点只发送一次，未知效果诊断可查到操作键。支持协议去重的端点两次接收同一键，只产生一次效果。新一轮调用获得新键。 |
+| 桌面保存与 CLI | Qt 验收通过属性面板设置 5000 ms、1 次重试和 `fault` 出口，连接恢复节点后另存并重开。桌面和独立 CLI 的源节点均记录两次失败，标记 `error_handled=true`，恢复节点均输出 42。[桌面对照测试](../tests/ui/inspector_tests.cpp) |
+
+打开[恢复样例](../samples/s6-recovery/solution.json)，选中加法节点后，在 **Properties → Execution policy** 可编辑超时、重试上限和错误出口。样例默认输入 `delta=1`，计算 `INT64_MAX + 1` 两次失败，恢复节点输出 `-1`。将输入改为 `0`，正常后继输出 `10`。两条路径的流程最终状态均为 `Succeeded`，可用源节点的 `status`、`attempts` 及 `error_handled` 区分。[CLI 回归](../tests/app/cli_tests.cpp)
+
+从仓库根目录执行以下命令，Release 配置方法见 [§3.28](#328-s55-release-构建与测试)。
+
+```powershell
+$cli = 'out/build/s67-headless/source/app/visionpro_cli.exe'
+$solution = (Resolve-Path 'samples/s6-recovery/solution.json').Path
+$workflow = '5ca4f87a-ea1e-4d62-89b0-000000006710'
+& $cli run --solution $solution --workflow $workflow
+& $cli run --solution $solution --workflow $workflow --input delta=0
+ctest --test-dir out/build/s67-headless -C Release -R 'workflow\.(timeout_retry|logical_timeout_and_cancel|recovery_and_judgement|external_deduplication)|app\.cli_error_recovery' --output-on-failure
+ctest --test-dir out/build/s67-gui -C Release -R '^visionpro_inspector_tests$' --output-on-failure
+```

@@ -139,6 +139,10 @@ QString diagnostic_text(const Diagnostic& item)
     if (item.location.parameter) { location.append(QStringLiteral("parameter %1").arg(id_text(item.location.parameter))); }
     if (item.location.output) { location.append(QStringLiteral("output %1").arg(id_text(item.location.output))); }
     if (item.location.resource) { location.append(QStringLiteral("resource %1").arg(id_text(item.location.resource))); }
+    if (const auto& operation = item.operation_key) {
+        location.append(QStringLiteral("operation · Session %1 · Run %2 · %3")
+            .arg(id_text(operation->session), id_text(operation->key.workflow_run), invocation_text(operation->key)));
+    }
     const auto where = location.isEmpty() ? QString{} : QStringLiteral("\n  %1").arg(location.join(QStringLiteral(" · ")));
     return QStringLiteral("%1 [%2] %3%4")
         .arg(enum_text(item.severity, std::array{"Info", "Warning", "Error"}), text(error_code_name(item.code)), text(item.message), where);
@@ -589,6 +593,11 @@ void RunPanel::refresh_call()
                 lines.append(QStringLiteral("Skip reason: %1").arg(enum_text(*node->skip_reason,
                     std::array{"Disabled", "Upstream closed", "Fail fast", "Run cancelled", "Run timed out", "Not selected"})));
             }
+            if (node->error_handled) { lines.append(QStringLiteral("Handled through error outlet")); }
+            for (const auto& attempt : node->attempts) {
+                lines.append(QStringLiteral("Attempt %1 · %2").arg(id_text(attempt.attempt), status_text(attempt.status)));
+                for (const auto& item : attempt.diagnostics) { lines.append(diagnostic_text(item)); }
+            }
             if (!node->bindings.empty()) { lines.append(QStringLiteral("Binding sources")); }
             for (const auto& binding : node->bindings) {
                 lines.append(std::visit([](const auto& target) { return id_text(target); }, binding.target));
@@ -610,7 +619,7 @@ void RunPanel::refresh_call()
         set_text(*judgement_, QStringLiteral("Judgement: %1").arg(reported));
         if (displayed_result_) {
             const auto& result = displayed_result_->data();
-            lines.append(QStringLiteral("Attempt %1").arg(id_text(result.identity.attempt)));
+            if (!node || node->attempts.empty()) { lines.append(QStringLiteral("Attempt %1").arg(id_text(result.identity.attempt))); }
             if (result.elapsed) { lines.append(QStringLiteral("Elapsed: %1 ns").arg(result.elapsed->count())); }
             if (!result.outputs.empty()) { lines.append(QStringLiteral("Outputs")); }
             for (const auto& output : result.outputs) { lines.append(output_text(output)); }

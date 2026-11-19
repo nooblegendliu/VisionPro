@@ -20,6 +20,8 @@ set_target_properties(visionpro_inspector_tests PROPERTIES AUTOMOC ON)
 target_link_libraries(visionpro_inspector_tests PRIVATE
     visionpro_ui visionpro_simulation_tools visionpro_app_tools visionpro_infrastructure visionpro_build_options Qt6::Test
 )
+add_dependencies(visionpro_inspector_tests visionpro_cli)
+target_compile_definitions(visionpro_inspector_tests PRIVATE "VISIONPRO_TEST_CLI=\"$<TARGET_FILE:visionpro_cli>\"")
 add_test(NAME visionpro_inspector_tests COMMAND visionpro_inspector_tests -platform offscreen)
 
 add_executable(visionpro_image_view_tests image_view_tests.cpp)

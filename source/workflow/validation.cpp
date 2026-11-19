@@ -410,6 +410,9 @@ Check Validator::node_metadata(const Node& node)
     if (tool->config_version != configured.config_version) {
         return error(ErrorCode::IncompatibleSchemaVersion, "Node configuration version does not match its tool.", where);
     }
+    if (auto checked = validate_node_execution_policy(node.execution_policy, *tool); failed(checked)) {
+        return contextualize(std::move(checked), where);
+    }
     if (auto checked = validate_shared_targets(*tool, configured.shared_targets); failed(checked)) {
         return contextualize(std::move(checked), where);
     }
@@ -449,8 +452,10 @@ Check Validator::check_control_endpoints(const ControlLink& link)
 Check Validator::add_control_link(const ControlLink& link)
 {
     auto where = location(link.target); where.control_link = link.id;
-    if (auto checked = contextualize(control_outlet(*find_node(*flow_, link.source), link.output), where);
-        failed(checked)) { return checked; }
+    const auto& source = *find_node(*flow_, link.source);
+    if (link.output != source.execution_policy.error_output) {
+        if (auto checked = contextualize(control_outlet(source, link.output), where); failed(checked)) { return checked; }
+    }
     if (path(control_, link.target, link.source)) {
         return error(ErrorCode::ControlCycle, "Ordinary control links cannot form a cycle.", where);
     }

@@ -5,6 +5,7 @@
 
 #include <chrono>
 #include <atomic>
+#include <thread>
 #include <memory>
 #include <span>
 
@@ -49,6 +50,11 @@ struct ToolInvocationIdentity {
     AttemptId attempt;
     auto operator<=>(const ToolInvocationIdentity&) const = default;
 };
+
+// One protocol operation per logical invocation. Endpoints issuing multiple commands
+// also need their own command index when constructing protocol deduplication keys.
+[[nodiscard]] inline SessionInvocationKey operation_key(const ToolInvocationIdentity& identity) noexcept
+{ return {identity.session, identity.invocation}; }
 
 namespace detail { struct InvocationState; }
 // One invocation's access to initialized state. Writes stop at logical
@@ -215,6 +221,7 @@ struct InvocationProgress {
     std::optional<ToolCompletion> completion;
     bool physically_exited{false};
     bool cancellation_requested{false};
+    std::optional<std::chrono::steady_clock::time_point> completed_at{};
 };
 enum class InvocationWaitTarget { LogicalCompletion, PhysicalExit };
 enum class InvocationWaitOutcome { Reached, TimedOut };
@@ -236,8 +243,12 @@ public:
     InvocationOperation& operator=(const InvocationOperation&) noexcept = default;
     InvocationOperation(InvocationOperation&& other) noexcept : state_(other.state_) {}
     InvocationOperation& operator=(InvocationOperation&& other) noexcept { state_ = other.state_; return *this; }
+    // An empty worker runs begin on an owned thread so the scheduler can arbitrate
+    // its deadline while begin is blocked. The owner joins it at physical exit.
     [[nodiscard]] static Result<InvocationOperation> start(std::shared_ptr<ToolInstance> instance,
-        const InvocationContext& context);
+        const InvocationContext& context, std::jthread* begin_worker = nullptr);
+    // Blocking session close must reject reentry from either begin or a cancellation callback.
+    [[nodiscard]] static bool on_backend_thread(SolutionSessionId session) noexcept;
     [[nodiscard]] InvocationProgress poll() const;
     [[nodiscard]] bool physically_exited() const;
     // One weakly held, one-shot notification per target. If the target has
@@ -247,6 +258,7 @@ public:
     [[nodiscard]] Result<InvocationWaitResult> wait_for(InvocationWaitTarget target, std::chrono::milliseconds timeout) const;
     [[nodiscard]] Result<CancellationRequest> request_cancel() const;
 private:
+    static void begin(const std::shared_ptr<detail::InvocationState>& state);
     explicit InvocationOperation(std::shared_ptr<detail::InvocationState> state) : state_(std::move(state)) {}
     std::shared_ptr<detail::InvocationState> state_;
 };

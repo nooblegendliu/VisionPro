@@ -20,10 +20,14 @@
 #include <QDockWidget>
 #include <QGraphicsView>
 #include <QInputDialog>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMessageBox>
 #include <QPlainTextEdit>
+#include <QProcess>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSignalSpy>
@@ -37,6 +41,7 @@
 #include <algorithm>
 #include <functional>
 #include <initializer_list>
+#include <limits>
 #include <stdexcept>
 
 namespace visionpro::ui {
@@ -160,6 +165,7 @@ private Q_SLOTS:
     void resets_only_the_selected_session_accumulator();
     void edits_shared_targets_and_previews_without_consuming();
     void edits_and_reloads_workflow_admission();
+    void edits_connects_and_reopens_error_policy();
 };
 
 ControlScene& scene(EditorWindow& window)
@@ -217,6 +223,105 @@ void InspectorTests::edits_and_reloads_workflow_admission()
     QTRY_VERIFY(!reopened.file_busy() && reopened.draft().workflows.front().admission == configured);
     const auto* saved = properties(reopened).findChild<QPushButton*>(QStringLiteral("editWorkflowAdmission"));
     QVERIFY(saved && saved->text().contains(QStringLiteral("2 running · 3 waiting · Reject")));
+}
+
+void InspectorTests::edits_connects_and_reopens_error_policy()
+{
+    const auto catalog = take(app::make_tool_registry());
+    const auto source = take(IdFactory::generate<NodeId>());
+    const auto handler = take(IdFactory::generate<NodeId>());
+    const auto add = ToolConfiguration{key<ToolTypeId>("visionpro.sim.add"), 1};
+    const auto left = key<InputId>("left"), right = key<InputId>("right");
+    Workflow flow{take(IdFactory::generate<WorkflowId>()), "Recover", {key<SchemaId>("test.recovery"), 1},
+        {{source, "Overflow", add, {{left, {ConfigValue::integer(std::numeric_limits<std::int64_t>::max())}},
+            {right, {ConfigValue::integer(1)}}}},
+         {handler, "Handle overflow", add, {{left, {ConfigValue::integer(40)}}, {right, {ConfigValue::integer(2)}}}}},
+        {}, {}, {source}};
+    const Solution draft{take(IdFactory::generate<SolutionId>()), "Recovery policy", 1, 1, {flow}};
+    EditorWindow window(draft, catalog);
+    window.show();
+    auto& canvas = scene(window);
+    QVERIFY(canvas.reveal_node(source));
+    auto& inspector = properties(window);
+    QPushButton* edit{};
+    QTRY_VERIFY((edit = inspector.findChild<QPushButton*>(QStringLiteral("editNodeExecutionPolicy"))) && edit->isVisible());
+    const auto changed = exercise_dialog(inspector, *edit, {[](QDialog& dialog) -> QPushButton* {
+        auto* timeout = dialog.findChild<QLineEdit*>(QStringLiteral("nodeTimeoutMs"));
+        auto* retry = dialog.findChild<QLineEdit*>(QStringLiteral("nodeMaxRetries"));
+        auto* outlet = dialog.findChild<QLineEdit*>(QStringLiteral("nodeErrorOutlet"));
+        if (!timeout || !retry || !retry->isEnabled() || !outlet) { return nullptr; }
+        timeout->setText(QStringLiteral("5000"));
+        retry->setText(QStringLiteral("1"));
+        outlet->setText(QStringLiteral("fault"));
+        return accept_button(dialog);
+    }});
+    QVERIFY2(changed.isEmpty(), qPrintable(changed));
+    const NodeExecutionPolicy expected{5000, 1, key<ControlOutputId>("fault")};
+    QVERIFY(find_node(window.draft().workflows.front(), source)->execution_policy == expected);
+    const auto& model = static_cast<const ControlGraphModel&>(canvas.graphModel());
+    const auto from = model.canvas_id(source);
+    QCOMPARE(model.portData(from, QtNodes::PortType::Out, 1, QtNodes::PortRole::Caption).toString(), QStringLiteral("Error (fault)"));
+    QVERIFY(canvas.connect_control({from, 1, model.canvas_id(handler), 0}));
+    QCOMPARE(window.draft().workflows.front().control_links.front().output, expected.error_output);
+    QTemporaryDir scratch;
+    QVERIFY(scratch.isValid());
+    const auto directory = std::filesystem::path(scratch.path().toStdWString()) / L"error policy";
+    window.transfer_document(directory, infrastructure::SolutionTransfer::SaveAs);
+    QTRY_VERIFY(!window.file_busy() && std::filesystem::exists(directory / "solution.json"));
+    EditorWindow reopened(canvas_example(), catalog);
+    reopened.show();
+    reopened.open_document(directory);
+    QTRY_VERIFY(!reopened.file_busy() && reopened.draft().id == draft.id);
+    const auto& saved = reopened.draft().workflows.front();
+    QVERIFY(find_node(saved, source)->execution_policy == expected);
+    QCOMPARE(saved.control_links.front().output, expected.error_output);
+    auto* controller = reopened.findChild<RunController*>();
+    reopened.findChild<QAction*>(QStringLiteral("runWorkflow"))->trigger();
+    QTRY_VERIFY(controller->can_start() && controller->runs().size() == 1);
+    const auto& run = controller->runs().front();
+    const auto progress = take(run.inspect());
+    QCOMPARE(progress.status, ExecutionStatus::Succeeded);
+    const auto failed = std::ranges::find(progress.nodes, source, &RunNodeProgress::node);
+    QVERIFY(failed != progress.nodes.end() && failed->error_handled && failed->attempts.size() == 2);
+    QCOMPARE(failed->status, ExecutionStatus::Failed);
+    const auto recovered = result_for(run, handler);
+    const auto value = *std::get<DataValue>(recovered.output(key<OutputId>("value"))->content).as_int64();
+    QCOMPARE(value, 42);
+
+    QProcess cli;
+    cli.start(QStringLiteral(VISIONPRO_TEST_CLI), {QStringLiteral("run"), QStringLiteral("--solution"),
+        QString::fromStdU16String((directory / "solution.json").u16string()), QStringLiteral("--workflow"),
+        QString::fromStdString(flow.id.to_string())});
+    QVERIFY(cli.waitForFinished(10000));
+    const auto errors = cli.readAllStandardError();
+    QVERIFY2(cli.exitStatus() == QProcess::NormalExit && cli.exitCode() == 0, errors.constData());
+    const auto report = QJsonDocument::fromJson(cli.readAllStandardOutput()).object();
+    QCOMPARE(report.value("status").toString(), QStringLiteral("Succeeded"));
+    const auto nodes = report.value("nodes").toArray();
+    QCOMPARE(nodes.size(), 2);
+    const auto cli_node = [&](const NodeId& id) {
+        for (const auto& node : nodes) {
+            const auto object = node.toObject();
+            if (object.value("id").toString() == QString::fromStdString(id.to_string())) { return object; }
+        }
+        return QJsonObject{};
+    };
+    const auto cli_failure = cli_node(source);
+    QCOMPARE(cli_failure.value("status").toString(), QStringLiteral("Failed"));
+    QCOMPARE(cli_failure.value("error_handled").toBool(), failed->error_handled);
+    const auto attempts = cli_failure.value("attempts").toArray();
+    QCOMPARE(attempts.size(), static_cast<qsizetype>(failed->attempts.size()));
+    for (qsizetype i = 0; i < attempts.size(); ++i) {
+        const auto& desktop = failed->attempts[static_cast<std::size_t>(i)];
+        const auto attempt = attempts.at(i).toObject();
+        QCOMPARE(attempt.value("attempt").toString(), QString::number(desktop.attempt.value()));
+        QCOMPARE(desktop.status, ExecutionStatus::Failed);
+        QCOMPARE(attempt.value("status").toString(), QStringLiteral("Failed"));
+    }
+    const auto outputs = cli_node(handler).value("outputs").toArray();
+    QCOMPARE(outputs.size(), 1);
+    QCOMPARE(outputs.at(0).toObject().value("id").toString(), QStringLiteral("value"));
+    QCOMPARE(outputs.at(0).toObject().value("value").toString(), QString::number(value));
 }
 
 void InspectorTests::edits_shared_targets_and_previews_without_consuming()

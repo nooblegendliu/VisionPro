@@ -55,6 +55,7 @@ core::ToolDescriptor integer_range_descriptor()
     const auto id = "visionpro.judge.integer_range";
     ToolDescriptor tool{key<ToolTypeId>(id), "Judge integer range", 1, {key<SchemaId>(id), 1, {}},
         {}, {}, {}, {}, {}, {}, {}, {}, {}, {}};
+    tool.execution.retry = ToolRetry::Idempotent;
     for (auto name : {"minimum", "maximum"}) {
         ParameterDescriptor parameter{key<ParameterId>(name), name, integer, true, {}, {}, {}, {}};
         parameter.binding.time = BindingTime::SnapshotBuild;

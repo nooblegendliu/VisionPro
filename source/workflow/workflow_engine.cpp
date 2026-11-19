@@ -24,6 +24,7 @@
 namespace visionpro::workflow {
 namespace {
 using namespace core;
+using Clock = std::chrono::steady_clock;
 
 Diagnostic error(ErrorCode code, std::string message, const RunRequest& request, std::optional<NodeId> node = {})
 {
@@ -152,7 +153,53 @@ private:
     bool ready_{true};
 };
 
-enum class CallDecision { Waiting, Advance, Stop, Cancel };
+enum class CallDecision { Waiting, Advance, Stop, Cancel, Retry };
+
+Result<NodeResult> unsuccessful_record(const RunIdentity& run, const InvocationContextData& context,
+    ExecutionStatus status, std::vector<Diagnostic> diagnostics = {})
+{
+    const auto reason = status == ExecutionStatus::TimedOut ? OutputAbsenceReason::TimedOut
+        : status == ExecutionStatus::Cancelled ? OutputAbsenceReason::Cancelled : OutputAbsenceReason::Failed;
+    std::vector<OutputSlot> outputs;
+    for (const auto& port : context.configuration.data().tool.outputs) {
+        outputs.push_back({port.id, port.type, NotProduced{reason}});
+    }
+    return NodeResult::create({{run, context.identity.invocation, context.identity.attempt}, status,
+        Judgement::NotEvaluated, std::move(outputs), std::move(diagnostics)});
+}
+
+bool unknown_effect(const Diagnostic& diagnostic)
+{ return diagnostic.code == ErrorCode::ExternalEffectUnknown; }
+
+// Preserve the operation key wherever the adapter reported the error, including invalid output slots.
+Result<NodeResult> trace_effect(const NodeResult& result, const RunRequest& request,
+    const InvocationContextData& context, bool dispatched)
+{
+    const auto& original = result.data();
+    const bool reported = std::ranges::any_of(original.diagnostics, unknown_effect)
+        || std::ranges::any_of(original.outputs, [](const OutputSlot& slot) {
+            const auto* invalid = std::get_if<InvalidOutput>(&slot.content);
+            return invalid && unknown_effect(invalid->diagnostic);
+        });
+    const bool interrupted = dispatched && context.configuration.data().tool.execution.effects == ToolEffects::External
+        && (original.status == ExecutionStatus::TimedOut || original.status == ExecutionStatus::Cancelled);
+    if (!reported && !interrupted) { return result; }
+    auto data = original;
+    const auto key = operation_key(context.identity);
+    if (!reported) {
+        data.diagnostics.push_back(error(ErrorCode::ExternalEffectUnknown,
+            "The external operation may already have taken effect.", request, context.identity.invocation.node));
+    }
+    for (auto& diagnostic : data.diagnostics) {
+        if (unknown_effect(diagnostic)) { diagnostic.operation_key = key; }
+    }
+    for (auto& slot : data.outputs) {
+        if (auto* invalid = std::get_if<InvalidOutput>(&slot.content); invalid && unknown_effect(invalid->diagnostic)) {
+            invalid->diagnostic.operation_key = key;
+        }
+    }
+    return NodeResult::create(data);
+}
 
 struct GroupExports {
     std::size_t frame;
@@ -382,8 +429,11 @@ public:
         observe_cancellation();
         if (stopping_ || terminal(progress_.status)) { return false; }
         auto& node = progress_.nodes[index];
-        progress_.call_order.push_back(node.node);
-        node.bindings = std::move(bindings);
+        if (node.attempts.empty()) {
+            progress_.call_order.push_back(node.node);
+            node.bindings = std::move(bindings);
+        }
+        node.attempts.push_back({invocation.attempt, ExecutionStatus::Running, {}});
         node.resources = std::move(resources);
         node.invocation = invocation.invocation;
         node.status = ExecutionStatus::Running;
@@ -391,22 +441,48 @@ public:
         return true;
     }
 
-    void preparation_failed(std::size_t index, Diagnostic diagnostic, std::vector<RunBindingTrace> bindings = {})
+    void preparation_failed(std::size_t index, Diagnostic diagnostic, std::vector<RunBindingTrace> bindings = {},
+        std::optional<InvocationKey> invocation = {})
     {
         const std::lock_guard lock(mutex_);
         observe_cancellation();
         if (stopping_) { return; }
         progress_.nodes[index].bindings = std::move(bindings);
+        // Binding or factory failure can also select a wired recovery branch.
+        // No tool was started, so no attempt is added to the execution history.
+        if (invocation && recoverable(index, ExecutionStatus::Failed)) {
+            diagnostic = call_failure(std::move(diagnostic), request(), invocation->node);
+            diagnostic.location.invocation = *invocation;
+            const auto first = std::get<AttemptId>(RuntimeIdFactory::from_value<AttemptId>(0));
+            auto record = NodeResult::create({{identity(), *invocation, first}, ExecutionStatus::Failed,
+                Judgement::NotEvaluated, {}, {diagnostic}});
+            if (auto* bad = std::get_if<Diagnostic>(&record)) { fail_step(index, std::move(*bad)); return; }
+            const auto& result = std::get<NodeResult>(record);
+            auto stored = results_.insert(request().snapshot(), result);
+            if (auto* bad = std::get_if<Diagnostic>(&stored)) { fail_step(index, std::move(*bad)); return; }
+            auto& node = progress_.nodes[index];
+            node.invocation = *invocation;
+            node.status = ExecutionStatus::Failed;
+            node.error_handled = true;
+            --remaining_;
+            progress_.diagnostics.push_back(std::move(diagnostic));
+            publish(RunObservationKind::ResultPublished, node.status, result.data().identity);
+            schedule_.source_ready(index);
+            schedule_.complete(index, {}, ControlCloseReason::Failed);
+            apply_skips();
+            finish_if_done();
+            return;
+        }
         fail_step(index, std::move(diagnostic));
     }
 
-    CallDecision accept_completion(std::size_t index, const PreparedInvocation& invocation,
-        detail::InvocationStateLease* state, std::optional<Result<NodeResult>> projected)
+    CallDecision accept_completion(std::size_t index, const InvocationContextData& context,
+        detail::InvocationStateLease* state, std::optional<Result<NodeResult>> projected, bool allow_retry = true)
     {
         const std::lock_guard lock(mutex_);
         // Eligibility, cancellation, publication and the successor's control
         // permission change in one critical section.
-        const auto& call = invocation.context.data().identity;
+        const auto& call = context.identity;
         if (eligible_[index] != call) {
             const auto& node = progress_.nodes[index];
             if (node.invocation == call.invocation && terminal(node.status)) { return CallDecision::Stop; }
@@ -414,8 +490,12 @@ public:
         }
         observe_cancellation();
         const bool stopped = stopping_.has_value();
-        if (stopped) { projected = terminal_record(invocation, ToolCompletionStatus::Cancelled); }
+        if (stopped) { projected = unsuccessful_record(identity(), context, ExecutionStatus::Cancelled); }
         if (!projected) { return CallDecision::Waiting; }
+        const auto& tool = context.configuration.data().tool.execution;
+        if (auto* value = std::get_if<NodeResult>(&*projected)) {
+            projected = trace_effect(*value, request(), context, allow_retry);
+        }
         if (auto* failure = std::get_if<Diagnostic>(&*projected)) {
             if (state) { state->settle(false); }
             fail_step(index, std::move(*failure));
@@ -430,9 +510,31 @@ public:
             }
         }
         for (auto& diagnostic : diagnostics) {
+            diagnostic.location.invocation = call.invocation;
             if (!diagnostic.location.solution) { diagnostic.location.solution = request().snapshot().solution().id; }
             if (!diagnostic.location.workflow) { diagnostic.location.workflow = identity().workflow; }
             if (!diagnostic.location.node) { diagnostic.location.node = progress_.nodes[index].node; }
+        }
+        const auto status = result.data().status;
+        auto& progress = progress_.nodes[index];
+        auto& attempt = progress.attempts.back();
+        const bool first_decision = attempt.status == ExecutionStatus::Running;
+        if (first_decision) {
+            attempt.status = status;
+            attempt.diagnostics = diagnostics;
+        }
+        if (allow_retry && first_decision && (status == ExecutionStatus::Failed || status == ExecutionStatus::TimedOut)) {
+            const auto& flow = *find_workflow(request().snapshot().solution(), identity().workflow);
+            const auto& policy = find_node(flow, call.invocation.node)->execution_policy;
+            const bool mapped = std::ranges::none_of(diagnostics, [](const Diagnostic& diagnostic) {
+                return diagnostic.external && diagnostic.external->mapping == ExternalCodeMapping::Unmapped;
+            });
+            const bool safe = tool.retry == ToolRetry::ProtocolDeduplicated || (tool.retry == ToolRetry::Idempotent
+                && tool.effects == ToolEffects::None && std::ranges::none_of(diagnostics, unknown_effect));
+            if (mapped && safe && call.attempt.value() < policy.max_retries) {
+                if (state) { state->settle(false); }
+                return CallDecision::Retry;
+            }
         }
         progress_.diagnostics.reserve(progress_.diagnostics.size() + diagnostics.size());
         if (auto committed = results_.insert(request().snapshot(), result);
@@ -441,18 +543,18 @@ public:
             fail_step(index, std::move(*failure));
             return CallDecision::Stop;
         }
-        const auto status = result.data().status;
         if (state) { state->settle(status == ExecutionStatus::Succeeded); }
         for (auto& diagnostic : diagnostics) { progress_.diagnostics.push_back(std::move(diagnostic)); }
         eligible_[index].reset();
-        progress_.nodes[index].status = status;
+        progress.status = status;
         --remaining_;
         publish(RunObservationKind::ResultPublished, status, result.data().identity);
-        if (status == ExecutionStatus::Succeeded) { schedule_.source_ready(index); }
+        const bool advance = status == ExecutionStatus::Succeeded || recoverable(index, status);
+        if (advance) { schedule_.source_ready(index); }
         else { stop(status); }
         finish_if_done();
         if (stopped) { return CallDecision::Cancel; }
-        return status == ExecutionStatus::Succeeded ? CallDecision::Advance : CallDecision::Stop;
+        return advance ? CallDecision::Advance : CallDecision::Stop;
     }
 
     void complete_control(std::size_t index, const ToolInvocationIdentity& call)
@@ -465,15 +567,25 @@ public:
         if (!record || !*record || (*record)->data().identity.attempt != call.attempt) {
             throw std::logic_error("The completed control source has no accepted result.");
         }
-        schedule_.complete(index, (*record)->data().selected_control_outputs);
+        const auto& final = (*record)->data();
+        auto& node = progress_.nodes[index];
+        node.error_handled = recoverable(index, final.status);
+        const auto failure = node.error_handled ? std::optional{close_reason(final.status)} : std::nullopt;
+        schedule_.complete(index, final.selected_control_outputs, failure);
         apply_skips();
         finish_if_done();
     }
 
-    void report_cancellation_error(Diagnostic diagnostic, NodeId node)
+    void report_cancellation_error(Diagnostic diagnostic, std::size_t index, const ToolInvocationIdentity& call)
     {
         const std::lock_guard lock(mutex_);
-        progress_.diagnostics.push_back(call_failure(std::move(diagnostic), request(), node));
+        diagnostic = call_failure(std::move(diagnostic), request(), call.invocation.node);
+        diagnostic.location.invocation = call.invocation;
+        auto& node = progress_.nodes[index];
+        node.attempts.back().diagnostics.push_back(diagnostic);
+        if (terminal(node.status) && node.status != ExecutionStatus::Succeeded) {
+            progress_.diagnostics.push_back(std::move(diagnostic));
+        }
     }
 
     void unexpected_failure()
@@ -558,6 +670,12 @@ private:
         --remaining_;
         stop(ExecutionStatus::Failed);
         finish_if_done();
+    }
+
+    bool recoverable(std::size_t index, ExecutionStatus status) const
+    {
+        return !stopping_ && (status == ExecutionStatus::Failed || status == ExecutionStatus::TimedOut)
+            && schedule_.has_error_route(index);
     }
 
     void apply_skips()
@@ -734,6 +852,9 @@ struct ActiveCall {
     std::shared_ptr<detail::InvocationStateLease> state{};
     std::optional<InvocationOperation> operation{};
     CallDecision decision{CallDecision::Waiting};
+    std::optional<Clock::time_point> deadline{};
+    std::jthread begin_worker{};
+    std::jthread cancel_worker{};
 };
 
 struct GroupBody {
@@ -762,7 +883,12 @@ struct Work {
     Work(ExecutionPlan configured, std::shared_ptr<EngineRun> backend,
         std::shared_ptr<InvocationResourceProvider> provider, std::shared_ptr<SharedServices> shared)
         : resources(std::move(provider)), services(std::move(shared)), plan(std::move(configured)), run(std::move(backend)),
-          issued(run->nodes().size()) {}
+          issued(run->nodes().size()) {
+        const auto& flow = *find_workflow(plan.request().snapshot().solution(), run->identity().workflow);
+        timed = std::ranges::any_of(flow.nodes, [&](const Node& node) {
+            return node.execution_policy.timeout_ms != 0 && plan.tool(node.id);
+        });
+    }
 
     const std::shared_ptr<InvocationResourceProvider> resources;
     const std::shared_ptr<SharedServices> services;
@@ -775,6 +901,8 @@ struct Work {
     std::optional<std::chrono::steady_clock::time_point> timer;
     std::vector<std::optional<InvocationId>> issued;
     std::map<std::size_t, ActiveCall> active_calls;
+    std::map<std::size_t, InvocationContextData> retries; // Frozen input and parameter values, with no live leases.
+    bool timed{};
     std::map<std::size_t, std::shared_ptr<CallArbiter::Ticket>> waiting_access;
     detail::RunStateBindings state_bindings;
     detail::RunStateCells run_states;
@@ -782,14 +910,22 @@ struct Work {
 
 enum class WorkStep { Parked, Ready, Finished };
 
-bool settle_call(EngineRun& run, std::size_t index, ActiveCall& call)
+bool settle_call(Work& work, std::size_t index, ActiveCall& call)
 {
-    const auto& identity = call.invocation.context.data().identity;
-    if (call.decision == CallDecision::Waiting) {
+    auto& run = *work.run;
+    const auto& context = call.invocation.context.data();
+    bool timed_out = false;
+    if (call.decision == CallDecision::Waiting || (call.decision == CallDecision::Retry && run.stopping())) {
         std::optional<Result<NodeResult>> projected;
         if (call.operation && !run.stopping()) {
+            const auto now = Clock::now();
             const auto progress = call.operation->poll();
-            if (progress.completion) {
+            timed_out = call.deadline && (progress.completed_at
+                ? *progress.completed_at > *call.deadline : now >= *call.deadline);
+            if (timed_out) {
+                projected = unsuccessful_record(run.identity(), context, ExecutionStatus::TimedOut,
+                    {error(ErrorCode::SourceTimedOut, "The tool attempt exceeded its execution timeout.", run.request(), context.identity.invocation.node)});
+            } else if (progress.completion) {
                 auto result = checked_node_result(call.invocation, *progress.completion);
                 if (auto* failure = std::get_if<Diagnostic>(&result)) {
                     result = failed_call(run.request(), call.invocation, std::move(*failure));
@@ -797,14 +933,28 @@ bool settle_call(EngineRun& run, std::size_t index, ActiveCall& call)
                 projected = std::move(result);
             }
         }
-        call.decision = run.accept_completion(index, call.invocation, call.state.get(), std::move(projected));
+        call.decision = run.accept_completion(index, context, call.state.get(), std::move(projected));
     }
-    if (call.decision == CallDecision::Cancel) {
-        call.decision = CallDecision::Stop;
-        const auto& policy = call.invocation.context.data().configuration.data().tool.execution;
-        if (call.operation && policy.cancellation == ToolCancellation::Cooperative) {
-            if (auto cancelled = call.operation->request_cancel(); auto* failure = std::get_if<Diagnostic>(&cancelled)) {
-                run.report_cancellation_error(std::move(*failure), identity.invocation.node);
+    if (timed_out || call.decision == CallDecision::Cancel) {
+        if (call.decision == CallDecision::Cancel) { call.decision = CallDecision::Stop; }
+        const auto& policy = context.configuration.data().tool.execution;
+        if (call.operation && policy.cancellation == ToolCancellation::Cooperative && !call.cancel_worker.joinable()) {
+            const auto cancel = [run = work.run, operation = *call.operation, index, identity = context.identity] {
+                auto result = operation.request_cancel();
+                if (auto* failure = std::get_if<Diagnostic>(&result)) {
+                    run->report_cancellation_error(std::move(*failure), index, identity);
+                }
+            };
+            if (work.timed) {
+                // Adapter cancellation can block. Keep other deadlines live and join this
+                // callback before releasing the attempt's ticket or entering its retry.
+                try { call.cancel_worker = std::jthread(cancel); }
+                catch (const std::system_error&) {
+                    run.report_cancellation_error(error(ErrorCode::ExecutionBoundaryFailure,
+                        "Could not dispatch cooperative cancellation.", run.request(), context.identity.invocation.node), index, context.identity);
+                }
+            } else {
+                cancel();
             }
         }
     }
@@ -820,10 +970,21 @@ void settle_notified(Work& work)
         auto& [index, call] = *current;
         const auto identity = call.invocation.context.data().identity;
         const bool notified = wakeup->consume(identity);
-        if (call.operation && !notified && !(run.stopping() && call.decision == CallDecision::Waiting)) { continue; }
-        if (!settle_call(run, index, call)) { continue; }
+        const bool due = call.decision == CallDecision::Waiting && call.deadline && Clock::now() >= *call.deadline;
+        const bool cancelled = run.stopping() && (call.decision == CallDecision::Waiting || call.decision == CallDecision::Retry);
+        if (call.operation && !notified && !due && !cancelled) { continue; }
+        if (!settle_call(work, index, call)) { continue; }
         const auto source = index;
         const bool advance = call.decision == CallDecision::Advance;
+        if (call.decision == CallDecision::Retry) {
+            auto fixed = call.invocation.context.data();
+            fixed.resources.clear();
+            fixed.state.reset();
+            fixed.shared_data.reset();
+            fixed.correlation_join.reset();
+            work.retries.emplace(index, std::move(fixed));
+            work.waiting_access.try_emplace(index);
+        }
         wakeup->forget(identity);
         work.active_calls.erase(current); // Releases the prepared inputs and leases.
         if (advance) { run.complete_control(source, identity); }
@@ -847,7 +1008,12 @@ Result<InvocationOperation> launch_call(ActiveCall& call, std::shared_ptr<ToolIn
         if (auto* failure = std::get_if<Diagnostic>(&fixed)) { return std::move(*failure); }
         invocation.context = std::get<InvocationContext>(std::move(fixed));
     }
-    return InvocationOperation::start(std::move(instance), invocation.context);
+    const auto& flow = *find_workflow(work.plan.request().snapshot().solution(), work.run->identity().workflow);
+    const auto timeout = find_node(flow, configuration.node)->execution_policy.timeout_ms;
+    if (timeout) { call.deadline = Clock::now() + std::chrono::milliseconds(timeout); }
+    // A blocking begin (including a sibling on this run) must leave the scheduler
+    // free to observe the deadline and publish a logical timeout before physical exit.
+    return InvocationOperation::start(std::move(instance), invocation.context, work.timed ? &call.begin_worker : nullptr);
 }
 
 void start_region(Work& work, std::size_t slot, const ResolutionContext& context)
@@ -1038,6 +1204,23 @@ bool advance_loops(Work& work)
     return changed;
 }
 
+void finish_pending_retry(Work& work, std::size_t index, std::optional<Diagnostic> failure = {})
+{
+    const auto retry = work.retries.extract(index);
+    const auto& fixed = retry.mapped();
+    auto& run = *work.run;
+    std::optional<Result<NodeResult>> result;
+    if (failure) {
+        result = unsuccessful_record(run.identity(), fixed, ExecutionStatus::Failed,
+            {call_failure(std::move(*failure), run.request(), fixed.identity.invocation.node)});
+    }
+    // During cleanup or arbiter wait the last attempt has already ended.
+    // End the logical call without inventing a new dispatched attempt.
+    if (run.accept_completion(index, fixed, nullptr, std::move(result), false) == CallDecision::Advance) {
+        run.complete_control(index, fixed.identity);
+    }
+}
+
 void start_node(Work& work, std::size_t index, detail::NodeStateService& states, CallArbiter& arbitration)
 {
     auto& run = *work.run;
@@ -1064,10 +1247,25 @@ void start_node(Work& work, std::size_t index, detail::NodeStateService& states,
     const auto& tool = *prepared_tool;
     auto waiting = work.waiting_access.extract(index);
     auto access = waiting.empty() ? std::shared_ptr<CallArbiter::Ticket>{} : std::move(waiting.mapped());
-    auto prepared = tool.prepare_when_available(context, attempt, run.results_for_binding(), work.resources.get(), [&] {
+    const auto reserve = [&] {
         if (!access) { access = arbitration.request(tool.configuration(), work.state_bindings, run.identity().run, run.wakeup()); }
         return !access || access->granted();
-    });
+    };
+    const auto retry = work.retries.find(index);
+    const auto prepare = [&]() -> InvocationPreparation {
+        if (retry == work.retries.end()) {
+            return tool.prepare_when_available(context, attempt, run.results_for_binding(), work.resources.get(), reserve);
+        }
+        if (!reserve()) { return WaitingForAccess{}; }
+        auto fixed = retry->second;
+        auto next = RuntimeIdFactory::next(fixed.identity.attempt);
+        if (auto* failure = std::get_if<Diagnostic>(&next)) { return InvocationFailure{std::move(*failure)}; }
+        fixed.identity.attempt = std::get<AttemptId>(next);
+        auto prepared = tool.prepare_retry(std::move(fixed), work.resources.get());
+        if (auto* failure = std::get_if<Diagnostic>(&prepared)) { return InvocationFailure{std::move(*failure)}; }
+        return std::get<PreparedInvocation>(std::move(prepared));
+    };
+    auto prepared = prepare();
     if (std::holds_alternative<WaitingForAccess>(prepared)) {
         work.waiting_access.emplace(index, std::move(access));
         return;
@@ -1079,13 +1277,16 @@ void start_node(Work& work, std::size_t index, detail::NodeStateService& states,
     }
     auto* invocation = std::get_if<PreparedInvocation>(&prepared);
     if (!invocation) {
-        run.preparation_failed(index, preparation_error(prepared, request, node), std::move(trace));
+        auto failure = preparation_error(prepared, request, node);
+        if (retry != work.retries.end()) { finish_pending_retry(work, index, std::move(failure)); }
+        else { run.preparation_failed(index, std::move(failure), std::move(trace), context.consumer); }
         return;
     }
     if (!run.can_continue()) { return; }
     auto created = work.plan.create_instance(node);
     if (auto* failure = std::get_if<Diagnostic>(&created)) {
-        run.preparation_failed(index, std::move(*failure), std::move(trace));
+        if (retry != work.retries.end()) { finish_pending_retry(work, index, std::move(*failure)); }
+        else { run.preparation_failed(index, std::move(*failure), std::move(trace), context.consumer); }
         return;
     }
     const auto [entry, inserted] = work.active_calls.emplace(index, ActiveCall{access, std::move(*invocation)});
@@ -1099,12 +1300,12 @@ void start_node(Work& work, std::size_t index, detail::NodeStateService& states,
         work.active_calls.erase(entry);
         return;
     }
+    if (retry != work.retries.end()) { work.retries.erase(retry); }
     auto started = launch_call(call, std::get<std::shared_ptr<ToolInstance>>(std::move(created)), states, work);
     if (auto* failure = std::get_if<Diagnostic>(&started)) {
         auto result = failed_call(request, call.invocation, std::move(*failure));
-        static_cast<void>(run.accept_completion(index, call.invocation, call.state.get(), std::move(result)));
-        wakeup->forget(identity);
-        work.active_calls.erase(entry);
+        call.decision = run.accept_completion(index, call.invocation.context.data(), call.state.get(), std::move(result), false);
+        wakeup->signal(identity, InvocationWaitTarget::PhysicalExit);
         return;
     }
     call.operation = std::get<InvocationOperation>(std::move(started));
@@ -1115,8 +1316,8 @@ void start_node(Work& work, std::size_t index, detail::NodeStateService& states,
     const auto* failure = std::get_if<Diagnostic>(&exit);
     if (!failure) { failure = std::get_if<Diagnostic>(&completion); }
     if (failure) {
-        call.decision = run.accept_completion(index, call.invocation, call.state.get(),
-            failed_call(request, call.invocation, *failure));
+        call.decision = run.accept_completion(index, call.invocation.context.data(), call.state.get(),
+            failed_call(request, call.invocation, *failure), false);
         wakeup->signal(identity, InvocationWaitTarget::LogicalCompletion);
     }
 }
@@ -1128,17 +1329,25 @@ WorkStep execute_step(Work& work, detail::NodeStateService& states, CallArbiter&
     settle_notified(work);
     const bool group_progress = finish_groups(work);
     const bool loop_progress = advance_loops(work);
-    const auto granted = [](const auto& entry) { return entry.second->granted(); };
+    const auto granted = [](const auto& entry) { return !entry.second || entry.second->granted(); };
     std::optional<std::size_t> ready;
     if (run.can_continue()) {
         const auto retry = std::ranges::find_if(work.waiting_access, granted);
         ready = retry != work.waiting_access.end() ? std::optional{retry->first} : run.take_ready();
         if (ready) { start_node(work, *ready, states, arbitration); }
     }
-    if (run.stopping()) { work.waiting_access.clear(); }
+    if (run.stopping()) {
+        work.waiting_access.clear();
+        while (!work.retries.empty()) { finish_pending_retry(work, work.retries.begin()->first); }
+    }
+    for (const auto& [index, call] : work.active_calls) {
+        if (call.decision == CallDecision::Waiting && call.deadline && (!work.timer || *call.deadline < *work.timer)) {
+            work.timer = call.deadline;
+        }
+    }
     if (std::ranges::any_of(work.waiting_access, granted)
         || ((!work.loops.empty() || !work.groups.empty()) && !run.stopping() && (ready || loop_progress || group_progress)) || run.has_ready() || (run.stopping() && std::ranges::any_of(work.active_calls,
-        [](const auto& entry) { return entry.second.decision == CallDecision::Waiting; }))) {
+        [](const auto& entry) { return entry.second.decision == CallDecision::Waiting || entry.second.decision == CallDecision::Retry; }))) {
         return WorkStep::Ready;
     }
     if (!work.active_calls.empty() || !work.waiting_access.empty() || (!run.stopping() && work.timer)) { return WorkStep::Parked; }
@@ -1171,7 +1380,7 @@ struct WorkflowEngine::Impl {
 
     Result<std::monostate> close()
     {
-        if (worker_engine == this) {
+        if (worker_engine == this || InvocationOperation::on_backend_thread(session)) {
             return Diagnostic{ErrorCode::InvalidState, Severity::Error, {}, "Cannot wait for session closure on its workflow worker."};
         }
         {

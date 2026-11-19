@@ -274,6 +274,25 @@ InvocationPreparation PreparedTool::prepare_when_available(const ResolutionConte
     return prepare(context, attempt, results, {}, provider, reserve);
 }
 
+core::Result<PreparedInvocation> PreparedTool::prepare_retry(core::InvocationContextData fixed,
+    InvocationResourceProvider* provider) const
+{
+    const auto& configured = configuration_.data();
+    if (&fixed.configuration.data() != &configured || fixed.state || fixed.shared_data || fixed.correlation_join
+        || !fixed.resources.empty()) {
+        return error(core::ErrorCode::InvalidRunRequest, "Retry inputs require the original configuration without live attempt leases.",
+            snapshot_, configured.workflow, configured.node);
+    }
+    if (provider) {
+        auto acquired = acquire_leases(*provider, configuration_);
+        if (auto* failure = std::get_if<core::Diagnostic>(&acquired)) { return std::move(*failure); }
+        fixed.resources = std::get<std::vector<core::InvocationResourceLease>>(std::move(acquired));
+    }
+    auto context = core::InvocationContext::create(fixed);
+    if (auto* failure = std::get_if<core::Diagnostic>(&context)) { return std::move(*failure); }
+    return PreparedInvocation{snapshot_, std::get<core::InvocationContext>(std::move(context)), {}};
+}
+
 core::Result<NodeResult> checked_node_result(const PreparedInvocation& invocation, const core::ToolCompletion& completion)
 {
     const auto& context = invocation.context.data();

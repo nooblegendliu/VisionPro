@@ -410,6 +410,9 @@ void roundtrip()
         "A v1 workflow without admission settings retains one slot, no waiting and Busy on overflow.");
     check(!loaded.solution().workflows.front().trigger,
         "Loading a pre-trigger workflow leaves its entry manual.");
+    check(manifest.find("\"execution_policy\"") == std::string::npos
+        && loaded.solution().workflows.front().nodes.front().execution_policy == NodeExecutionPolicy{},
+        "Existing manifests keep disabled timeouts and retries and an absent recovery outlet.");
     check_relations(loaded.solution());
     check_values(loaded.solution(), original);
     check_state_projection(loaded.solution(), registry);
@@ -422,6 +425,22 @@ void roundtrip()
         "Both Int64 boundaries reopen exactly and configuration handling leaves the tool factory unused.");
     loop_roundtrip(original, registry, directories);
     trigger_roundtrip(registry, directories);
+    auto timed = original;
+    auto& timed_node = timed.workflows.front().nodes.at(1);
+    timed_node.execution_policy = {350, 0, key<ControlOutputId>("fault")};
+    const auto policy_directory = directories.package(u8"超时策略");
+    take(write_new_solution(policy_directory, timed));
+    const auto recovered = take(load_solution(policy_directory, registry));
+    check(recovered.can_save() && recovered.solution().workflows.front().nodes.at(1).execution_policy == timed_node.execution_policy,
+        "A stateful tool keeps its timeout and recovery outlet across a package round trip.");
+    auto future = read_manifest(policy_directory);
+    const auto field = future.find("\"timeout_ms\"");
+    check(field != std::string::npos, "Timeouts have a stable protocol field.");
+    future.insert(field, "\"future_retry_rule\": true, ");
+    { std::ofstream out(policy_directory / "solution.json", std::ios::binary | std::ios::trunc); out << future; }
+    const auto protected_draft = take(load_solution(policy_directory, registry));
+    check(!protected_draft.can_save() && std::holds_alternative<Diagnostic>(save_solution(protected_draft, protected_draft.solution()))
+        && read_manifest(policy_directory) == future, "An unknown failure-policy member prevents a lossy resave.");
     auto admitting = original;
     const WorkflowAdmission limits{2, 1, AdmissionOverflow::Reject};
     admitting.workflows.front().admission = limits;

@@ -33,8 +33,13 @@ std::vector<core::ControlOutputDescriptor> control_outlets(const Node& node, con
     }
     const auto& tool = std::get<ToolConfiguration>(node.configuration);
     const auto* descriptor = registry.find_descriptor(tool.type);
-    return descriptor && descriptor->config_version == tool.config_version
-        ? descriptor->control_outputs : std::vector<core::ControlOutputDescriptor>{};
+    if (!descriptor || descriptor->config_version != tool.config_version) { return {}; }
+    auto outlets = descriptor->control_outputs;
+    const auto& error_output = node.execution_policy.error_output;
+    if (error_output && std::ranges::find(outlets, *error_output, &core::ControlOutputDescriptor::id) == outlets.end()) {
+        outlets.push_back({*error_output, "Error (" + std::string(error_output->text()) + ")"});
+    }
+    return outlets;
 }
 
 // Swapping the command's stored value with the draft preserves exact ordering,

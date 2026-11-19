@@ -229,6 +229,7 @@ std::vector<core::ToolRegistration> logic_registrations()
     const auto empty = std::get<ConfigValue>(ConfigValue::list(integer, {}));
 
     auto calc = descriptor("visionpro.calc.int64", "Integer calculation");
+    calc.execution.retry = ToolRetry::Idempotent;
     calc.inputs = {port("left", integer, true), port("right", integer, true)};
     calc.parameters = {fixed("operation", "Operation", enumeration("visionpro.calc.int64.operation", {"Add", "Subtract", "Multiply", "Divide"}))};
     calc.outputs = {output("value", integer)};
@@ -247,15 +248,18 @@ std::vector<core::ToolRegistration> logic_registrations()
          {key<EnumMemberId>("Session"), StateScope::SolutionSession, StateResetPolicy::DomainStartAndExplicit}}}};
 
     auto logic = descriptor("visionpro.logic.and", "Boolean AND");
+    logic.execution.retry = ToolRetry::Idempotent;
     logic.inputs = {port("values", DataType::list(DataType::boolean()))};
     logic.inputs.front().binding.cardinality = BindingCardinality::MultipleSources;
     logic.outputs = {output("passed", DataType::boolean())};
 
     auto branch = descriptor("visionpro.logic.condition", "Conditional branch");
+    branch.execution.retry = ToolRetry::Idempotent;
     branch.inputs = {port("condition", DataType::boolean())};
     branch.control_outputs = {{key<ControlOutputId>("true"), "True"}, {key<ControlOutputId>("false"), "False"}};
 
     auto formatter = descriptor("visionpro.format.int64_list", "Format integer list");
+    formatter.execution.retry = ToolRetry::Idempotent;
     formatter.inputs = {port("list", integers), port("values", integers)};
     for (auto& port : formatter.inputs) { port.required = false; port.default_value = empty; }
     formatter.inputs.back().binding.cardinality = BindingCardinality::MultipleSources;

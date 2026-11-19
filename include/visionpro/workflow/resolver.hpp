@@ -14,10 +14,12 @@ struct ResolutionScope {
     std::vector<RunInput> inputs;
 };
 struct AwaitingSource {}; // No actual call identity yet; not a fabricated NodeResult.
+enum class UpstreamFailure { Failed, TimedOut };
 struct SourceSelection {
+    using State = std::variant<AwaitingSource, core::InvocationId, MissingReason, UpstreamFailure>;
     core::NodeId node;
     core::ExecutionScopeId scope;
-    std::variant<AwaitingSource, core::InvocationId, MissingReason> state;
+    State state;
 };
 struct ResolutionContext {
     RunIdentity run;

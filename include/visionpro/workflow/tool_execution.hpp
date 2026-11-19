@@ -62,6 +62,9 @@ public:
     // reservation parks the call without invoking the resource provider.
     [[nodiscard]] InvocationPreparation prepare_when_available(const ResolutionContext& context, core::AttemptId attempt,
         const ResultStore& results, InvocationResourceProvider* provider, const std::function<bool()>& reserve) const;
+    // The engine retains the resolved values, but never a previous attempt's resource or state lease.
+    [[nodiscard]] core::Result<PreparedInvocation> prepare_retry(core::InvocationContextData fixed,
+        InvocationResourceProvider* provider) const;
 private:
     friend class ExecutionPlan;
     [[nodiscard]] static core::Result<PreparedTool> create(BindingResolver resolver,

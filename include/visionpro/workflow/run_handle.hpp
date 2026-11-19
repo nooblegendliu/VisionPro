@@ -21,15 +21,22 @@ struct RunResourceTrace {
     core::SchemaId slot;
     core::ResourceReference reference;
 };
+struct RunAttempt {
+    core::AttemptId attempt;
+    ExecutionStatus status;
+    std::vector<core::Diagnostic> diagnostics;
+};
 struct RunNodeProgress {
     core::NodeId node;
     ExecutionStatus status{ExecutionStatus::Pending};
-    // Only started calls have a key that can address a NodeResult.
+    // Started calls and preparation failures sent to an error outlet have an addressable result.
     std::optional<core::InvocationKey> invocation{};
     std::optional<NodeSkipReason> skip_reason{};
     std::vector<RunBindingTrace> bindings{};
     std::vector<RunResourceTrace> resources{}; // References from leases acquired for the call.
     std::optional<core::ExecutionScopeId> scope{};
+    std::vector<RunAttempt> attempts{};
+    bool error_handled{false};
 };
 
 enum class ControlLinkStatus { Pending, Arrived, Closed };

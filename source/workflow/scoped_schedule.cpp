@@ -96,15 +96,21 @@ void ScopedSchedule::source_ready(std::size_t slot)
     auto& frame = frames_[frame_of(slot)];
     frame.schedule.source_ready(slot - frame.offset);
 }
-void ScopedSchedule::complete(std::size_t slot, std::span<const core::ControlOutputId> outputs)
+bool ScopedSchedule::has_error_route(std::size_t slot) const
+{
+    const auto& frame = frames_[frame_of(slot)];
+    return frame.schedule.has_error_route(slot - frame.offset);
+}
+void ScopedSchedule::complete(std::size_t slot, std::span<const core::ControlOutputId> outputs,
+    std::optional<ControlCloseReason> failure)
 {
     auto& frame = frames_[frame_of(slot)];
-    frame.schedule.complete(slot - frame.offset, outputs);
+    frame.schedule.complete(slot - frame.offset, outputs, failure);
 }
 void ScopedSchedule::stop(ControlCloseReason reason)
 { for (auto i : active_) { frames_[i].schedule.stop(reason); } }
 
-std::optional<MissingReason> ScopedSchedule::source_absence(std::size_t slot) const
+std::optional<SourceSelection::State> ScopedSchedule::source_absence(std::size_t slot) const
 {
     const auto& frame = frames_[frame_of(slot)];
     return frame.schedule.source_absence(slot - frame.offset);

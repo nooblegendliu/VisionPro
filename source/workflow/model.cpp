@@ -209,6 +209,9 @@ Check validate_node_shape(const Workflow& workflow, const Parents& parents, cons
         if (tool->config_version == 0) { return with_node(error(core::ErrorCode::InvalidModel, "Tool configuration version must be positive.")); }
     } else {
         const auto& group = std::get<GroupConfiguration>(node.configuration);
+        if (node.execution_policy != NodeExecutionPolicy{}) {
+            return with_node(error(core::ErrorCode::MissingCapability, "Execution policies apply to tool nodes only."));
+        }
         for (auto checked : {validate_public_interface(group.interface), mappings(group.interface, group.outputs),
             entry_check(workflow, parents, node.id, group.entries), control_mappings(group.interface, group.control_exports)}) {
             if (failed(checked)) { return with_node(std::move(checked)); }
@@ -333,6 +336,18 @@ Check validate_workflow_admission(const WorkflowAdmission& admission)
     }
     if (admission.overflow != AdmissionOverflow::Busy && admission.overflow != AdmissionOverflow::Reject) {
         return error(core::ErrorCode::InvalidModel, "Unknown workflow admission overflow policy.");
+    }
+    return std::monostate{};
+}
+
+Check validate_node_execution_policy(const NodeExecutionPolicy& policy, const core::ToolDescriptor& tool)
+{
+    if (policy.max_retries && tool.execution.retry == core::ToolRetry::Never) {
+        return error(core::ErrorCode::MissingCapability, "The tool does not support automatic retries.");
+    }
+    if (policy.error_output && std::ranges::find(tool.control_outputs, *policy.error_output,
+            &core::ControlOutputDescriptor::id) != tool.control_outputs.end()) {
+        return error(core::ErrorCode::InvalidControlLink, "The error outlet must differ from every success outlet.");
     }
     return std::monostate{};
 }

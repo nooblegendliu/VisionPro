@@ -2,6 +2,7 @@
 #include <visionpro/workflow/result_store.hpp>
 
 #include <algorithm>
+#include <set>
 
 namespace visionpro::workflow {
 namespace {
@@ -24,24 +25,39 @@ bool terminal(ExecutionStatus status)
         || status == ExecutionStatus::Cancelled || status == ExecutionStatus::TimedOut;
 }
 
-Result<RunProgress> checked(const RunRequest& request, RunProgress progress)
+std::optional<Diagnostic> validate_progress(const RunRequest& request, core::WorkflowRunId run, const RunProgress& progress)
 {
     if ((!terminal(progress.status) && progress.status != ExecutionStatus::Pending && progress.status != ExecutionStatus::Running)
         || (progress.quiescent && !terminal(progress.status))) {
         return failure(request, ErrorCode::InvalidRunHandle, "Invalid run status or quiescence before logical completion.");
+    }
+    std::set<core::InvocationKey> handled;
+    if (progress.status == ExecutionStatus::Succeeded && !progress.diagnostics.empty()) {
+        for (const auto& node : progress.nodes) {
+            if (node.error_handled && node.invocation && node.invocation->workflow_run == run && node.invocation->node == node.node
+                && (node.status == ExecutionStatus::Failed || node.status == ExecutionStatus::TimedOut)) {
+                handled.insert(*node.invocation);
+            }
+        }
     }
     bool has_error = false;
     for (const auto& diagnostic : progress.diagnostics) {
         if (!core::is_valid_diagnostic(diagnostic)) {
             return failure(request, ErrorCode::InvalidRunHandle, "Invalid run diagnostic.");
         }
-        has_error = has_error || diagnostic.severity == core::Severity::Error;
+        if (diagnostic.severity != core::Severity::Error) { continue; }
+        has_error = true;
+        if (progress.status == ExecutionStatus::Succeeded) {
+            const auto& call = diagnostic.location.invocation;
+            if (!call || !handled.contains(*call)) {
+                return failure(request, ErrorCode::InvalidRunHandle, "A successful run contains an unhandled error.");
+            }
+        }
     }
-    if ((progress.status == ExecutionStatus::Failed && !has_error)
-        || (progress.status == ExecutionStatus::Succeeded && has_error)) {
+    if (progress.status == ExecutionStatus::Failed && !has_error) {
         return failure(request, ErrorCode::InvalidRunHandle, "Run status and technical diagnostics disagree.");
     }
-    return progress;
+    return std::nullopt;
 }
 
 template<class T, class F> Result<T> boundary(const RunRequest& request, F&& action)
@@ -71,7 +87,8 @@ Result<RunProgress> RunHandle::inspect() const
     return boundary<RunProgress>(request(), [&]() -> Result<RunProgress> {
         auto progress = control_->inspect();
         if (const auto* error = std::get_if<Diagnostic>(&progress)) { return *error; }
-        return checked(request(), std::get<RunProgress>(std::move(progress)));
+        if (auto bad = validate_progress(request(), identity().run, std::get<RunProgress>(progress))) { return std::move(*bad); }
+        return progress;
     });
 }
 
@@ -84,8 +101,7 @@ Result<RunWaitResult> RunHandle::wait(RunWaitTarget target, std::chrono::steady_
         auto waited = control_->wait(target, deadline);
         if (const auto* error = std::get_if<Diagnostic>(&waited)) { return *error; }
         auto result = std::get<RunWaitResult>(std::move(waited));
-        auto progress = checked(request(), result.progress);
-        if (const auto* error = std::get_if<Diagnostic>(&progress)) { return *error; }
+        if (auto bad = validate_progress(request(), identity().run, result.progress)) { return std::move(*bad); }
         const bool ready = target == RunWaitTarget::Completion ? terminal(result.progress.status) : result.progress.quiescent;
         if ((result.outcome != RunWaitOutcome::Satisfied && result.outcome != RunWaitOutcome::DeadlineExpired)
             || ((result.outcome == RunWaitOutcome::Satisfied) != ready)) {

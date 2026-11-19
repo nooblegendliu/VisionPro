@@ -280,6 +280,18 @@ void boundaries()
     check(take(handle.inspect()).status == ExecutionStatus::Failed, "failed terminal keeps its diagnostic");
     control->progress.status = ExecutionStatus::Succeeded;
     error(handle.inspect(), ErrorCode::InvalidRunHandle);
+    RunNodeProgress recovered{key.node, ExecutionStatus::Failed, key};
+    recovered.error_handled = true;
+    control->progress.nodes = {recovered};
+    auto& origin = control->progress.diagnostics.front().location.invocation;
+    origin = key;
+    check(take(handle.inspect()).status == ExecutionStatus::Succeeded, "recovery retains its originating technical error");
+    origin->invocation = count<InvocationId>(2);
+    error(handle.inspect(), ErrorCode::InvalidRunHandle);
+    origin = key;
+    origin->workflow_run = count<WorkflowRunId>(2);
+    control->progress.nodes.front().invocation = origin;
+    error(handle.inspect(), ErrorCode::InvalidRunHandle);
     control->progress = {};
     control->bad_wait = true;
     error(handle.wait(RunWaitTarget::Completion, deadline), ErrorCode::InvalidRunHandle);

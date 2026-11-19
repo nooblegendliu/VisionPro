@@ -26,9 +26,11 @@ public:
     [[nodiscard]] std::optional<std::size_t> take_ready();
     void wait_for_data(std::size_t slot);
     void source_ready(std::size_t slot);
-    void complete(std::size_t slot, std::span<const core::ControlOutputId> outputs);
+    [[nodiscard]] bool has_error_route(std::size_t slot) const;
+    void complete(std::size_t slot, std::span<const core::ControlOutputId> outputs,
+        std::optional<ControlCloseReason> failure = {});
     void stop(ControlCloseReason reason);
-    [[nodiscard]] std::optional<MissingReason> source_absence(std::size_t slot) const;
+    [[nodiscard]] std::optional<SourceSelection::State> source_absence(std::size_t slot) const;
     [[nodiscard]] std::vector<std::pair<std::size_t, NodeSkipReason>> take_skipped();
 private:
     struct Frame {

@@ -450,8 +450,17 @@ Result<std::monostate> validate_descriptor(const ToolDescriptor& descriptor)
         || (execution.reentrancy != ToolReentrancy::Serialized && execution.reentrancy != ToolReentrancy::Reentrant)
         || (execution.effects != ToolEffects::None && execution.effects != ToolEffects::State && execution.effects != ToolEffects::External)
         || (execution.cancellation != ToolCancellation::Unsupported && execution.cancellation != ToolCancellation::Cooperative)
-        || (execution.retry != ToolRetry::Never && execution.retry != ToolRetry::Idempotent)) {
+        || (execution.retry != ToolRetry::Never && execution.retry != ToolRetry::Idempotent
+            && execution.retry != ToolRetry::ProtocolDeduplicated)) {
         return error(ErrorCode::InvalidDescriptor, "Tool execution policy contains an unknown capability.", tool_location);
+    }
+    if (execution.retry != ToolRetry::Never
+        && (descriptor.state || descriptor.shared_target || descriptor.requires_correlation_join
+            || (execution.retry == ToolRetry::Idempotent && execution.effects != ToolEffects::None)
+            || (execution.retry == ToolRetry::ProtocolDeduplicated && execution.effects != ToolEffects::External))) {
+        return error(ErrorCode::InvalidDescriptor,
+            "Automatic retry requires pure computation or a deduplicating external protocol without mutable state, shared targets or correlation joins.",
+            tool_location);
     }
     const auto contextualize = [&](Diagnostic diagnostic) -> Check {
         diagnostic.location.tool = descriptor.id;

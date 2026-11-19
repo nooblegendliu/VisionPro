@@ -52,6 +52,7 @@ ControlSchedule::ControlSchedule(const ScopeDependencies& scope, const Workflow&
     for (const auto& node : flow.nodes) {
         if (const auto found = indices.find(node.id); found != indices.end()) {
             states_[found->second].enabled = node.enabled;
+            states_[found->second].error_output = node.execution_policy.error_output;
         }
     }
     // An entry grants a virtual arrival. Its actual incoming edges still
@@ -111,7 +112,17 @@ void ControlSchedule::source_ready(std::size_t index)
     }
 }
 
-void ControlSchedule::complete(std::size_t index, std::span<const core::ControlOutputId> selected)
+bool ControlSchedule::has_error_route(std::size_t index) const
+{
+    const auto& source = states_[index];
+    return source.error_output && std::ranges::any_of(source.outgoing, [&](std::size_t edge) {
+        const auto& route = routes_[edge];
+        return route.outlet == source.error_output && states_[route.target].enabled;
+    });
+}
+
+void ControlSchedule::complete(std::size_t index, std::span<const core::ControlOutputId> selected,
+    std::optional<ControlCloseReason> failure)
 {
     auto& source = states_[index];
     if (stopped_ || source.phase != Phase::Dispatched) { return; }
@@ -121,8 +132,9 @@ void ControlSchedule::complete(std::size_t index, std::span<const core::ControlO
     std::vector<std::size_t> determined;
     for (const auto edge : source.outgoing) {
         const auto& outlet = routes_[edge].outlet;
-        const bool arrives = !outlet || std::ranges::find(selected, *outlet) != selected.end();
-        settle_link(edge, arrives ? std::nullopt : std::optional{ControlCloseReason::NotSelected}, determined);
+        const bool arrives = failure ? (source.error_output && source.error_output == outlet)
+            : (!outlet || std::ranges::find(selected, *outlet) != selected.end());
+        settle_link(edge, arrives ? std::nullopt : std::optional{failure.value_or(ControlCloseReason::NotSelected)}, determined);
     }
     propagate(determined);
 }
@@ -139,11 +151,16 @@ void ControlSchedule::stop(ControlCloseReason reason) noexcept
     }
 }
 
-std::optional<MissingReason> ControlSchedule::source_absence(std::size_t index) const noexcept
+std::optional<SourceSelection::State> ControlSchedule::source_absence(std::size_t index) const noexcept
 {
     const auto& source = states_[index];
     if (!source.enabled) { return MissingReason::Disabled; }
-    if (source.phase == Phase::Skipped) { return MissingReason::NotSelected; }
+    if (source.phase == Phase::Skipped) {
+        if (source.upstream_failure) {
+            return *source.upstream_failure == ControlCloseReason::TimedOut ? UpstreamFailure::TimedOut : UpstreamFailure::Failed;
+        }
+        return MissingReason::NotSelected;
+    }
     return std::nullopt;
 }
 
@@ -172,6 +189,7 @@ void ControlSchedule::settle_link(std::size_t edge, std::optional<ControlCloseRe
     auto& target = states_[target_index];
     target.arrived = target.arrived || !reason;
     target.not_selected = target.not_selected || reason == ControlCloseReason::NotSelected;
+    if (reason == ControlCloseReason::Failed || reason == ControlCloseReason::TimedOut) { target.upstream_failure = reason; }
     if (--target.pending == 0) { determined.push_back(target_index); }
 }
 
@@ -188,15 +206,17 @@ void ControlSchedule::propagate(std::vector<std::size_t>& determined)
 
         auto reason = NodeSkipReason::Disabled;
         if (node.enabled) {
-            reason = node.not_selected ? NodeSkipReason::NotSelected : NodeSkipReason::UpstreamClosed;
+            reason = node.not_selected && !node.upstream_failure ? NodeSkipReason::NotSelected : NodeSkipReason::UpstreamClosed;
         }
         node.phase = Phase::Skipped;
         --unsettled_;
         skipped_.emplace_back(index, reason);
         source_ready(index);
 
-        const auto closure = reason == NodeSkipReason::NotSelected
-            ? ControlCloseReason::NotSelected : ControlCloseReason::Disabled;
+        auto closure = ControlCloseReason::Disabled;
+        if (node.enabled) {
+            closure = node.upstream_failure.value_or(node.not_selected ? ControlCloseReason::NotSelected : ControlCloseReason::Disabled);
+        }
         for (const auto edge : node.outgoing) { settle_link(edge, closure, determined); }
     }
 }

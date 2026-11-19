@@ -1,3 +1,10 @@
+add_executable(visionpro_attempt_tests attempt_tests.cpp)
+target_link_libraries(visionpro_attempt_tests PRIVATE visionpro_workflow visionpro_build_options Threads::Threads)
+foreach(case IN ITEMS timeout_retry logical_timeout_and_cancel recovery_and_judgement external_deduplication)
+    add_test(NAME workflow.${case} COMMAND visionpro_attempt_tests ${case})
+    set_tests_properties(workflow.${case} PROPERTIES TIMEOUT 30)
+endforeach()
+
 foreach(service IN ITEMS shared_data correlation_join)
     add_executable(visionpro_${service}_tests ${service}_tests.cpp)
     target_link_libraries(visionpro_${service}_tests PRIVATE visionpro_workflow visionpro_build_options Threads::Threads)

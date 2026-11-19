@@ -1240,6 +1240,59 @@ void move_to_group(const InspectorContext& context, const WorkflowId& id, const 
     if (moved) { context.scene.reveal_node(selected); }
 }
 
+void edit_execution_policy(const InspectorContext& context, WorkflowId flow, NodeId node,
+    const ToolDescriptor& tool, const NodeExecutionPolicy& current)
+{
+    QDialog dialog(context.owner);
+    dialog.setWindowTitle(QStringLiteral("Node execution policy"));
+    auto* layout = new QVBoxLayout(&dialog);
+    auto* form = new QFormLayout;
+    auto* timeout = new QLineEdit(QString::number(current.timeout_ms), &dialog);
+    timeout->setObjectName(QStringLiteral("nodeTimeoutMs"));
+    auto* retries = new QLineEdit(QString::number(current.max_retries), &dialog);
+    retries->setObjectName(QStringLiteral("nodeMaxRetries"));
+    retries->setEnabled(tool.execution.retry != ToolRetry::Never || current.max_retries);
+    const auto capability = tool.execution.retry == ToolRetry::ProtocolDeduplicated ? QStringLiteral("Protocol deduplication")
+        : tool.execution.retry == ToolRetry::Idempotent ? QStringLiteral("Pure computation") : QStringLiteral("Retries disabled");
+    auto* outlet = new QLineEdit(current.error_output ? id_text(*current.error_output) : QString{}, &dialog);
+    outlet->setObjectName(QStringLiteral("nodeErrorOutlet"));
+    form->addRow(QStringLiteral("Attempt timeout (ms, 0 disables)"), timeout);
+    form->addRow(QStringLiteral("Retry capability"), new QLabel(capability, &dialog));
+    form->addRow(QStringLiteral("Maximum retries"), retries);
+    form->addRow(QStringLiteral("Error outlet ID (optional)"), outlet);
+    layout->addLayout(form);
+    close_buttons(dialog, *layout);
+    while (dialog.exec() == QDialog::Accepted) {
+        bool timeout_ok{}, retries_ok{};
+        NodeExecutionPolicy next{timeout->text().toUInt(&timeout_ok), retries->text().toUInt(&retries_ok)};
+        if (!timeout_ok || !retries_ok) {
+            warn(&dialog, QStringLiteral("Timeout and retry limit must be unsigned 32-bit integers."));
+            continue;
+        }
+        const auto name = outlet->text().trimmed();
+        if (!name.isEmpty()) {
+            auto parsed = SchemaIdFactory::parse<ControlOutputId>(utf8(name));
+            if (const auto* bad = std::get_if<Diagnostic>(&parsed)) { warn(&dialog, qtext(bad->message)); continue; }
+            next.error_output = std::get<ControlOutputId>(std::move(parsed));
+        }
+        auto checked = validate_node_execution_policy(next, tool);
+        if (const auto* bad = std::get_if<Diagnostic>(&checked)) { warn(&dialog, qtext(bad->message)); continue; }
+        if (current == next) { return; }
+        context.edit_node(flow, node, QStringLiteral("Change node execution policy"), [&](Solution&, Workflow& scope, Node& draft) -> Check {
+            if (current.error_output && current.error_output != next.error_output) {
+                for (auto& link : scope.control_links) {
+                    if (link.source != node || link.output != current.error_output) { continue; }
+                    if (!next.error_output) { return error(ErrorCode::InvalidControlLink, "Disconnect the error outlet before removing it."); }
+                    link.output = next.error_output;
+                }
+            }
+            draft.execution_policy = next;
+            return std::monostate{};
+        });
+        return;
+    }
+}
+
 void node_properties(QVBoxLayout& panel, const InspectorContext& context, const Workflow& flow, const Node& node)
 {
     auto* group = section(panel, QStringLiteral("Node"));
@@ -1262,6 +1315,15 @@ void node_properties(QVBoxLayout& panel, const InspectorContext& context, const 
     });
     field->setToolTip(name);
     form->addRow(QStringLiteral("Name"), field);
+    if (const auto* config = std::get_if<ToolConfiguration>(&node.configuration)) {
+        const auto* tool = context.registry.find_descriptor(config->type);
+        if (tool && tool->config_version == config->config_version) {
+            const auto policy = node.execution_policy;
+            form->addRow(QStringLiteral("Execution policy"),
+                action(group, QStringLiteral("Timeout, retries and error outlet…"), "editNodeExecutionPolicy",
+                    [context, id, selected, tool, policy] { edit_execution_policy(context, id, selected, *tool, policy); }));
+        }
+    }
     form->addRow(QStringLiteral("Enabled"), checkbox(group, node.enabled, "nodeEnabled", [context, id, selected](bool enabled) {
         return context.edit_node(id, selected, QStringLiteral("Change node enablement"), [&](Solution&, Workflow&, Node& draft) -> Check {
             draft.enabled = enabled;

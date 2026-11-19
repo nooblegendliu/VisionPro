@@ -456,17 +456,30 @@ NodeResourceBinding decode_node_resource(const Reader& reader)
 
 Json encode_node(const Node& node)
 {
-    return {{"id", write_id(node.id)}, {"name", node.name}, {"configuration", encode_configuration(node.configuration)},
+    Json result{{"id", write_id(node.id)}, {"name", node.name}, {"configuration", encode_configuration(node.configuration)},
         {"bindings", write_array(node.bindings, encode_binding)}, {"resources", write_array(node.resources, encode_node_resource)},
         {"enabled", node.enabled}, {"join", write_enum(node.join)}};
+    if (node.execution_policy != NodeExecutionPolicy{}) {
+        const auto& policy = node.execution_policy;
+        result["execution_policy"] = {{"timeout_ms", policy.timeout_ms}, {"max_retries", policy.max_retries},
+            {"error_output", write_optional(policy.error_output, write_id<ControlOutputId>)}};
+    }
+    return result;
 }
 
 Node decode_node(const Reader& reader)
 {
-    reader.object({"id", "name", "configuration", "bindings", "resources", "enabled", "join"});
+    reader.object({"id", "name", "configuration", "bindings", "resources", "enabled", "join", "execution_policy"});
+    NodeExecutionPolicy policy;
+    if (reader.contains("execution_policy")) {
+        const auto object = reader.field("execution_policy");
+        object.object({"timeout_ms", "max_retries", "error_output"});
+        policy = {object.field("timeout_ms").u32(), object.field("max_retries").u32(),
+            read_optional<ControlOutputId>(object.field("error_output"), read_id<ControlOutputId>)};
+    }
     return {read_id<NodeId>(reader.field("id")), std::string{reader.field("name").text()}, decode_configuration(reader.field("configuration")),
         read_array<Binding>(reader.field("bindings"), decode_binding), read_array<NodeResourceBinding>(reader.field("resources"), decode_node_resource),
-        reader.field("enabled").boolean(), read_enum<JoinPolicy>(reader.field("join"))};
+        reader.field("enabled").boolean(), read_enum<JoinPolicy>(reader.field("join")), std::move(policy)};
 }
 
 Json encode_control_link(const ControlLink& link)
