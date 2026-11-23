@@ -1,6 +1,7 @@
 #include "module_history_panel.hpp"
 
 #include "run_panel.hpp"
+#include "workspace_appearance.hpp"
 #include "workspace_style.hpp"
 
 #include <QCheckBox>
@@ -23,6 +24,13 @@ using namespace workflow;
 
 enum HistoryColumn { Round, Execution, Verdict, Summary, Measured, Range, Elapsed };
 
+void set_verdict_ink(QTreeWidgetItem& item, const QString& verdict)
+{
+    if (verdict == QStringLiteral("OK")) { item.setForeground(Verdict, workspace_colors().positive); }
+    else if (verdict == QStringLiteral("NG")) { item.setForeground(Verdict, workspace_colors().negative); }
+    else { item.setData(Verdict, Qt::ForegroundRole, QVariant{}); }
+}
+
 class HistoryRowDelegate final : public QStyledItemDelegate {
 public:
     using QStyledItemDelegate::QStyledItemDelegate;
@@ -32,6 +40,16 @@ public:
         auto size = QStyledItemDelegate::sizeHint(option, index);
         size.setHeight(std::max({size.height(), 28, option.fontMetrics.height() + 8}));
         return size;
+    }
+
+protected:
+    void initStyleOption(QStyleOptionViewItem* option, const QModelIndex& index) const override
+    {
+        QStyledItemDelegate::initStyleOption(option, index);
+        if (index.column() == Verdict && option->state.testFlag(QStyle::State_Selected)) {
+            const auto ink = index.data(Qt::ForegroundRole);
+            if (ink.isValid()) { option->palette.setBrush(QPalette::HighlightedText, ink.value<QBrush>()); }
+        }
     }
 };
 
@@ -150,6 +168,12 @@ ModuleHistoryPanel::ModuleHistoryPanel(QWidget* parent) : QWidget(parent)
     table_->header()->setSectionResizeMode(Summary, QHeaderView::Stretch);
     layout->addWidget(table_, 1);
 
+    connect(&WorkspaceAppearance::instance(), &WorkspaceAppearance::colorsChanged, this, [this] {
+        for (int row = 0; row < table_->topLevelItemCount(); ++row) {
+            auto* item = table_->topLevelItem(row);
+            set_verdict_ink(*item, item->text(Verdict));
+        }
+    });
     connect(table_, &QTreeWidget::currentItemChanged, this, [this](QTreeWidgetItem* item) { pin_item(item); });
     connect(table_, &QTreeWidget::itemClicked, this, [this](QTreeWidgetItem* item) {
         pin_item(item);
@@ -379,11 +403,7 @@ void ModuleHistoryPanel::refresh()
             const int index = static_cast<int>(addresses_.size());
             auto* item = index < table_->topLevelItemCount() ? table_->topLevelItem(index) : new QTreeWidgetItem(table_);
             if (item->text(Verdict) != row.cells[Verdict]) {
-                const bool dark = table_->palette().color(QPalette::Base).lightness() < 128;
-                QBrush ink;
-                if (row.cells[Verdict] == QStringLiteral("NG")) { ink = dark ? QColor("#ffaaa0") : QColor("#aa3028"); }
-                else if (row.cells[Verdict] == QStringLiteral("OK")) { ink = dark ? QColor("#87dcb1") : QColor("#167045"); }
-                item->setForeground(Verdict, ink);
+                set_verdict_ink(*item, row.cells[Verdict]);
             }
             for (int col = 0; col < row.cells.size(); ++col) {
                 if (item->text(col) != row.cells[col]) {

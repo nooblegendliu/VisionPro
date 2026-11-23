@@ -1,8 +1,10 @@
 #include "control_scene.hpp"
+#include "workspace_appearance.hpp"
 #include "workspace_style.hpp"
 
 #include <QtNodes/ConnectionIdUtils>
 #include <QtNodes/DefaultNodePainter>
+#include <QtNodes/StyleCollection>
 #include <QtNodes/internal/ConnectionGraphicsObject.hpp>
 #include <QtNodes/internal/DefaultConnectionPainter.hpp>
 #include <QtNodes/internal/NodeGraphicsObject.hpp>
@@ -166,11 +168,26 @@ public:
         const auto base = tip - 8 * direction;
         painter->save();
         painter->setPen(Qt::NoPen);
-        painter->setBrush(edge.isSelected() ? QColor("#ffab50") : QColor("#7bd3cf"));
+        const auto& colors = workspace_colors();
+        painter->setBrush(edge.isSelected() ? colors.connectionSelected : colors.connection);
         painter->drawPolygon(QPolygonF{tip, base + 4 * perpendicular, base - 4 * perpendicular});
         painter->restore();
     }
 };
+
+void apply_connection_colors()
+{
+    const auto& colors = workspace_colors();
+    auto style = StyleCollection::connectionStyle();
+    style.loadJson({{QStringLiteral("ConnectionStyle"), QJsonObject{
+        {QStringLiteral("NormalColor"), colors.connection.name()},
+        {QStringLiteral("ConstructionColor"), colors.connection.name()},
+        {QStringLiteral("SelectedColor"), colors.connectionSelected.name()},
+        {QStringLiteral("SelectedHaloColor"), colors.connectionSelected.darker(175).name()},
+        {QStringLiteral("HoveredColor"), colors.connection.darker(150).name()},
+        {QStringLiteral("UseDataDefinedColors"), false}}}});
+    StyleCollection::setConnectionStyle(style);
+}
 
 core::Diagnostic edit_error(core::ErrorCode code, std::string message)
 {
@@ -255,6 +272,12 @@ ControlScene::ControlScene(ControlGraphModel& model, QObject* parent)
 {
     setNodePainter(std::make_unique<ControlNodePainter>());
     setConnectionPainter(std::make_unique<ControlConnectionPainter>());
+    apply_connection_colors();
+    connect(&WorkspaceAppearance::instance(), &WorkspaceAppearance::colorsChanged, this, [this] {
+        apply_connection_colors();
+        // QtNodes caches node pixels in device coordinates. Invalidate each item in place.
+        for (auto* item : items()) { item->update(); }
+    });
     onModelReset();
 }
 

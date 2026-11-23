@@ -7,6 +7,7 @@ add_library(visionpro_ui STATIC
     editor_window.cpp editor_window.hpp editor_documents.cpp editor_runs.cpp
     workspace_toolbox.cpp workspace_toolbox.hpp
     workspace_style.cpp workspace_style.hpp
+    workspace_appearance.cpp workspace_appearance.hpp
     workspace_icons.cpp workspace_icons.hpp
     toolbox_catalog.cpp toolbox_catalog.hpp
     editor_inspector.cpp editor_inspector.hpp

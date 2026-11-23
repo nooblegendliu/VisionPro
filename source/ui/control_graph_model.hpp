@@ -74,6 +74,7 @@ private:
     using ProjectedNodes = std::map<QtNodes::NodeId, ProjectedNode>;
 
     const workflow::Workflow* active_workflow() const;
+    void update_paint_style();
     ProjectedNodes project_nodes(const workflow::Workflow* flow);
     void set_view(std::optional<core::WorkflowId> workflow_id, std::optional<core::NodeId> scope,
         ProjectedNodes nodes);
@@ -96,6 +97,7 @@ private:
     std::optional<core::WorkflowId> workflow_id_;
     std::map<core::NodeId, QtNodes::NodeId> ids_;
     ProjectedNodes nodes_;
+    QVariantMap paint_style_;
     std::optional<core::NodeId> scope_;
 };
 

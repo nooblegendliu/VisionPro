@@ -4,6 +4,7 @@
 #include "module_history_panel.hpp"
 #include "run_controller.hpp"
 #include "tool_catalog.hpp"
+#include "workspace_appearance.hpp"
 
 #include <visionpro/core/id_factory.hpp>
 #include <visionpro/core/schema_id_factory.hpp>
@@ -16,6 +17,7 @@
 #include <QComboBox>
 #include <QDialogButtonBox>
 #include <QDockWidget>
+#include <QFileDialog>
 #include <QGraphicsPixmapItem>
 #include <QGridLayout>
 #include <QInputDialog>
@@ -24,16 +26,22 @@
 #include <QJsonObject>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMenu>
 #include <QProcess>
+#include <QProcessEnvironment>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSet>
+#include <QSettings>
+#include <QStyleHints>
 #include <QTemporaryDir>
 #include <QTest>
 #include <QTimer>
 #include <QToolBar>
 #include <QToolButton>
+#include <QToolTip>
 #include <QTreeWidget>
+#include <QUndoStack>
 
 #include <algorithm>
 #include <filesystem>
@@ -185,13 +193,122 @@ class WorkspaceTests final : public QObject {
     Q_OBJECT
 
 private slots:
+    void initTestCase();
+    void appearance_preferences();
     void toolbox_category_grid_and_search();
     void toolbar_icons_keep_transparent_margins();
     void five_lane_selection_and_history();
     void format_image_sources_data();
     void format_image_sources();
     void loop_invocation_history();
+
+private:
+    QTemporaryDir settings_directory_;
 };
+
+void WorkspaceTests::initTestCase()
+{
+    QVERIFY(settings_directory_.isValid());
+    const auto directory = qEnvironmentVariable("VISIONPRO_TEST_REOPEN_SETTINGS", settings_directory_.path());
+    QSettings::setDefaultFormat(QSettings::IniFormat);
+    QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, directory);
+    QSettings::setPath(QSettings::IniFormat, QSettings::SystemScope, directory);
+}
+
+void WorkspaceTests::appearance_preferences()
+{
+    auto& appearance = WorkspaceAppearance::instance();
+    const auto registry = take(app::make_tool_registry());
+    const auto sample = take(infrastructure::load_solution(fs::path(QString::fromUtf8(VISIONPRO_S69_DIRECTORY).toStdU16String()), registry));
+    EditorWindow window(sample.solution(), registry);
+    auto* system = control<QAction>(window, "appearanceSystem");
+    auto* light = control<QAction>(window, "appearanceLight");
+    auto* dark = control<QAction>(window, "appearanceDark");
+    if (qEnvironmentVariableIsSet("VISIONPRO_TEST_REOPEN_SETTINGS")) {
+        QCOMPARE(appearance.mode(), AppearanceMode::Dark);
+        QVERIFY(dark->isChecked() && !light->isChecked() && !system->isChecked());
+        QCOMPARE(window.palette().window().color(), QColor("#20252b"));
+        return;
+    }
+
+    QCOMPARE(appearance.mode(), AppearanceMode::System);
+    QVERIFY(system->isChecked() && !light->isChecked() && !dark->isChecked());
+    QSettings settings(QSettings::IniFormat, QSettings::UserScope, QStringLiteral("VisionPro"), QStringLiteral("VisionPro"));
+    const auto key = QStringLiteral("appearance/mode");
+    const auto hints = QApplication::styleHints();
+    const auto platform_scheme = hints->colorScheme();
+    window.show();
+    QVERIFY(window.windowHandle());
+    const bool windows = QApplication::platformName() == QStringLiteral("windows");
+    const auto change_platform_scheme = [&](Qt::ColorScheme scheme) {
+        // Windows supports process-local platform overrides. Offscreen has no system preference.
+        if (windows) { hints->setColorScheme(scheme); }
+        else { hints->colorSchemeChanged(scheme); }
+    };
+    change_platform_scheme(Qt::ColorScheme::Dark);
+    QTRY_COMPARE(window.palette().window().color(), QColor("#20252b"));
+    change_platform_scheme(Qt::ColorScheme::Light);
+    QTRY_COMPARE(window.palette().window().color(), QColor("#f3f4f5"));
+    QCOMPARE(appearance.mode(), AppearanceMode::System);
+    if (windows) { hints->unsetColorScheme(); }
+    else { hints->colorSchemeChanged(platform_scheme); }
+
+    QDialog dialog(&window);
+    dialog.show();
+    auto* inspector = control<QDockWidget>(window, "inspectorDock");
+    inspector->setFloating(true);
+    inspector->show();
+    auto* run = control<QAction>(window, "runWorkflow");
+    auto tiles = window.findChildren<QToolButton*>();
+    const auto tile = std::ranges::find_if(tiles, [](const auto* button) { return button->property("toolType").isValid(); });
+    QVERIFY(tile != tiles.end());
+    const auto icon_pixels = [](const QIcon& icon) { return icon.pixmap(QSize(24, 24)).toImage(); };
+
+    light->trigger();
+    QTRY_COMPARE(dialog.palette().window().color(), QColor("#f3f4f5"));
+    QVERIFY(light->isChecked() && !dark->isChecked() && !system->isChecked());
+    QCOMPARE(settings.value(key).toString(), QStringLiteral("light"));
+    const auto light_run = icon_pixels(run->icon());
+    const auto light_tile = icon_pixels((*tile)->icon());
+    dark->trigger();
+    QTRY_COMPARE(dialog.palette().window().color(), QColor("#20252b"));
+    QTRY_COMPARE(inspector->palette().window().color(), dialog.palette().window().color());
+    QDialog new_dialog(&window);
+    QCOMPARE(new_dialog.palette().window().color(), dialog.palette().window().color());
+    auto* appearance_menu = qobject_cast<QMenu*>(dark->parent());
+    QVERIFY(appearance_menu);
+    QCOMPARE(appearance_menu->palette().window().color(), dialog.palette().window().color());
+    QTRY_COMPARE(QToolTip::palette().toolTipBase().color(), workspace_colors().surface);
+    QCOMPARE(QToolTip::palette().toolTipText().color(), workspace_colors().text);
+    QFileDialog file_picker(&window);
+    file_picker.show();
+    QTRY_VERIFY(file_picker.findChild<QDialogButtonBox*>() && file_picker.findChild<QDialogButtonBox*>()->isVisible());
+    QCOMPARE(file_picker.palette().base().color(), workspace_colors().surface);
+    file_picker.reject();
+    QTRY_VERIFY(icon_pixels(run->icon()) != light_run);
+    QTRY_VERIFY(icon_pixels((*tile)->icon()) != light_tile);
+    QVERIFY(dark->isChecked() && !light->isChecked() && !system->isChecked());
+    hints->colorSchemeChanged(Qt::ColorScheme::Light);
+    QApplication::processEvents();
+    QCOMPARE(appearance.mode(), AppearanceMode::Dark);
+    QCOMPARE(window.palette().window().color(), QColor("#20252b"));
+    QCOMPARE(settings.value(key).toString(), QStringLiteral("dark"));
+
+    QProcess reopened;
+    auto environment = QProcessEnvironment::systemEnvironment();
+    environment.insert(QStringLiteral("VISIONPRO_TEST_REOPEN_SETTINGS"), settings_directory_.path());
+    reopened.setProcessEnvironment(environment);
+    reopened.setProcessChannelMode(QProcess::MergedChannels);
+    reopened.start(QCoreApplication::applicationFilePath(), {QStringLiteral("-platform"), QApplication::platformName(), QStringLiteral("appearance_preferences")});
+    QVERIFY2(reopened.waitForFinished(15000), qPrintable(reopened.errorString()));
+    QCOMPARE(reopened.exitStatus(), QProcess::NormalExit);
+    QVERIFY2(reopened.exitCode() == 0, reopened.readAll().constData());
+
+    system->trigger();
+    QCOMPARE(appearance.mode(), AppearanceMode::System);
+    QVERIFY(system->isChecked() && !dark->isChecked() && !light->isChecked());
+    QCOMPARE(settings.value(key).toString(), QStringLiteral("system"));
+}
 
 void WorkspaceTests::toolbar_icons_keep_transparent_margins()
 {
@@ -432,6 +549,73 @@ void WorkspaceTests::five_lane_selection_and_history()
     QTRY_VERIFY(history->selected_run() && history->selected_run()->identity() == first.identity());
     compare_view_with_run(*image, first);
     QVERIFY(stats->text().contains(round_text(first)));
+
+    const auto selected_call = history->selected_invocation();
+    const auto selected_nodes = scene.selected_nodes();
+    const auto transform = canvas->transform();
+    const auto undo_position = scene.undoStack().index();
+    const auto revision = window.draft().revision;
+    const auto stats_text = stats->text();
+    auto* displayed_view = image->findChild<ImageView*>();
+    QVERIFY(displayed_view);
+    const auto image_layers = [&] {
+        QList<QImage> layers;
+        for (const auto* item : displayed_view->scene()->items()) {
+            if (const auto* layer = dynamic_cast<const QGraphicsPixmapItem*>(item)) { layers.append(layer->pixmap().toImage()); }
+        }
+        return layers;
+    };
+    const auto pixels = image_layers();
+    QCOMPARE(pixels.size(), 2);
+    const auto verify_theme = [&](const char* action, const char* screenshot_variable) {
+        control<QAction>(window, action)->trigger();
+        QTRY_COMPARE(canvas->backgroundBrush().color(), workspace_colors().canvas);
+        QTRY_COMPARE(window.palette().window().color(), workspace_colors().window);
+        QTRY_COMPARE(toolbar->palette().buttonText().color(), workspace_colors().text);
+        QTRY_COMPARE(table->viewport()->palette().base().color(), workspace_colors().surface);
+        const auto table_background = [&] {
+            const auto viewport = table->viewport()->rect();
+            return table->viewport()->grab(QRect(viewport.center().x(), viewport.bottom() - 4, 1, 1))
+                .toImage().pixelColor(0, 0);
+        };
+        QTRY_COMPARE(table_background(), workspace_colors().surface);
+        QTRY_COMPARE(table->topLevelItem(0)->foreground(2).color(), workspace_colors().positive);
+        QTRY_COMPARE(table->topLevelItem(1)->foreground(2).color(), workspace_colors().negative);
+        QCOMPARE(table->currentItem(), table->topLevelItem(1));
+        // A selected item can have the right ForegroundRole while Qt paints HighlightedText instead.
+        const auto verdict_rect = table->visualRect(table->indexFromItem(table->currentItem(), 2));
+        QVERIFY(table->viewport()->rect().contains(verdict_rect));
+        const auto cell = table->viewport()->grab(verdict_rect).toImage();
+        const auto ink = workspace_colors().negative;
+        bool visible_ink = false;
+        for (int y = 0; y < cell.height() && !visible_ink; ++y) {
+            for (int x = 0; x < cell.width(); ++x) {
+                const auto pixel = cell.pixelColor(x, y);
+                if (std::max({qAbs(pixel.red() - ink.red()), qAbs(pixel.green() - ink.green()), qAbs(pixel.blue() - ink.blue())}) < 40) {
+                    visible_ink = true;
+                    break;
+                }
+            }
+        }
+        QVERIFY(visible_ink);
+        QVERIFY(!follow->isChecked() && history->selected_run() && history->selected_run()->identity() == first.identity());
+        QVERIFY(history->selected_invocation() == selected_call);
+        QCOMPARE(stats->text(), stats_text);
+        QCOMPARE(window.draft().revision, revision);
+        QVERIFY(!window.isWindowModified());
+        QCOMPARE(canvas->scene(), &scene);
+        QVERIFY(scene.selected_nodes() == selected_nodes);
+        QCOMPARE(canvas->transform(), transform);
+        QCOMPARE(scene.undoStack().index(), undo_position);
+        compare_view_with_run(*image, first);
+        QVERIFY(image_layers() == pixels);
+        const auto path = qEnvironmentVariable(screenshot_variable);
+        if (!path.isEmpty()) { QVERIFY2(window.grab().save(path), qPrintable(path)); }
+    };
+    verify_theme("appearanceDark", "VISIONPRO_WORKSPACE_DARK_SCREENSHOT");
+    verify_theme("appearanceLight", "VISIONPRO_WORKSPACE_LIGHT_SCREENSHOT");
+    control<QAction>(window, "appearanceSystem")->trigger();
+
     controller->set_limits(1, controller->observation_capacity());
     QCOMPARE(controller->runs().size(), std::size_t{1});
     QVERIFY(history->selected_run() && history->selected_run()->identity() == first.identity());

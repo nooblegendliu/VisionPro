@@ -7,6 +7,7 @@
 #include "run_controller.hpp"
 #include "run_image.hpp"
 #include "run_panel.hpp"
+#include "workspace_appearance.hpp"
 #include "workspace_icons.hpp"
 #include "workspace_toolbox.hpp"
 #include "workspace_style.hpp"
@@ -14,6 +15,7 @@
 #include <QtNodes/GraphicsView>
 #include <QtNodes/internal/NodeGraphicsObject.hpp>
 #include <QAction>
+#include <QActionGroup>
 #include <QCloseEvent>
 #include <QComboBox>
 #include <QDialogButtonBox>
@@ -212,6 +214,24 @@ void EditorWindow::create_actions()
 
     create_run_actions();
     auto& view = *menuBar()->addMenu(tr("视图(&V)"));
+    auto* appearance_menu = view.addMenu(tr("外观"));
+    auto* choices = new QActionGroup(appearance_menu);
+    auto& appearance = WorkspaceAppearance::instance();
+    const auto add_mode = [&](AppearanceMode mode, const QString& label, const char* name) {
+        auto* choice = appearance_menu->addAction(label);
+        choice->setObjectName(QString::fromLatin1(name));
+        choices->addAction(choice);
+        choice->setCheckable(true);
+        choice->setChecked(appearance.mode() == mode);
+        connect(choice, &QAction::triggered, &appearance, [&appearance, mode] { appearance.setMode(mode); });
+        connect(&appearance, &WorkspaceAppearance::modeChanged, choice, [choice, mode](AppearanceMode selected) {
+            choice->setChecked(selected == mode);
+        });
+    };
+    add_mode(AppearanceMode::System, tr("跟随系统"), "appearanceSystem");
+    add_mode(AppearanceMode::Light, tr("浅色"), "appearanceLight");
+    add_mode(AppearanceMode::Dark, tr("深色"), "appearanceDark");
+    view.addSeparator();
     for (auto* dock : findChildren<QDockWidget*>(QString(), Qt::FindDirectChildrenOnly)) {
         view.addAction(dock->toggleViewAction());
     }

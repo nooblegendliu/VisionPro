@@ -1,4 +1,5 @@
 #include "control_graph_model.hpp"
+#include "workspace_appearance.hpp"
 
 #include <QtNodes/ConnectionIdUtils>
 #include <QtNodes/NodeData>
@@ -71,6 +72,27 @@ ControlGraphModel::ControlGraphModel(Solution draft, std::optional<core::Workflo
     }
     if (!workflow_id_ && !draft_.workflows.empty()) { workflow_id_ = draft_.workflows.front().id; }
     nodes_ = project_nodes(active_workflow());
+    update_paint_style();
+    connect(&WorkspaceAppearance::instance(), &WorkspaceAppearance::colorsChanged,
+        this, &ControlGraphModel::update_paint_style);
+}
+
+void ControlGraphModel::update_paint_style()
+{
+    const auto& colors = workspace_colors();
+    auto style = StyleCollection::nodeStyle();
+    style.setBackgroundColor(colors.node);
+    style.FontColor = colors.nodeText;
+    style.FontColorFaded = colors.secondary;
+    style.NormalBoundaryColor = colors.nodeBorder;
+    style.SelectedBoundaryColor = colors.selection;
+    style.ConnectionPointColor = colors.secondary;
+    style.FilledConnectionPointColor = colors.nodePortFilled;
+    style.ShadowEnabled = false;
+    style.Opacity = 1.0f;
+    style.PenWidth = 2.0f;
+    style.HoveredPenWidth = 2.5f;
+    paint_style_ = style.toJson().toVariantMap();
 }
 
 const Workflow* ControlGraphModel::active_workflow() const
@@ -337,22 +359,7 @@ QVariant ControlGraphModel::nodeData(NodeId node, NodeRole role) const
     case NodeRole::OutPortCount: return 1 + static_cast<PortCount>(nodes_.at(node).outlets.size());
     case NodeRole::Position: return position(node);
     case NodeRole::Size: return nodes_.at(node).size;
-    case NodeRole::Style: {
-        static const auto paint_style = [] {
-            auto style = StyleCollection::nodeStyle();
-            style.setBackgroundColor(QColor(QStringLiteral("#e9edf1")));
-            style.FontColor = QColor(QStringLiteral("#172634"));
-            style.FontColorFaded = QColor(QStringLiteral("#506370"));
-            style.NormalBoundaryColor = QColor(QStringLiteral("#a7b3bb"));
-            style.SelectedBoundaryColor = QColor(QStringLiteral("#ff993c"));
-            style.ConnectionPointColor = QColor(QStringLiteral("#627984"));
-            style.FilledConnectionPointColor = QColor(QStringLiteral("#006d75"));
-            style.ShadowEnabled = false;
-            style.PenWidth = 2.0f;
-            return style.toJson().toVariantMap();
-        }();
-        return paint_style;
-    }
+    case NodeRole::Style: return paint_style_;
     default: return {};
     }
 }

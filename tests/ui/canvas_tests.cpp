@@ -1,7 +1,9 @@
 #include "control_graph_model.hpp"
 #include "control_scene.hpp"
 #include "simulation.hpp"
+#include "workspace_appearance.hpp"
 #include "workspace_style.hpp"
+#include "workspace_toolbox.hpp"
 
 #include <visionpro/core/id_factory.hpp>
 #include <visionpro/core/schema_id_factory.hpp>
@@ -14,12 +16,16 @@
 #include <QImage>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QPainterPath>
+#include <QSettings>
 #include <QSignalSpy>
+#include <QTemporaryDir>
 #include <QTest>
 #include <QUndoStack>
 
 #include <algorithm>
 #include <array>
+#include <cstdlib>
 #include <stdexcept>
 
 namespace {
@@ -137,14 +143,84 @@ QPoint view_port_position(QtNodes::GraphicsView& view, ui::ControlScene& scene,
 class CanvasTests final : public QObject {
     Q_OBJECT
 
+    QTemporaryDir settings_;
+
 private Q_SLOTS:
+    void initTestCase();
     void projects_control_graph();
+    void repaints_existing_nodes_and_connections();
     void measures_chinese_titles_and_branch_labels();
     void reveals_unused_branch_when_wiring();
     void replays_edits_across_group_scopes();
     void protects_existing_links_with_shared_endpoints();
     void handles_mouse_gestures();
 };
+
+void CanvasTests::initTestCase()
+{
+    QVERIFY(settings_.isValid());
+    QSettings::setDefaultFormat(QSettings::IniFormat);
+    QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, settings_.path());
+}
+
+void CanvasTests::repaints_existing_nodes_and_connections()
+{
+    auto& appearance = ui::WorkspaceAppearance::instance();
+    appearance.setMode(ui::AppearanceMode::Light);
+    const Fixture fixture;
+    ui::ControlGraphModel graph(fixture.solution(), fixture.workflow_id, fixture.registry);
+    ui::ControlScene scene(graph);
+    ui::WorkspaceToolbox toolbox(fixture.registry);
+    ui::WorkflowCanvas view(&scene, &toolbox, [](const QString&, QPointF) {});
+    view.resize(1000, 550);
+    view.show();
+    QCoreApplication::processEvents();
+    view.restore_view(1.2, scene.itemsBoundingRect().center());
+    const auto center = view.view_center();
+    const auto group = graph.canvas_id(fixture.group);
+    const QtNodes::ConnectionId id{group, 1, graph.canvas_id(fixture.finish), 0};
+    auto* card = scene.nodeGraphicsObject(group);
+    auto* wire = scene.connectionGraphicsObject(id);
+    QVERIFY(card && wire);
+    const auto position = card->pos() + QPointF(-10, 0);
+    QVERIFY(scene.move_nodes(std::array{ui::CanvasMove{group, position}}));
+    card->setSelected(true);
+    wire->setSelected(true);
+
+    const auto contains_color = [](const QImage& image, QColor color) {
+        for (int y = 0; y < image.height(); ++y) {
+            for (int x = 0; x < image.width(); ++x) {
+                if (image.pixelColor(x, y) == color) { return true; }
+            }
+        }
+        return false;
+    };
+    const auto [c1, c2] = wire->pointsC1C2();
+    QPainterPath path(wire->out());
+    path.cubicTo(c1, c2, wire->in());
+    const auto wire_point = view.mapFromScene(wire->mapToScene(path.pointAtPercent(0.55)));
+    const QRect wire_rect(wire_point - QPoint(5, 5), QSize(11, 11));
+    const QPoint card_point = view.mapFromScene(card->mapToScene(QPointF(8, 6)));
+    const QRect card_rect(card_point - QPoint(2, 2), QSize(5, 5));
+    QVERIFY(view.viewport()->rect().contains(card_rect) && view.viewport()->rect().contains(wire_rect));
+    for (const auto mode : {ui::AppearanceMode::Light, ui::AppearanceMode::Dark, ui::AppearanceMode::Light}) {
+        appearance.setMode(mode);
+        const auto& colors = ui::workspace_colors();
+        QTRY_VERIFY(contains_color(view.viewport()->grab(card_rect).toImage(), colors.node));
+        QTRY_VERIFY(contains_color(view.viewport()->grab(wire_rect).toImage(), colors.connectionSelected));
+        const auto background = view.viewport()->grab(QRect(3, 3, 72, 72)).toImage();
+        QVERIFY(contains_color(background, colors.grid));
+        QVERIFY(contains_color(background, colors.canvas));
+        QCOMPARE(scene.nodeGraphicsObject(group), card);
+        QCOMPARE(scene.connectionGraphicsObject(id), wire);
+        QVERIFY(card->isSelected() && wire->isSelected());
+        QCOMPARE(card->pos(), position);
+        QCOMPARE(view.getScale(), 1.2);
+        QCOMPARE(view.view_center(), center);
+        QCOMPARE(scene.undoStack().index(), 1);
+    }
+    appearance.setMode(ui::AppearanceMode::System);
+}
 
 void CanvasTests::measures_chinese_titles_and_branch_labels()
 {
@@ -202,7 +278,7 @@ void CanvasTests::projects_control_graph()
         .object().value(QStringLiteral("NodeStyle")).toObject();
     const QColor title(style.value(QStringLiteral("FontColor")).toString());
     const QColor fill(style.value(QStringLiteral("GradientColor0")).toString());
-    QVERIFY(title.isValid() && fill.isValid() && fill.lightness() - title.lightness() > 128);
+    QVERIFY(title.isValid() && fill.isValid() && std::abs(fill.lightness() - title.lightness()) > 128);
     QCOMPARE(graph.layout_orientation(), Qt::Horizontal);
     QCOMPARE(graph.nodeData(route, QtNodes::NodeRole::OutPortCount).toUInt(), 3u);
     QCOMPARE(graph.nodeData(group, QtNodes::NodeRole::OutPortCount).toUInt(), 2u);

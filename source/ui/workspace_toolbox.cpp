@@ -1,4 +1,5 @@
 #include "workspace_toolbox.hpp"
+#include "workspace_appearance.hpp"
 #include "toolbox_catalog.hpp"
 #include "workspace_style.hpp"
 
@@ -231,6 +232,12 @@ WorkspaceToolbox::WorkspaceToolbox(const core::ToolRegistry& registry, QWidget* 
     connect(selection_, &QButtonGroup::buttonToggled, this, [this](QAbstractButton*, bool checked) {
         if (checked) { emit selectionChanged(); }
     });
+    connect(&WorkspaceAppearance::instance(), &WorkspaceAppearance::colorsChanged, this, [this] {
+        for (auto* tile : selection_->buttons()) {
+            const auto type = tile->property("toolType").toString().toStdString();
+            tile->setIcon(toolbox_entry(type, tile->text()).icon);
+        }
+    });
 }
 
 QString WorkspaceToolbox::selected_type() const
@@ -279,7 +286,10 @@ WorkflowCanvas::WorkflowCanvas(QtNodes::BasicGraphicsScene* scene, WorkspaceTool
     : QtNodes::GraphicsView(scene), toolbox_(toolbox), add_(std::move(add)), zoom_controls_(new QFrame(this))
 {
     setAcceptDrops(true);
-    setBackgroundBrush(QColor("#32393e"));
+    setBackgroundBrush(workspace_colors().canvas);
+    connect(&WorkspaceAppearance::instance(), &WorkspaceAppearance::colorsChanged, this, [this] {
+        setBackgroundBrush(workspace_colors().canvas);
+    });
     setResizeAnchor(QGraphicsView::AnchorViewCenter);
     zoom_controls_->setAutoFillBackground(true);
     zoom_controls_->setFrameShape(QFrame::StyledPanel);
@@ -392,7 +402,7 @@ void WorkflowCanvas::drawBackground(QPainter* painter, const QRectF& exposed)
     while (step * getScale() < 14.0) { step *= 4; }
     painter->save();
     painter->setRenderHint(QPainter::Antialiasing, false);
-    painter->setPen(QPen(QColor("#3b4247"), 0));
+    painter->setPen(QPen(workspace_colors().grid, 0));
     for (qreal x = std::ceil(exposed.left() / step) * step; x < exposed.right(); x += step) {
         painter->drawLine(QLineF(x, exposed.top(), x, exposed.bottom()));
     }

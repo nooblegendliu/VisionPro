@@ -1,4 +1,5 @@
 #include "toolbox_catalog.hpp"
+#include "workspace_appearance.hpp"
 
 #include <QCoreApplication>
 #include <QPainter>
@@ -16,18 +17,19 @@ using Category = ToolboxCategory;
 
 struct SectionStyle {
     const char* name;
-    QRgb ink;
+    QRgb light_ink;
+    QRgb dark_ink;
 };
 
 constexpr std::array sections{
-    SectionStyle{"图像采集", 0xff276290}, SectionStyle{"定位", 0xff137065},
-    SectionStyle{"测量", 0xff1e6593}, SectionStyle{"识别", 0xff704893},
-    SectionStyle{"缺陷检测", 0xffa14d37}, SectionStyle{"边缘学习", 0xff476f37},
-    SectionStyle{"深度学习", 0xff684ba1}, SectionStyle{"标定", 0xff8a561b},
-    SectionStyle{"运算", 0xff735395}, SectionStyle{"图像处理", 0xff355e9d},
-    SectionStyle{"颜色处理", 0xff8c456b}, SectionStyle{"拆分组合", 0xff276f76},
-    SectionStyle{"图形生成", 0xff377344}, SectionStyle{"逻辑工具", 0xff675196},
-    SectionStyle{"通信", 0xff267084}
+    SectionStyle{"图像采集", 0xff276290, 0xff94c8ef}, SectionStyle{"定位", 0xff137065, 0xff86d6c9},
+    SectionStyle{"测量", 0xff1e6593, 0xff8fcbed}, SectionStyle{"识别", 0xff704893, 0xffcea7ec},
+    SectionStyle{"缺陷检测", 0xffa14d37, 0xffeda996}, SectionStyle{"边缘学习", 0xff476f37, 0xffaed397},
+    SectionStyle{"深度学习", 0xff684ba1, 0xffc0a9ee}, SectionStyle{"标定", 0xff8a561b, 0xffe5bd82},
+    SectionStyle{"运算", 0xff735395, 0xffcbb2e6}, SectionStyle{"图像处理", 0xff355e9d, 0xffa3bfed},
+    SectionStyle{"颜色处理", 0xff8c456b, 0xffe7a5c9}, SectionStyle{"拆分组合", 0xff276f76, 0xff97d5d9},
+    SectionStyle{"图形生成", 0xff377344, 0xff9fd5a7}, SectionStyle{"逻辑工具", 0xff675196, 0xffc0aeeb},
+    SectionStyle{"通信", 0xff267084, 0xff91d3e5}
 };
 static_assert(sections.size() == static_cast<std::size_t>(Category::Count));
 
@@ -153,12 +155,14 @@ void draw_glyph(QPainter& p, Glyph glyph, const char* mark, const QColor& ink)
     case Glyph::Levels:
         p.drawPolyline(QPolygonF{{6, 23}, {12, 23}, {12, 17}, {18, 17}, {18, 11}, {25, 11}});
         break;
-    case Glyph::Color:
+    case Glyph::Color: {
+        const bool dark = workspace_is_dark();
         p.setPen(Qt::NoPen);
-        p.setBrush(QColor(179, 65, 80)); p.drawEllipse(QRectF(10, 6, 12, 12));
-        p.setBrush(QColor(30, 136, 104, 224)); p.drawEllipse(QRectF(6, 14, 12, 12));
-        p.setBrush(QColor(39, 116, 179, 224)); p.drawEllipse(QRectF(15, 14, 12, 12));
+        p.setBrush(dark ? QColor(232, 133, 148) : QColor(179, 65, 80)); p.drawEllipse(QRectF(10, 6, 12, 12));
+        p.setBrush(dark ? QColor(110, 201, 161, 224) : QColor(30, 136, 104, 224)); p.drawEllipse(QRectF(6, 14, 12, 12));
+        p.setBrush(dark ? QColor(126, 183, 235, 224) : QColor(39, 116, 179, 224)); p.drawEllipse(QRectF(15, 14, 12, 12));
         break;
+    }
     case Glyph::Range:
         p.drawPolyline(QPolygonF{{10, 9}, {7, 9}, {7, 23}, {10, 23}});
         p.drawPolyline(QPolygonF{{22, 9}, {25, 9}, {25, 23}, {22, 23}});
@@ -240,15 +244,19 @@ void draw_glyph(QPainter& p, Glyph glyph, const char* mark, const QColor& ink)
 
 QIcon make_icon(Category category, Glyph glyph, const char* mark)
 {
-    const QColor ink(sections[static_cast<std::size_t>(category)].ink);
+    const auto& section = sections[static_cast<std::size_t>(category)];
+    const bool dark = workspace_is_dark();
+    const QColor ink(dark ? section.dark_ink : section.light_ink);
     QPixmap image(96, 96);
     image.fill(Qt::transparent);
     QPainter painter(&image);
     painter.setRenderHint(QPainter::Antialiasing);
     painter.scale(3, 3);
-    const QColor background((ink.red() + 8*255) / 9, (ink.green() + 8*255) / 9, (ink.blue() + 8*255) / 9);
+    const auto& base = workspace_colors().surface;
+    const QColor background((ink.red() + 8 * base.red()) / 9, (ink.green() + 8 * base.green()) / 9,
+        (ink.blue() + 8 * base.blue()) / 9);
     painter.setBrush(background);
-    painter.setPen(QPen(ink.lighter(155), 0.8));
+    painter.setPen(QPen(dark ? ink.darker(175) : ink.lighter(155), 0.8));
     painter.drawRoundedRect(QRectF(1, 1, 30, 30), 6, 6);
     painter.setBrush(Qt::NoBrush);
     painter.setPen(QPen(ink, 1.8, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));

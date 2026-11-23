@@ -1,5 +1,6 @@
 #include "canvas_example.hpp"
 #include "editor_window.hpp"
+#include "workspace_appearance.hpp"
 #include "workspace_style.hpp"
 
 #include <tool_catalog.hpp>
@@ -16,6 +17,7 @@ int main(int argc, char** argv)
     QApplication application(argc, argv);
     application.setFont(visionpro::ui::workspace_font());
     application.setApplicationName(QStringLiteral("VisionPro"));
+    visionpro::ui::WorkspaceAppearance::instance();
     QCommandLineParser parser;
     parser.addHelpOption();
     parser.addPositionalArgument(QStringLiteral("solution"), QStringLiteral("要打开的方案目录或 solution.json"), QStringLiteral("[solution]"));
