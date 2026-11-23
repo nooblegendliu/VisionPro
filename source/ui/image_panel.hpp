@@ -8,6 +8,8 @@
 
 class QLabel;
 class QTreeWidget;
+class QComboBox;
+class QPushButton;
 
 namespace visionpro {
 namespace workflow { class NodeResult; }
@@ -34,11 +36,16 @@ public:
     [[nodiscard]] core::Result<std::monostate> present_measurement(const core::ImageHandle& input_image,
         const workflow::NodeResult& result) { return present_image(input_image, &result, nullptr); }
     void set_provenance(const QString& text);
+    void set_sources(const QStringList& labels, int selected);
+    int selected_source() const;
+    void set_manual_view(bool manual);
     void clear_overlays();
     void clear_frame();
 
 signals:
     void frame_changed();
+    void source_changed();
+    void follow_requested();
 
 private:
     void describe_frame(const core::ImageHandle& image);
@@ -51,6 +58,8 @@ private:
     QLabel* provenance_;
     QLabel* pixel_info_;
     QTreeWidget* legend_;
+    QComboBox* sources_;
+    QPushButton* follow_;
     std::optional<std::pair<core::WorkflowId, core::NodeId>> class_producer_;
     workflow::ClassPalette palette_;
     std::optional<core::ImageHandle> frame_;

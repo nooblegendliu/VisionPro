@@ -540,6 +540,7 @@ S3.2 首先受理 WorkflowTarget。NodeTarget 的独立执行和状态隔离见 
 禁用节点关闭当前链，节点和后继分别记录 Disabled 和 UpstreamClosed。
 
 `RunProgress.nodes` 按控制顺序记录节点状态、已启动的 InvocationKey、跳过原因和逐绑定的来源追溯。
+成功解析的整数与浮点绑定在 `RunBindingTrace::numeric_value` 中保留实际交付给工具的标量，包含选择器和类型转换的结果。历史判断据此重现该次调用的实测值与上下限。流程从开始执行到首次逻辑终态的间隔保存在 `RunProgress::elapsed`，采用单调时钟，未开始即结束的轮次为空。两项记录均属于当前运行会话。
 客户端用调用键查询不可变 NodeResult，可从 ResultIdentity 读取本轮快照、调用及尝试身份。
 每轮结果由对应 RunHandle 的后端持有，其他运行各用独立的结果仓库。
 

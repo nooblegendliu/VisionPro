@@ -170,12 +170,14 @@ private Q_SLOTS:
 
 ControlScene& scene(EditorWindow& window)
 {
-    return *qobject_cast<ControlScene*>(qobject_cast<QGraphicsView*>(window.centralWidget())->scene());
+    return *qobject_cast<ControlScene*>(window.findChild<QGraphicsView*>(QStringLiteral("workflowCanvas"))->scene());
 }
 
 QWidget& properties(EditorWindow& window)
 {
-    return *window.findChild<QDockWidget*>(QStringLiteral("inspectorDock"))->widget();
+    auto* dock = window.findChild<QDockWidget*>(QStringLiteral("inspectorDock"));
+    if (dock->isHidden()) { window.findChild<QAction*>(QStringLiteral("showProperties"))->trigger(); }
+    return *dock->widget();
 }
 
 NodeResult result_for(const RunHandle& run, const NodeId& node)
@@ -561,6 +563,7 @@ void InspectorTests::edits_and_reloads_dynamic_indices_and_format_options()
     QCOMPARE(*std::get<DataValue>(formatted.output(key<OutputId>("text"))->content).as_string(), std::string("<6>,<9>,<20>,<10>"));
     const auto result = result_for(handle, consumer);
     QCOMPARE(*std::get<DataValue>(result.output(value)->content).as_int64(), 9);
+    reopened.findChild<QDockWidget*>(QStringLiteral("runDock"))->toggleViewAction()->trigger();
     auto* tree = reopened.findChild<QTreeWidget*>(QStringLiteral("runNodes"));
     QTRY_COMPARE(tree->topLevelItemCount(), 3);
     for (int row = 0; row < tree->topLevelItemCount(); ++row) {

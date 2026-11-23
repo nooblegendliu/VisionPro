@@ -25,6 +25,7 @@ public:
     void update_runs(std::span<const workflow::RunHandle> runs, std::uint64_t dropped);
     void set_camera_status(const QString& status);
     void clear();
+    void suspend();
 
     [[nodiscard]] std::optional<workflow::RunHandle> selected_run() const;
     [[nodiscard]] std::optional<core::InvocationKey> selected_invocation() const;
@@ -67,6 +68,7 @@ private:
     std::optional<workflow::RunProgress> progress_;
     std::optional<workflow::NodeResult> displayed_result_;
     QString details_text_;
+    bool history_dirty_{};
 };
 
 } // namespace visionpro::ui

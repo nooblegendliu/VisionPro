@@ -2,6 +2,7 @@
 
 #include "control_scene.hpp"
 #include "image_panel.hpp"
+#include "module_history_panel.hpp"
 #include "run_controller.hpp"
 #include "run_image.hpp"
 #include "run_panel.hpp"
@@ -16,10 +17,12 @@
 #include <QDockWidget>
 #include <QFormLayout>
 #include <QInputDialog>
+#include <QLabel>
 #include <QMenuBar>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QSpinBox>
+#include <QStatusBar>
 #include <QThread>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -97,17 +100,17 @@ SchemaId trigger_id(bool independent)
 
 void EditorWindow::create_run_actions()
 {
-    auto& menu = *menuBar()->addMenu(QStringLiteral("&Run"));
-    run_workflow_ = action(menu, QStringLiteral("Run Workflow"), "runWorkflow", [this] { start_run(); },
+    auto& menu = *menuBar()->addMenu(QStringLiteral("运行(&R)"));
+    run_workflow_ = action(menu, QStringLiteral("单次运行"), "runWorkflow", [this] { start_run(); },
         QKeySequence(Qt::Key_F5));
-    run_group_ = action(menu, QStringLiteral("Run Selected Group…"), "runSelectedGroup",
+    run_group_ = action(menu, QStringLiteral("运行所选 Group…"), "runSelectedGroup",
         [this] { start_run(DebugStatePolicy::Active); });
-    debug_node_ = action(menu, QStringLiteral("Debug Selected Node…"), "debugSelectedNode", [this] { start_run(DebugStatePolicy::Isolated); },
+    debug_node_ = action(menu, QStringLiteral("调试所选模块…"), "debugSelectedNode", [this] { start_run(DebugStatePolicy::Isolated); },
         QKeySequence(Qt::CTRL | Qt::Key_F5));
-    cancel_run_ = action(menu, QStringLiteral("Cancel Selected Run"), "cancelRun", [this] {
-        if (const auto run = run_panel_->selected_run()) { run_controller_->cancel(*run); }
+    cancel_run_ = action(menu, QStringLiteral("取消所选轮次"), "cancelRun", [this] {
+        if (const auto run = cancel_target()) { run_controller_->cancel(*run); }
     }, QKeySequence(Qt::SHIFT | Qt::Key_F5));
-    reset_state_ = action(menu, QStringLiteral("Reset Selected Node State"), "resetSelectedState", [this] {
+    reset_state_ = action(menu, QStringLiteral("重置所选模块状态"), "resetSelectedState", [this] {
         const auto flow = model_->workflow_id();
         const auto selected = scene_->selected_nodes();
         if (!flow || selected.size() != 1) { return; }
@@ -120,14 +123,12 @@ void EditorWindow::create_run_actions()
         show_status(QStringLiteral("Reset session state for %1.").arg(QString::fromStdString(find_node(workflow, selected.front())->name)));
     });
     menu.addSeparator();
-    arm_trigger_ = action(menu, QStringLiteral("Arm Workflow Trigger"), "armWorkflowTrigger", [this] {
+    arm_trigger_ = action(menu, QStringLiteral("启动当前流程触发源"), "armWorkflowTrigger", [this] {
         if (const auto id = model_->workflow_id()) {
-            run_dock_->show();
-            run_dock_->raise();
             run_controller_->arm_trigger(draft(), {source_, directory_, roots_}, *id);
         }
     });
-    send_frame_ = action(menu, QStringLiteral("Send External Frame…"), "sendExternalFrame", [this] {
+    send_frame_ = action(menu, QStringLiteral("发送外部帧…"), "sendExternalFrame", [this] {
         const auto id = model_->workflow_id();
         if (!id || !run_controller_->can_send_frame(*id)) { return; }
         bool accepted{};
@@ -139,15 +140,15 @@ void EditorWindow::create_run_actions()
         if (!valid) { report_error(QStringLiteral("Enter a 64-bit integer frame number.")); return; }
         run_controller_->send_frame(*id, frame);
     });
-    drain_trigger_ = action(menu, QStringLiteral("Stop Trigger and Drain"), "drainWorkflowTrigger", [this] {
+    drain_trigger_ = action(menu, QStringLiteral("停止触发并等待在途运行"), "drainWorkflowTrigger", [this] {
         if (const auto id = model_->workflow_id()) { run_controller_->stop_trigger(*id, TriggerStopMode::Drain); }
     });
-    cancel_trigger_ = action(menu, QStringLiteral("Stop Trigger and Cancel Runs"), "cancelWorkflowTrigger", [this] {
+    cancel_trigger_ = action(menu, QStringLiteral("停止触发并取消在途运行"), "cancelWorkflowTrigger", [this] {
         if (const auto id = model_->workflow_id()) { run_controller_->stop_trigger(*id, TriggerStopMode::Cancel); }
     });
     menu.addSeparator();
-    action(menu, QStringLiteral("Preview Shared Data…"), "previewSharedData", [this] { show_shared_preview(); });
-    run_limits_ = action(menu, QStringLiteral("History and Notifications…"), "runDisplayLimits", [this] { choose_run_limits(); });
+    action(menu, QStringLiteral("查看共享数据…"), "previewSharedData", [this] { show_shared_preview(); });
+    run_limits_ = action(menu, QStringLiteral("历史与通知…"), "runDisplayLimits", [this] { choose_run_limits(); });
 }
 
 void EditorWindow::show_shared_preview()
@@ -201,22 +202,26 @@ void EditorWindow::show_shared_preview()
 void EditorWindow::create_run_dock()
 {
     run_controller_ = new RunController(registry_, this);
-    run_dock_ = new QDockWidget(QStringLiteral("Run and Results"), this);
+    workspace_image_selection_ = std::make_unique<WorkspaceImageSelection>();
+    run_dock_ = new QDockWidget(QStringLiteral("运行详情"), this);
     run_dock_->setObjectName(QStringLiteral("runDock"));
     run_panel_ = new RunPanel(run_dock_);
     run_dock_->setWidget(run_panel_);
     addDockWidget(Qt::RightDockWidgetArea, run_dock_);
-    splitDockWidget(inspector_dock_, run_dock_, Qt::Vertical);
+    run_dock_->setFloating(true);
+    run_dock_->resize(780, 480);
     run_dock_->hide();
-    connect(run_dock_, &QDockWidget::visibilityChanged, run_controller_, [this](bool visible) {
-        run_controller_->set_observing(visible && !close_confirmed_);
+    run_controller_->set_observing(true);
+    connect(run_dock_, &QDockWidget::visibilityChanged, this, [this](bool visible) {
+        if (!model_) { return; }
         if (visible) {
             run_panel_->update_runs(run_controller_->runs(), run_controller_->dropped());
-            refresh_actions();
-        }
+        } else { run_panel_->suspend(); }
+        refresh_actions();
     });
     connect(run_controller_, &RunController::changed, this, [this] {
         if (run_dock_->isVisible()) { run_panel_->update_runs(run_controller_->runs(), run_controller_->dropped()); }
+        refresh_workspace_results();
         refresh_actions();
         if (close_confirmed_ && !run_controller_->has_session_work()) {
             QTimer::singleShot(0, this, [this] { close(); });
@@ -230,6 +235,116 @@ void EditorWindow::create_run_dock()
     connect(run_controller_, &RunController::trigger_notice, this, &EditorWindow::show_status);
     connect(run_panel_, &RunPanel::image_requested, this, &EditorWindow::show_selected_run_image);
     connect(run_panel_, &RunPanel::selected_run_changed, this, &EditorWindow::refresh_actions);
+    connect(module_history_, &ModuleHistoryPanel::selection_changed, this, [this] {
+        refresh_workspace_statistics();
+        present_workspace_image();
+        refresh_actions();
+    });
+    const auto follow = [this] {
+        workspace_image_selection_->mode = WorkspaceImageSelection::Mode::Follow;
+        workspace_image_selection_->rendered_index = -2;
+        images_->set_manual_view(false);
+        present_workspace_image();
+    };
+    connect(module_history_, &ModuleHistoryPanel::browse_requested, this, follow);
+    connect(images_, &ImagePanel::follow_requested, this, follow);
+    connect(images_, &ImagePanel::source_changed, this, &EditorWindow::present_workspace_image);
+}
+
+std::optional<RunHandle> EditorWindow::cancel_target() const
+{
+    return run_dock_->isVisible() ? run_panel_->selected_run() : module_history_->selected_run();
+}
+
+void EditorWindow::refresh_workspace_selection()
+{
+    if (!scene_ || !module_history_) { return; }
+    auto& display = *workspace_image_selection_;
+    const auto flow = model_->workflow_id();
+    const auto selected = scene_->selected_nodes();
+    const auto node = selected.size() == 1 ? std::optional{selected.front()} : std::nullopt;
+    if ((flow != display.workflow && display.mode != WorkspaceImageSelection::Mode::DraftPreview)
+        || (node != display.node && display.mode == WorkspaceImageSelection::Mode::RunDetails)) {
+        display.mode = WorkspaceImageSelection::Mode::Follow;
+        display.rendered_index = -2;
+        images_->set_manual_view(false);
+    }
+    display.workflow = flow;
+    display.node = node;
+    const auto* current_flow = flow ? find_workflow(draft(), *flow) : nullptr;
+    const auto* current_node = current_flow && node ? find_node(*current_flow, *node) : nullptr;
+    module_history_->set_selection(current_flow, current_node);
+    refresh_workspace_statistics();
+    present_workspace_image();
+}
+
+void EditorWindow::refresh_workspace_results()
+{
+    if (!model_ || !module_history_ || close_confirmed_) { return; }
+    module_history_->update_runs(run_controller_->runs());
+    refresh_workspace_statistics();
+}
+
+void EditorWindow::refresh_workspace_statistics()
+{
+    workspace_stats_->setText(module_history_->statistics_text());
+    workspace_stats_->setToolTip(module_history_->statistics_details());
+    workspace_stats_->setAccessibleDescription(module_history_->statistics_details());
+}
+
+void EditorWindow::present_workspace_image()
+{
+    if (close_confirmed_ || !workspace_image_selection_ || !module_history_) { return; }
+    auto& display = *workspace_image_selection_;
+    if (display.mode != WorkspaceImageSelection::Mode::Follow) { return; }
+    const auto empty = [this](const QString& message) {
+        showing_run_image_ = false;
+        if (images_->frame()) { images_->clear_frame(); }
+        images_->set_provenance(message);
+    };
+    try {
+        const auto run = module_history_->selected_run();
+        const auto call = module_history_->selected_invocation();
+        std::optional<NodeResult> selected;
+        if (run && call) {
+            const auto result = run->lookup(*call);
+            if (const auto* record = std::get_if<std::optional<NodeResult>>(&result)) { selected = *record; }
+        }
+        if (!selected) {
+            if (display.consumer) { images_->set_sources({}, -1); }
+            display.consumer.reset();
+            display.sources.clear();
+            display.rendered_index = -2;
+            empty(module_history_->selection_message());
+            return;
+        }
+        if (display.consumer != selected->data().identity) {
+            display.consumer = selected->data().identity;
+            display.sources = workspace_image_sources(*run, *selected);
+            QStringList labels;
+            for (const auto& source : display.sources) { labels.push_back(source.label); }
+            const bool choose = display.sources.size() > 1 && display.sources.front().upstream;
+            images_->set_sources(labels, labels.empty() || choose ? -1 : 0);
+            display.rendered_index = -2;
+        }
+        const int index = images_->selected_source();
+        if (display.rendered_index == index) { return; }
+        display.rendered_index = index;
+        if (index < 0 || static_cast<std::size_t>(index) >= display.sources.size()) {
+            empty(display.sources.empty() ? QStringLiteral("该调用没有可显示的图像") : QStringLiteral("请选择本次调用的来源图"));
+            return;
+        }
+        const auto& source = display.sources[static_cast<std::size_t>(index)];
+        const auto result = show_run_image(*images_, *run, source.result.invocation, source.output);
+        if (const auto* failure = std::get_if<Diagnostic>(&result)) {
+            empty(QString::fromStdString(failure->message));
+            return;
+        }
+        showing_run_image_ = true;
+        images_->set_provenance(QStringLiteral("轮次 %1 · 快照 %2 · %3 · 调用 %4")
+            .arg(run->identity().run.value()).arg(run->identity().snapshot.snapshot.value())
+            .arg(source.label).arg(source.result.invocation.invocation.value()));
+    } catch (const std::exception& error) { empty(QString::fromUtf8(error.what())); }
 }
 
 void EditorWindow::start_run(std::optional<DebugStatePolicy> debug)
@@ -274,10 +389,8 @@ void EditorWindow::start_run(std::optional<DebugStatePolicy> debug)
     RunArguments arguments{target, std::move(entered->values),
         {independent ? TriggerKind::Debug : TriggerKind::Manual, trigger_id(independent)},
         {}, debug};
-    run_dock_->show();
-    run_dock_->raise();
-    show_status(isolated ? QStringLiteral("Preparing isolated debug call…")
-        : group_target ? QStringLiteral("Preparing Group run…") : QStringLiteral("Preparing workflow run…"));
+    if (independent) { run_dock_->show(); run_dock_->raise(); }
+    statusBar()->clearMessage();
     run_controller_->start(draft(), {source_, directory_, roots_}, std::move(arguments), std::move(entered->images));
 }
 
@@ -296,6 +409,8 @@ void EditorWindow::show_selected_run_image()
         const auto* flow = find_workflow(run->request().snapshot().solution(), run->identity().workflow);
         const auto* node = flow ? find_node(*flow, invocation->node) : nullptr;
         showing_run_image_ = true;
+        workspace_image_selection_->mode = WorkspaceImageSelection::Mode::RunDetails;
+        images_->set_manual_view(true);
         auto provenance = QStringLiteral("Run %1  ·  Snapshot %2  ·  %3")
             .arg(run->identity().run.value()).arg(run->identity().snapshot.snapshot.value())
             .arg(QString::fromStdString(node ? node->name : invocation->node.to_string()));

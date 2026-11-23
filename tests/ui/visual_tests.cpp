@@ -12,6 +12,7 @@
 #include <visionpro/workflow/workflow_session.hpp>
 
 #include <QAction>
+#include <QAbstractButton>
 #include <QApplication>
 #include <QComboBox>
 #include <QDialog>
@@ -309,9 +310,10 @@ void VisualTests::mask_resources_and_boundary_policy()
 
     EditorWindow window(solution, registry);
     window.show();
-    take(window.findChild<ImagePanel*>()->set_frame(image));
-    auto* scene = qobject_cast<ControlScene*>(qobject_cast<QGraphicsView*>(window.centralWidget())->scene());
+    auto* scene = qobject_cast<ControlScene*>(window.findChild<QGraphicsView*>(QStringLiteral("workflowCanvas"))->scene());
     QVERIFY(scene && scene->select_workflow(workflow_id) && scene->reveal_node(threshold_id));
+    window.findChild<QAction*>(QStringLiteral("showProperties"))->trigger();
+    take(window.findChild<ImagePanel*>()->set_frame(image));
     QTRY_VERIFY(window.findChild<QPushButton*>(QStringLiteral("editRegion")));
     auto* edit = window.findChild<QPushButton*>(QStringLiteral("editRegion"));
     QVERIFY(apply_roi_edit(*edit, [](QDialog& dialog) {
@@ -363,7 +365,7 @@ void VisualTests::edits_and_reloads_shape_members()
     window.transfer_document(package, SolutionTransfer::SaveAs);
     QTRY_VERIFY(!window.file_busy());
     const auto select_threshold = [&] {
-        auto* canvas = qobject_cast<QGraphicsView*>(window.centralWidget());
+        auto* canvas = window.findChild<QGraphicsView*>(QStringLiteral("workflowCanvas"));
         auto* scene = qobject_cast<ControlScene*>(canvas->scene());
         return scene && scene->select_workflow(workflow_id) && scene->reveal_node(threshold_id);
     };
@@ -435,12 +437,16 @@ void VisualTests::fits_newly_bound_calibration_file()
     QCOMPARE(window.draft().coordinates.size(), 2u);
     QCOMPARE(window.draft().coordinates.back().unit, MeasurementUnit::Millimetre);
 
-    auto* tools = window.findChild<QListWidget*>(QStringLiteral("toolList"));
-    QVERIFY(tools);
-    for (int i = 0; i < tools->count(); ++i) {
-        if (tools->item(i)->toolTip() == QStringLiteral("visionpro.calibration.fit")) { tools->setCurrentRow(i); break; }
-    }
-    QCOMPARE(tools->currentItem()->toolTip(), QStringLiteral("visionpro.calibration.fit"));
+    auto* search = window.findChild<QLineEdit*>(QStringLiteral("toolSearch"));
+    auto* tools = window.findChild<QWidget*>(QStringLiteral("toolList"));
+    QVERIFY(search && tools);
+    search->setText(QStringLiteral("visionpro.calibration.fit"));
+    const auto tiles = tools->findChildren<QAbstractButton*>();
+    const auto tile = std::ranges::find_if(tiles, [&](const auto* button) {
+        return button->property("toolType").toString() == search->text();
+    });
+    QVERIFY(tile != tiles.end() && (*tile)->isVisible());
+    QTest::mouseClick(*tile, Qt::LeftButton);
     window.findChild<QAction*>(QStringLiteral("addTool"))->trigger();
     QTRY_VERIFY(window.findChild<QPushButton*>(QStringLiteral("chooseExternalResource")));
     const auto directory = fixture.parent_path() / "s6-calibration";
@@ -469,6 +475,7 @@ void VisualTests::fits_newly_bound_calibration_file()
         && node.resources.front().resource.revision == 1);
 
     window.findChild<QAction*>(QStringLiteral("runWorkflow"))->trigger();
+    window.findChild<QDockWidget*>(QStringLiteral("runDock"))->show();
     auto* panel = window.findChild<RunPanel*>();
     QTRY_COMPARE_WITH_TIMEOUT(panel->findChild<QLabel*>(QStringLiteral("runCleanup"))->text(),
         QStringLiteral("Cleanup: Quiescent"), 10000);
@@ -504,11 +511,12 @@ void VisualTests::preserves_class_pixels_and_judgement_across_palette_edits()
     window.show();
     window.open_document(sample);
     QTRY_VERIFY(!window.file_busy());
+    window.findChild<QDockWidget*>(QStringLiteral("runDock"))->show();
     auto* panel = window.findChild<RunPanel*>();
     auto* image = window.findChild<ImagePanel*>();
     auto* view = image->findChild<ImageView*>();
     auto* legend = image->findChild<QTreeWidget*>(QStringLiteral("classLegend"));
-    const auto scene = [&] { return qobject_cast<ControlScene*>(qobject_cast<QGraphicsView*>(window.centralWidget())->scene()); };
+    const auto scene = [&] { return qobject_cast<ControlScene*>(window.findChild<QGraphicsView*>(QStringLiteral("workflowCanvas"))->scene()); };
     const auto run_and_show = [&](const WorkflowId& workflow, const NodeId& node) {
         QVERIFY(scene()->select_workflow(workflow));
         window.findChild<QAction*>(QStringLiteral("runWorkflow"))->trigger();
@@ -527,9 +535,12 @@ void VisualTests::preserves_class_pixels_and_judgement_across_palette_edits()
         }
         return {};
     };
-    const auto reference = take(ImageHandle::copy({12, 12, 12, {PixelDepth::UInt8, ChannelOrder::Mono}},
-        std::array<std::byte,144>{}, key<CoordinateSystemId>("workpiece")));
-    take(image->set_frame(reference));
+    QImage reference(12, 12, QImage::Format_Grayscale8);
+    reference.fill(0);
+    const auto reference_path = temporary.filePath(QStringLiteral("reference.png"));
+    QVERIFY(reference.save(reference_path));
+    window.open_preview_image(fs::path(reference_path.toStdWString()), key<CoordinateSystemId>("workpiece"), true);
+    QTRY_VERIFY(!window.file_busy());
     QVERIFY(scene()->select_workflow(inspection) && scene()->reveal_node(measure));
     window.preview_selected_roi();
     QTRY_VERIFY(!window.file_busy());
@@ -548,6 +559,7 @@ void VisualTests::preserves_class_pixels_and_judgement_across_palette_edits()
     QCOMPARE(measured, shifted_members);
 
     QVERIFY(scene()->select_workflow(flow) && scene()->reveal_node(classifier));
+    window.findChild<QAction*>(QStringLiteral("showProperties"))->trigger();
     const auto class_names_button = [&]() -> QPushButton* {
         for (auto* edit : window.findChildren<QPushButton*>(QStringLiteral("editBinding"))) {
             if (edit->property("bindingTarget").toString() == QStringLiteral("class_names") && edit->isVisible()) { return edit; }
@@ -649,7 +661,7 @@ void VisualTests::window_previews_and_edits_symbolic_roi()
     window.open_preview_resource(image_resource, frame_id, true);
     QTRY_VERIFY(!window.file_busy());
     QVERIFY(panel->frame() && panel->frame()->format().order == ChannelOrder::Mono && panel->isVisible());
-    auto* view = qobject_cast<QGraphicsView*>(window.centralWidget());
+    auto* view = window.findChild<QGraphicsView*>(QStringLiteral("workflowCanvas"));
     QVERIFY(view);
     auto* scene = qobject_cast<ControlScene*>(view->scene());
     QVERIFY(scene && scene->select_workflow(workflow_id) && scene->reveal_node(blob_id));
@@ -696,7 +708,7 @@ void VisualTests::window_displays_images_from_the_selected_run()
     window.open_document(fixture);
     QTRY_VERIFY(!window.file_busy());
 
-    auto* canvas = qobject_cast<QGraphicsView*>(window.centralWidget());
+    auto* canvas = window.findChild<QGraphicsView*>(QStringLiteral("workflowCanvas"));
     QVERIFY(canvas);
     auto* scene = qobject_cast<ControlScene*>(canvas->scene());
     QVERIFY(scene && scene->select_workflow(workflow_id));
@@ -705,6 +717,7 @@ void VisualTests::window_displays_images_from_the_selected_run()
     auto* run_panel = window.findChild<RunPanel*>();
     auto* images = window.findChild<ImagePanel*>();
     QVERIFY(start && start->isEnabled() && dock && run_panel && images);
+    dock->show();
     auto* status = run_panel->findChild<QLabel*>(QStringLiteral("runStatus"));
     auto* completion = run_panel->findChild<QLabel*>(QStringLiteral("runCompletion"));
     auto* cleanup = run_panel->findChild<QLabel*>(QStringLiteral("runCleanup"));
@@ -797,7 +810,7 @@ void VisualTests::window_displays_blob_from_one_time_debug_image()
     window.show();
     window.open_document(fixture);
     QTRY_VERIFY(!window.file_busy());
-    auto* canvas = qobject_cast<QGraphicsView*>(window.centralWidget());
+    auto* canvas = window.findChild<QGraphicsView*>(QStringLiteral("workflowCanvas"));
     QVERIFY(canvas);
     auto* scene = qobject_cast<ControlScene*>(canvas->scene());
     QVERIFY(scene && scene->select_workflow(workflow_id));

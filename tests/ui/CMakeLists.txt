@@ -57,6 +57,17 @@ if(VISIONPRO_WITH_OPENCV)
         visionpro_ui visionpro_app_tools visionpro_visual_preview visionpro_build_options Qt6::Test
     )
     add_test(NAME visionpro_visual_tests COMMAND visionpro_visual_tests -platform offscreen)
+
+    add_executable(visionpro_workspace_tests workspace_tests.cpp)
+    set_target_properties(visionpro_workspace_tests PROPERTIES AUTOMOC ON)
+    target_compile_definitions(visionpro_workspace_tests PRIVATE
+        "VISIONPRO_S69_DIRECTORY=\"${PROJECT_SOURCE_DIR}/samples/s6-inspection\""
+        "VISIONPRO_TEST_CLI=\"$<TARGET_FILE:visionpro_cli>\"")
+    target_link_libraries(visionpro_workspace_tests PRIVATE
+        visionpro_ui visionpro_app_tools visionpro_infrastructure visionpro_build_options Qt6::Test)
+    add_dependencies(visionpro_workspace_tests visionpro_cli)
+    add_test(NAME visionpro_workspace_tests COMMAND visionpro_workspace_tests -platform offscreen)
+    list(APPEND ui_tests visionpro_workspace_tests)
 endif()
 
 add_executable(visionpro_acceptance_parity_tests
@@ -145,7 +156,7 @@ set_tests_properties(${ui_tests} PROPERTIES
     TIMEOUT 60
 )
 if(VISIONPRO_WITH_OPENCV)
-    set_property(TEST visionpro_editor_tests visionpro_inspector_tests visionpro_editor_run_tests visionpro_run_lifecycle_tests visionpro_visual_tests
+    set_property(TEST visionpro_editor_tests visionpro_inspector_tests visionpro_editor_run_tests visionpro_run_lifecycle_tests visionpro_visual_tests visionpro_workspace_tests
         visionpro_acceptance_parity_tests visionpro_loop_parity_tests visionpro_group_parity_tests visionpro_calculation_parity_tests visionpro_shared_parity_tests visionpro_concurrency_parity_tests
         visionpro_calibration_parity_tests visionpro_inspection_parity_tests visionpro_camera_acquisition_parity_tests
         visionpro_camera_trigger_parity_tests visionpro_cross_workflow_handoff_tests visionpro_group_loop_handoff_tests ${communication_ui_tests}

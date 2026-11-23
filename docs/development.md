@@ -2481,6 +2481,18 @@ ctest --test-dir $guiBuild -C Release -R '^tools\.(planar_calibration|vision_con
 
 ### 10.9 S6.9 工件定位、五路测量与类别图
 
+**六区桌面工作区复现。** 从仓库根目录启动 `visionpro_gui samples/s6-inspection`（也接受 `solution.json`）。在方案副本中选中 **Judge lane 5**，点击 **单次运行**。右上来源为 **Measure lane 5**，显示从 (25,9) 开始的 2×2 ROI；右下记录实测 B=50，范围 [10,40]，判定 NG；底栏显示 4 OK / 1 NG。双击判断节点，把 `maximum` 改为 50，再运行一次。第二轮为 5 OK / 0 NG。点第一轮记录可同时回看原图、阈值和底栏统计。勾选 **跟随最新** 可返回第二轮。
+
+Qt 自动验收在临时目录复制样例，从画布选择节点、在属性中修改上限并保存。每轮另外启动一次 CLI 核对工件结果。用例在 1280×720、1440×800 检查六区位置，并核对历史淘汰后仍能回看固定轮次、跳过节点时清除旧图、重开方案后清空历史。对于 **Format OK / Format NG**，用例从五个测量来源逐一选图，核对各自 ROI。另用循环样例在同一轮切换迭代 0、1、0，核对各自的调用与 Blob 面积 6、9、6。启用 Qt 和 OpenCV 后运行：
+
+```powershell
+ctest --test-dir out/build/s67-gui -R '^visionpro_workspace_tests$' --output-on-failure --no-tests=error
+```
+
+复查字号和缩放时运行 `visionpro_canvas_tests`、`visionpro_editor_tests` 和 `visionpro_workspace_tests`。三组分别核对长中文标题与端口位置、视点恢复与缩放条命中、两轮历史值与表格尺寸。使用 Windows Qt 后端检查系统字体；可通过 `QT_SCALE_FACTOR=1.25` 或 `1.5` 在同一显示器上模拟额外缩放。运行 `visionpro_workspace_tests -platform windows five_lane_selection_and_history`，将 `VISIONPRO_WORKSPACE_COMPACT_SCREENSHOT` 和 `VISIONPRO_WORKSPACE_SCREENSHOT` 设为 PNG 输出路径，可分别保存 1280×720 编辑视图和 1440×800 全图视图。这两组窗口尺寸使用逻辑像素。
+
+2026-11-20，Windows x64 Release 启用 Qt、OpenCV 与 MVS 的 176 项 CTest 全部通过，其中 6 项通信测试使用本机回环。上述工作区还在 Windows 原生 Qt 平台上运行了两轮历史回看、OK/NG 两条分支的来源切换与循环调用回看，各项均通过。部署的桌面版已验证可通过清单路径启动五路方案。
+
 2026-11-19，Windows x64 Release 全量 CTest 通过。启用 Qt 与 OpenCV 时为 **158/158** 项，关闭两者时为 **123/123** 项。桌面验收使用 Qt Widgets 的 offscreen 平台，CLI 验收使用独立进程和固定图像。在临时方案中换入无法匹配的非恒定模板时，只有读图和定位两个节点执行；定位返回 NG，其余测量和投递均未启动。
 
 使用启用 OpenCV 的 Release 构建。桌面打开[工件检测方案](../samples/s6-inspection/solution.json)，另存至新目录并重开。选择 **Locate and inspect five regions → Run Workflow**。在运行结果中查看 **Locate workpiece** 的模板资源、平移矩阵及各 **Measure lane** 的输入来源，选择测量调用可在现场图上查看实际 ROI 掩膜。

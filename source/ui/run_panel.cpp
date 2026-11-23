@@ -377,12 +377,23 @@ void RunPanel::update_runs(std::span<const RunHandle> runs, std::uint64_t droppe
 {
     try {
         set_text(*notifications_, QStringLiteral("Dropped notifications: %1").arg(dropped));
-        if (!std::ranges::equal(runs_, runs, {}, &RunHandle::identity, &RunHandle::identity)) {
+        if (history_dirty_ || !std::ranges::equal(runs_, runs, {}, &RunHandle::identity, &RunHandle::identity)) {
             runs_.assign(runs.begin(), runs.end());
             rebuild_history();
+            history_dirty_ = false;
         }
         refresh_run();
     } catch (...) { show_refresh_failure(); }
+}
+
+void RunPanel::suspend()
+{
+    // The controller keeps the current history. Retain only the user's pinned run while hidden.
+    runs_.clear();
+    progress_.reset();
+    displayed_result_.reset();
+    displayed_run_.reset();
+    history_dirty_ = true;
 }
 
 void RunPanel::clear()
@@ -578,7 +589,7 @@ void RunPanel::refresh_call()
         const auto run = selected_run();
         if (!progress_ || !run) { return; }
 
-        QStringList lines;
+        QStringList lines{QStringLiteral("已派发 %1 次").arg(progress_->call_order.size())};
         const auto& request = run->request();
         const auto kind = request.trigger().kind;
         if (kind == TriggerKind::External || kind == TriggerKind::Continuous) {
@@ -671,10 +682,13 @@ void RunPanel::refresh_call()
             if (!node || node->attempts.empty()) { lines.append(QStringLiteral("Attempt %1").arg(id_text(result.identity.attempt))); }
             if (result.elapsed) { lines.append(QStringLiteral("Elapsed: %1 ns").arg(result.elapsed->count())); }
             for (const auto& timing : result.timings) {
+                const auto unit = enum_text(timing.unit, std::array{"unknown", "ns", "µs", "ms", "s"});
+                if (timing.scope == TimingScope::ToolAlgorithm && timing.value && timing.unit != TimingUnit::Unknown) {
+                    lines.append(QStringLiteral("算法耗时 %1 %2").arg(QString::number(*timing.value, 'g', 15), unit));
+                }
                 if (timing.source != TimingSource::AdapterReported || timing.scope != TimingScope::ToolModule) { continue; }
                 lines.append(QStringLiteral("Adapter duration: %1 · unit %2").arg(
-                    timing.value ? QString::number(*timing.value, 'g', 15) : QStringLiteral("unknown"),
-                    enum_text(timing.unit, std::array{"unknown", "ns", "µs", "ms", "s"})));
+                    timing.value ? QString::number(*timing.value, 'g', 15) : QStringLiteral("unknown"), unit));
             }
             if (!result.outputs.empty()) { lines.append(QStringLiteral("Outputs")); }
             for (const auto& output : result.outputs) { lines.append(output_text(output)); }

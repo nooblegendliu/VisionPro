@@ -278,6 +278,12 @@ void execution_chain()
         && reading.attempt == first.data().identity.attempt
         && reading.reference.selector == Selector{FieldSelection{key<FieldId>("readings")}, ElementSelection{1}},
         "The nonadjacent source trace identifies this run, producer call and selector.");
+    const auto& bindings = progress.nodes.back().bindings;
+    const auto number = std::ranges::find(bindings, BindingTarget{key<InputId>("reading")}, &RunBindingTrace::target);
+    const auto offset = std::ranges::find(bindings, BindingTarget{key<ParameterId>("offset")}, &RunBindingTrace::target);
+    check(number != bindings.end() && std::get<double>(number->numeric_value) == 11.0
+        && offset != bindings.end() && std::get<std::int64_t>(offset->numeric_value) == 5,
+        "The trace stores the selected and explicitly converted real input and the exact integer from the frozen global.");
     const auto accepted = trace(progress.nodes.back(), key<InputId>("hint")).accepted_absence;
     check(accepted == MissingReason::ConditionNotMet
         && !trace(progress.nodes.back(), key<InputId>("match")).accepted_absence,

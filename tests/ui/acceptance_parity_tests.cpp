@@ -13,6 +13,7 @@
 #include <visionpro/infrastructure/communication.hpp>
 
 #include <QAction>
+#include <QDockWidget>
 #include <QApplication>
 #include <QComboBox>
 #include <QDebug>
@@ -105,7 +106,7 @@ QAction& action(EditorWindow& window, const char* name)
 
 ControlScene& scene(EditorWindow& window)
 {
-    auto* view = qobject_cast<QGraphicsView*>(window.centralWidget());
+    auto* view = window.findChild<QGraphicsView*>(QStringLiteral("workflowCanvas"));
     return *qobject_cast<ControlScene*>(view->scene());
 }
 
@@ -117,6 +118,7 @@ void wait_for_file(EditorWindow& window)
 
 QPushButton* inspector_button(EditorWindow& window, const char* name, const QString& target)
 {
+    if (window.findChild<QDockWidget*>(QStringLiteral("inspectorDock"))->isHidden()) { action(window, "showProperties").trigger(); }
     for (auto* button : window.findChildren<QPushButton*>(QString::fromLatin1(name))) {
         if (button->isVisible() && button->property("bindingTarget").toString() == target) { return button; }
     }
@@ -415,6 +417,7 @@ json compare_workflow(EditorWindow& window, const json& fixture, const fs::path&
 
 void apply_semantic_edits(EditorWindow& window, const json& workflows)
 {
+    action(window, "showProperties").trigger();
     const auto& single = named(workflows, "case", "single");
     const auto& five = named(workflows, "case", "five");
     const auto& inherited = named(workflows, "case", "inherited_roi");
@@ -1018,6 +1021,7 @@ void AcceptanceParityTests::configures_and_arms_saved_camera()
         camera->set_periodic_hardware_pulses(false);
         const auto restore = qScopeGuard([&] { camera->set_connected(true); camera->set_periodic_hardware_pulses(true); });
         auto& controller = *window.findChild<RunController*>();
+        window.findChild<QDockWidget*>(QStringLiteral("runDock"))->show();
         auto* status = window.findChild<QLabel*>(QStringLiteral("cameraTriggerStatus"));
         QVERIFY(status);
         action(window, "armWorkflowTrigger").trigger();
@@ -1105,6 +1109,7 @@ void select_node_properties(EditorWindow& window, const Node& node)
 
 void select_result(EditorWindow& window, const Node& node)
 {
+    window.findChild<QDockWidget*>(QStringLiteral("runDock"))->show();
     auto* tree = window.findChild<QTreeWidget*>(QStringLiteral("runNodes"));
     require(tree && QTest::qWaitFor([&] {
         for (int row = 0; row < tree->topLevelItemCount(); ++row) {

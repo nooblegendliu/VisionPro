@@ -16,6 +16,8 @@ struct RunBindingTrace {
     std::vector<SourceTrace> sources;
     // Frozen expressions and exact producer identities from successful resolution.
     std::vector<ResolvedRegionReference> regions{};
+    // Scalar actually delivered by the resolver, including selectors and conversions.
+    std::variant<std::monostate, std::int64_t, double> numeric_value{};
 };
 struct RunResourceTrace {
     core::SchemaId slot;
@@ -79,6 +81,8 @@ struct RunProgress {
     std::vector<core::NodeId> call_order{}; // Actual dispatch order, after input and lease preparation.
     std::vector<RunLoopIteration> iterations{};
     std::vector<RunGroupCall> groups{};
+    // From first dispatch step to logical completion. Queuing and physical cleanup are excluded.
+    std::optional<std::chrono::nanoseconds> elapsed{};
 };
 struct RunWaitResult { RunWaitOutcome outcome; RunProgress progress; };
 

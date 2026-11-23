@@ -267,6 +267,7 @@ NodeResult result_for(const RunHandle& run, const RunProgress& progress, const N
 
 double show_and_paint(EditorWindow& window, std::size_t node, const ImageHandle& expected)
 {
+    window.findChild<QDockWidget*>(QStringLiteral("runDock"))->show();
     auto& tree = control<QTreeWidget>(window, "runNodes");
     const auto identity = QString::fromStdString(node_id(node).to_string());
     QTreeWidgetItem* item = nullptr;
@@ -371,12 +372,12 @@ QJsonObject measure()
     QJsonArray memory;
     auto revision = source.revision;
     for (int round = 0; round < io_rounds; ++round) {
-        const QPointer<QWidget> previous(window.centralWidget());
+        const QPointer<QWidget> previous(window.findChild<QGraphicsView*>(QStringLiteral("workflowCanvas")));
         const auto loading = Clock::now();
         window.open_document(directory);
         wait_until([&] { return !window.file_busy(); }, "Load package", window);
         loads.push_back(milliseconds(Clock::now() - loading));
-        require(previous.isNull() && window.centralWidget() && window.draft().id == source.id && window.draft().revision == revision,
+        require(previous.isNull() && window.findChild<QGraphicsView*>(QStringLiteral("workflowCanvas")) && window.draft().id == source.id && window.draft().revision == revision,
             "The desktop did not load the expected package revision.");
         const auto& flow = window.draft().workflows.front();
         require(flow.nodes.size() == node_count && flow.control_links.size() == edge_count,

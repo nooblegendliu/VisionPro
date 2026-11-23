@@ -1,6 +1,7 @@
 #include "control_graph_model.hpp"
 #include "control_scene.hpp"
 #include "simulation.hpp"
+#include "workspace_style.hpp"
 
 #include <visionpro/core/id_factory.hpp>
 #include <visionpro/core/schema_id_factory.hpp>
@@ -9,6 +10,10 @@
 #include <QtNodes/internal/ConnectionGraphicsObject.hpp>
 #include <QtNodes/internal/NodeGraphicsObject.hpp>
 
+#include <QFontMetrics>
+#include <QImage>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QSignalSpy>
 #include <QTest>
 #include <QUndoStack>
@@ -134,10 +139,46 @@ class CanvasTests final : public QObject {
 
 private Q_SLOTS:
     void projects_control_graph();
+    void measures_chinese_titles_and_branch_labels();
+    void reveals_unused_branch_when_wiring();
     void replays_edits_across_group_scopes();
     void protects_existing_links_with_shared_endpoints();
     void handles_mouse_gestures();
 };
+
+void CanvasTests::measures_chinese_titles_and_branch_labels()
+{
+    const Fixture fixture;
+    auto solution = fixture.solution();
+    auto& group = *std::ranges::find(solution.workflows.front().nodes, fixture.group, &workflow::Node::id);
+    group.name = "第五路检测工件定位误差范围最终判定";
+    group.enabled = false;
+    std::get<workflow::GroupConfiguration>(group.configuration).interface.control_outputs.front().display_name
+        = "允许范围内";
+    ui::ControlGraphModel graph(std::move(solution), fixture.workflow_id, fixture.registry);
+    ui::ControlScene scene(graph);
+    const auto node = graph.canvas_id(fixture.group);
+    const auto title = graph.nodeData(node, QtNodes::NodeRole::Caption).toString();
+    const QFontMetrics title_font(ui::workspace_font(ui::WorkspaceText::NodeTitle));
+    const QFontMetrics branch_font(ui::workspace_font(ui::WorkspaceText::Secondary));
+    for (const auto direction : {Qt::Horizontal, Qt::Vertical}) {
+        scene.setOrientation(direction);
+        const auto& geometry = scene.nodeGeometry();
+        const QRectF card(QPointF{}, geometry.size(node));
+        const auto title_box = geometry.captionRect(node);
+        QVERIFY(card.contains(title_box));
+        QVERIFY(title.contains(QStringLiteral("已禁用")));
+        QVERIFY(title_box.height() > title_font.height());
+        const auto label = graph.portData(node, QtNodes::PortType::Out, 1, QtNodes::PortRole::Caption).toString();
+        QCOMPARE(label, QStringLiteral("允许范围内"));
+        const auto label_box = QRectF(branch_font.tightBoundingRect(label))
+            .translated(geometry.portTextPosition(node, QtNodes::PortType::Out, 1));
+        QVERIFY(card.contains(label_box));
+        QVERIFY(!title_box.intersects(label_box));
+        QCOMPARE(geometry.checkPortHit(node, QtNodes::PortType::Out,
+            geometry.portPosition(node, QtNodes::PortType::Out, 1)), QtNodes::PortIndex{1});
+    }
+}
 
 void CanvasTests::projects_control_graph()
 {
@@ -157,6 +198,12 @@ void CanvasTests::projects_control_graph()
     QVERIFY(!scene.nodeGraphicsObject(graph.canvas_id(fixture.inside)));
     QVERIFY(scene.nodeGeometry().size(group).isValid());
     QVERIFY(!scene.nodeGeometry().size(group).isEmpty());
+    const auto style = QJsonDocument::fromVariant(graph.nodeData(group, QtNodes::NodeRole::Style))
+        .object().value(QStringLiteral("NodeStyle")).toObject();
+    const QColor title(style.value(QStringLiteral("FontColor")).toString());
+    const QColor fill(style.value(QStringLiteral("GradientColor0")).toString());
+    QVERIFY(title.isValid() && fill.isValid() && fill.lightness() - title.lightness() > 128);
+    QCOMPARE(graph.layout_orientation(), Qt::Horizontal);
     QCOMPARE(graph.nodeData(route, QtNodes::NodeRole::OutPortCount).toUInt(), 3u);
     QCOMPARE(graph.nodeData(group, QtNodes::NodeRole::OutPortCount).toUInt(), 2u);
     QCOMPARE(graph.portData(route, QtNodes::PortType::Out, 1, QtNodes::PortRole::Caption).toString(), QStringLiteral("Left"));
@@ -173,6 +220,57 @@ void CanvasTests::projects_control_graph()
     }
     QVERIFY(!scene.connectionGraphicsObject({first, 0, finish, 0}));
     QVERIFY(!scene.connectionGraphicsObject({group, 0, graph.canvas_id(fixture.inside), 0}));
+}
+
+void CanvasTests::reveals_unused_branch_when_wiring()
+{
+    using QtNodes::PortRole;
+    using QtNodes::PortType;
+    const Fixture fixture;
+    auto solution = fixture.solution();
+    std::erase_if(solution.workflows.front().control_links, [&](const auto& link) {
+        return link.source == fixture.route && link.output == fixture.right;
+    });
+    ui::ControlGraphModel graph(std::move(solution), fixture.workflow_id, fixture.registry);
+    ui::ControlScene scene(graph);
+    QtNodes::GraphicsView view(&scene);
+    view.resize(1000, 550);
+    view.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&view));
+    view.resetTransform();
+    view.centerOn(scene.itemsBoundingRect().center());
+    const auto route = graph.canvas_id(fixture.route);
+    const auto first = graph.canvas_id(fixture.first);
+    QVERIFY(graph.portData(first, PortType::In, 0, PortRole::Caption).toString().isEmpty());
+    QVERIFY(graph.portData(first, PortType::Out, 0, PortRole::Caption).toString().isEmpty());
+
+    auto* item = scene.nodeGraphicsObject(route);
+    const auto baseline = scene.nodeGeometry().portTextPosition(route, PortType::Out, 2);
+    const auto label = graph.portData(route, PortType::Out, 2, PortRole::Caption).toString();
+    QCOMPARE(label, QStringLiteral("Right"));
+    // Compare just the pending branch's label at the current font and layout.
+    const auto label_rect = QFontMetrics(ui::workspace_font(ui::WorkspaceText::Secondary)).tightBoundingRect(label)
+        .translated(view.mapFromScene(item->mapToScene(baseline)));
+    QVERIFY(view.viewport()->rect().contains(label_rect));
+    const auto label_pixels = [&] { return view.viewport()->grab(label_rect).toImage(); };
+    QTest::mouseMove(view.viewport(), QPoint(2, 2));
+    const auto unused = label_pixels();
+    QVERIFY(!unused.isNull());
+    QTest::mouseMove(view.viewport(), view.mapFromScene(item->sceneBoundingRect().center()));
+    QTRY_VERIFY(item->nodeState().hovered());
+    QVERIFY(label_pixels() != unused);
+
+    const QtNodes::ConnectionId added{route, 2, first, 0};
+    drag(view, view_port_position(view, scene, route, PortType::Out, 2),
+        view_port_position(view, scene, first, PortType::In, 0));
+    QTest::mouseMove(view.viewport(), QPoint(2, 2));
+    QTRY_VERIFY(!item->nodeState().hovered());
+    QVERIFY(scene.connectionGraphicsObject(added));
+    QVERIFY(label_pixels() != unused);
+    QCOMPARE(graph.connections(route, PortType::Out, 1).size(), std::size_t{2});
+    scene.undoStack().undo();
+    QVERIFY(!scene.connectionGraphicsObject(added));
+    QCOMPARE(label_pixels(), unused);
 }
 
 void CanvasTests::replays_edits_across_group_scopes()

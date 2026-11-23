@@ -179,19 +179,20 @@ S3.9 在 Windows x64、MSVC 19.51、CMake/CTest 4.4.0 环境完成 Release 验�
 
 `visionpro_cli replay` 按给定顺序在同一会话运行多条流程，适合复现共享队列和工件汇合。[输入序列与重放命令](docs/s6-acceptance.md#复现)
 
-使用 `VISIONPRO_WITH_GUI=ON` 构建 `visionpro_gui`。打开桌面程序后，可从 **File** 新建或打开方案，从 **Tools** 添加节点，选中节点后在 **Properties** 编辑参数、绑定和 Group 边界。[S5.3 构建与编辑复现](docs/development.md#326-s53-release-构建与测试)
+使用 `VISIONPRO_WITH_GUI=ON` 构建 `visionpro_gui`。左侧工具箱按海康手册分为 15 栏，每栏可独立展开，节点图标每行最多三个。点击栏目名浏览，或搜索节点，双击图标或拖入画布即可添加。流程首次以 100% 倍率打开，右下角可缩放、恢复 1:1 或查看全图。在顶部选择流程并单次运行。单击节点，右上显示输出图，右下列出模块历史；范围判断分别显示本次实测值、允许范围和判定。画布底栏显示同轮统计。双击普通节点可编辑参数与绑定，双击 Group 可进入内部。[桌面工作区](docs/architecture.md#42-参考-visionmaster-的桌面工作区改版方案)
 
 同时启用 OpenCV 后，可从 **View** 打开图像文件或方案图像资源，选择视觉节点后使用 **Preview Selected ROI**。在 **Properties → Edit ROI…** 修改区域配置。[S5.4 构建与样例复现](docs/development.md#327-s54-release-构建与测试)
 
 `visionpro_cli cameras` 列出相机，`trigger --camera-frames N` 从方案配置的设备取 N 帧并逐帧提交。默认构建包含模拟相机。安装海康 MVS 开发包后可启用 `VISIONPRO_WITH_MVS=ON` 构建 GigE/USB 适配器。[相机配置与复现命令](docs/development.md#1010-s610-相机采集与触发)
 
-从 **Run** 启动流程或调试选中节点。在 **Run and Results** 选择运行和节点，再点 **Show Image** 查看 Blob 或图像输出。[S5.5 构建与操作复现](docs/development.md#328-s55-release-构建与测试)
+启用 OpenCV 的桌面版可直接运行 `visionpro_gui samples/s6-inspection`。选择 **Judge lane 5** 后点击 **单次运行**，即可看到第五路测量的 ROI、实测值和判断范围。点击历史行可查看旧轮，勾选 **跟随最新** 可回到最新轮次。单节点调试、重试记录和诊断仍可从 **运行详情** 查看。[五路案例与复现命令](docs/development.md#109-s69-工件定位五路测量与类别图)
 
 ## 文档导航
 
 - [开发规则](AGENTS.md)
 - [需求与阶段验收](docs/requirements.md)
 - [架构设计](docs/architecture.md)
+- [参考 VisionMaster 的桌面工作区改版方案](docs/architecture.md#42-参考-visionmaster-的桌面工作区改版方案)
 - [ANS1 设计建议的采纳与调整记录](docs/architecture.md#11-ans1-设计建议采纳记录)
 - [SDK 指南补充的设计取舍](docs/architecture.md#12-sdk-指南补充的设计取舍)
 - [核心数据模型与 C01–C10 契约](docs/data-model.md)

@@ -263,7 +263,10 @@ public:
     {
         const std::lock_guard lock(mutex_);
         observe_cancellation();
-        if (progress_.status == ExecutionStatus::Pending) { progress_.status = ExecutionStatus::Running; }
+        if (progress_.status == ExecutionStatus::Pending) {
+            started_at_ = Clock::now();
+            progress_.status = ExecutionStatus::Running;
+        }
         finish_if_done();
     }
 
@@ -713,6 +716,9 @@ private:
     {
         if (remaining_ != 0 || terminal(progress_.status)) { return; }
         progress_.status = stopping_.value_or(ExecutionStatus::Succeeded);
+        if (started_at_) {
+            progress_.elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - *started_at_);
+        }
         publish(RunObservationKind::RunCompleted, progress_.status);
         changed_.notify_all();
     }
@@ -730,12 +736,19 @@ private:
     std::set<std::size_t> active_regions_;
     std::vector<std::size_t> frame_trace_indices_;
     RunProgress progress_;
+    std::optional<Clock::time_point> started_at_;
     bool cancel_requested_{false};
     std::optional<ExecutionStatus> stopping_;
     std::size_t remaining_;
     std::vector<std::optional<ToolInvocationIdentity>> eligible_;
     ResultStore results_;
 };
+
+void record_numeric_value(RunBindingTrace& trace, const DataValue& value)
+{
+    if (const auto* integer = value.as_int64()) { trace.numeric_value = *integer; }
+    else if (const auto* real = value.as_float64()) { trace.numeric_value = *real; }
+}
 
 std::vector<RunBindingTrace> trace_bindings(const InvocationPreparation& preparation)
 {
@@ -746,7 +759,10 @@ std::vector<RunBindingTrace> trace_bindings(const InvocationPreparation& prepara
     traces.reserve(bindings.size());
     for (const auto& binding : bindings) {
         RunBindingTrace trace{binding.target, std::visit([](const auto& value) { return value.sources; }, binding.resolution)};
-        if (const auto* resolved = std::get_if<ResolvedBinding>(&binding.resolution)) { trace.regions = resolved->regions; }
+        if (const auto* resolved = std::get_if<ResolvedBinding>(&binding.resolution)) {
+            trace.regions = resolved->regions;
+            record_numeric_value(trace, resolved->value);
+        }
         traces.push_back(std::move(trace));
     }
     return traces;
@@ -1029,6 +1045,7 @@ void start_region(Work& work, std::size_t slot, const ResolutionContext& context
         traces.push_back({port.id, std::visit([](const auto& value) { return value.sources; }, resolution)});
         if (auto* fixed = std::get_if<ResolvedBinding>(&resolution)) {
             traces.back().regions = std::move(fixed->regions);
+            record_numeric_value(traces.back(), fixed->value);
             inputs.push_back({port.id, std::move(fixed->value)});
         } else if (std::holds_alternative<PendingBinding>(resolution)) {
             run.wait_for_data(slot, std::move(traces));

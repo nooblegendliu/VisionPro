@@ -1,4 +1,5 @@
 #include "editor_window.hpp"
+#include "run_image.hpp"
 
 #include "control_scene.hpp"
 #include "image_panel.hpp"
@@ -539,6 +540,9 @@ void EditorWindow::accept_preview_frame(const ImageHandle& image)
         return;
     }
     showing_run_image_ = false;
+    workspace_image_selection_->mode = WorkspaceImageSelection::Mode::DraftPreview;
+    images_->set_manual_view(true);
+    images_->set_provenance(QStringLiteral("草稿预览"));
     images_dock_->show();
     images_dock_->raise();
     show_status(QStringLiteral("Image ready."));
@@ -577,14 +581,18 @@ void EditorWindow::preview_selected_roi()
             region = *region, directory = directory_, roots = roots_] {
             return app::preview_roi(image, solution, flow, node, target, region, directory, roots);
         },
-        [this, id = *id, selected, reference](app::RoiPreview preview) {
-            if (model_->workflow_id() != id || scene_->selected_nodes() != selected) { return; }
+        [this, id = *id, selected, reference, source_frame = *images_->frame(),
+            consumer = workspace_image_selection_->consumer](app::RoiPreview preview) {
+            if (model_->workflow_id() != id || scene_->selected_nodes() != selected
+                || workspace_image_selection_->consumer != consumer || images_->frame() != source_frame) { return; }
             const auto shown = images_->set_overlays(preview.effective_region, preview.mask);
             if (const auto* failure = std::get_if<Diagnostic>(&shown)) {
                 report_error(QString::fromStdString(failure->message));
                 return;
             }
             showing_run_image_ = false;
+            workspace_image_selection_->mode = WorkspaceImageSelection::Mode::DraftPreview;
+            images_->set_manual_view(true);
             images_->set_provenance(reference ? QStringLiteral("Reference ROI · before template placement") : QStringLiteral("Draft ROI preview"));
             images_dock_->show();
             images_dock_->raise();

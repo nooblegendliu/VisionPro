@@ -35,6 +35,7 @@ public:
     std::optional<core::NodeId> domain_node(QtNodes::NodeId id) const;
     std::optional<core::NodeId> scope() const noexcept { return scope_; }
     QString scope_path() const;
+    Qt::Orientation layout_orientation() const;
     void set_saved_revision(std::uint64_t revision) noexcept { draft_.revision = revision; }
 
     std::unordered_set<QtNodes::NodeId> allNodeIds() const override;

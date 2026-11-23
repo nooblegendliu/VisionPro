@@ -209,6 +209,62 @@ const OutputSlot* display_output(const NodeResult& result)
 }
 } // namespace
 
+std::vector<WorkspaceImageSource> workspace_image_sources(const RunHandle& run, const NodeResult& selected)
+{
+    std::vector<WorkspaceImageSource> sources;
+    const auto& identity = selected.data().identity;
+    const auto* flow = find_workflow(run.request().snapshot().solution(), run.identity().workflow);
+    if (!flow || selected.data().status != ExecutionStatus::Succeeded) { return sources; }
+    const auto append = [&](const NodeResult& record, const OutputSlot* referenced, bool upstream) {
+        const auto& result = record.data();
+        const auto* node = find_node(*flow, result.identity.invocation.node);
+        if (!node || result.status != ExecutionStatus::Succeeded) { return; }
+        auto name = QString::fromStdString(node->name);
+        if (upstream) { name.prepend(QStringLiteral("来源图 · ")); }
+        const auto* tool = std::get_if<ToolConfiguration>(&node->configuration);
+        if (version_one_tool(tool, "visionpro.image.blob") || version_one_tool(tool, "visionpro.measure.color_mean")) {
+            sources.push_back({result.identity, {}, name + QStringLiteral(" · 检测图"), upstream});
+            return;
+        }
+        for (const auto& slot : result.outputs) {
+            if (referenced && &slot != referenced) { continue; }
+            const auto* value = std::get_if<DataValue>(&slot.content);
+            if (value && (value->as_image() || value->as_raster_mask() || value->type() == class_map_type())) {
+                sources.push_back({result.identity, slot.id, name + QStringLiteral(" · ") + QString::fromUtf8(slot.id.text()), upstream});
+            }
+        }
+    };
+    append(selected, nullptr, false);
+    if (!sources.empty()) { return sources; }
+    const auto inspected = run.inspect();
+    const auto* progress = std::get_if<RunProgress>(&inspected);
+    if (!progress) { return sources; }
+    const auto call = std::ranges::find(progress->nodes, std::optional{identity.invocation}, &RunNodeProgress::invocation);
+    if (call == progress->nodes.end()) { return sources; }
+    for (const auto& binding : call->bindings) {
+        for (const auto& source : binding.sources) {
+            const auto* trace = std::get_if<ResultTrace>(&source.origin);
+            if (source.selector_step || source.accepted_absence || !trace || trace->run != run.identity()
+                || trace->reference.workflow != flow->id || !trace->attempt || !trace->invocation) { continue; }
+            const auto* output = std::get_if<OutputId>(&trace->reference.output);
+            if (!output) { continue; }
+            const auto producer = run.lookup({run.identity().run, trace->reference.node, trace->scope, *trace->invocation});
+            const auto* found = std::get_if<std::optional<NodeResult>>(&producer);
+            if (!found || !*found || (*found)->data().identity.attempt != *trace->attempt) { continue; }
+            const auto* slot = (*found)->output(*output);
+            if (slot && std::holds_alternative<DataValue>(slot->content)) { append(**found, slot, true); }
+        }
+    }
+    // A producer can supply several measured scalars to the same judgement.
+    std::vector<WorkspaceImageSource> unique;
+    for (auto& source : sources) {
+        if (std::ranges::none_of(unique, [&](const auto& prior) {
+                return prior.result == source.result && prior.output == source.output;
+            })) { unique.push_back(std::move(source)); }
+    }
+    return unique;
+}
+
 Result<std::monostate> show_run_image(ImagePanel& panel, const RunHandle& run, const InvocationKey& invocation,
     const std::optional<OutputId>& output, const Solution* display_config)
 {

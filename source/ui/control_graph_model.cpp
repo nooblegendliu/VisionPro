@@ -300,6 +300,25 @@ QPointF ControlGraphModel::position(NodeId node) const
     return nodes_.at(node).default_position;
 }
 
+Qt::Orientation ControlGraphModel::layout_orientation() const
+{
+    const auto* flow = active_workflow();
+    if (!flow) { return Qt::Vertical; }
+    // Saved coordinates remain authoritative. Use the most common edge direction
+    // to choose the side carrying the control ports when entering this scope.
+    int vertical = 0;
+    int horizontal = 0;
+    for (const auto& edge : flow->control_links) {
+        const auto source = canvas_id(edge.source);
+        const auto target = canvas_id(edge.target);
+        if (!visible(source) || !visible(target)) { continue; }
+        const auto distance = position(target) - position(source);
+        if (std::abs(distance.y()) > std::abs(distance.x())) { ++vertical; }
+        else if (!distance.isNull()) { ++horizontal; }
+    }
+    return horizontal > vertical ? Qt::Horizontal : Qt::Vertical;
+}
+
 QVariant ControlGraphModel::nodeData(NodeId node, NodeRole role) const
 {
     if (!nodeExists(node)) { return {}; }
@@ -308,9 +327,9 @@ QVariant ControlGraphModel::nodeData(NodeId node, NodeRole role) const
         const auto& value = active_workflow()->nodes[nodes_.at(node).source_index];
         auto name = QString::fromStdString(value.name);
         if (const auto* group = std::get_if<GroupConfiguration>(&value.configuration)) {
-            name += group->loop ? QStringLiteral(" (Loop)") : QStringLiteral(" (Group)");
+            name += group->loop ? tr("（循环）") : tr("（工具组）");
         }
-        if (!value.enabled) { name += QStringLiteral(" (Disabled)"); }
+        if (!value.enabled) { name += tr("（已禁用）"); }
         return name;
     }
     case NodeRole::CaptionVisible: return true;
@@ -318,7 +337,22 @@ QVariant ControlGraphModel::nodeData(NodeId node, NodeRole role) const
     case NodeRole::OutPortCount: return 1 + static_cast<PortCount>(nodes_.at(node).outlets.size());
     case NodeRole::Position: return position(node);
     case NodeRole::Size: return nodes_.at(node).size;
-    case NodeRole::Style: return StyleCollection::nodeStyle().toJson();
+    case NodeRole::Style: {
+        static const auto paint_style = [] {
+            auto style = StyleCollection::nodeStyle();
+            style.setBackgroundColor(QColor(QStringLiteral("#e9edf1")));
+            style.FontColor = QColor(QStringLiteral("#172634"));
+            style.FontColorFaded = QColor(QStringLiteral("#506370"));
+            style.NormalBoundaryColor = QColor(QStringLiteral("#a7b3bb"));
+            style.SelectedBoundaryColor = QColor(QStringLiteral("#ff993c"));
+            style.ConnectionPointColor = QColor(QStringLiteral("#627984"));
+            style.FilledConnectionPointColor = QColor(QStringLiteral("#006d75"));
+            style.ShadowEnabled = false;
+            style.PenWidth = 2.0f;
+            return style.toJson().toVariantMap();
+        }();
+        return paint_style;
+    }
     default: return {};
     }
 }
@@ -341,13 +375,13 @@ QVariant ControlGraphModel::portData(NodeId node, PortType type, PortIndex index
     }
     switch (role) {
     case PortRole::Caption:
-        if (type == PortType::In) { return QStringLiteral("In"); }
-        return index == 0 ? QStringLiteral("Success")
+        if (type == PortType::In || nodes_.at(node).outlets.empty()) { return QString{}; }
+        return index == 0 ? tr("正常完成")
                           : QString::fromStdString(nodes_.at(node).outlets[index - 1].display_name);
-    case PortRole::CaptionVisible: return true;
+    case PortRole::CaptionVisible: return type == PortType::Out && !nodes_.at(node).outlets.empty();
     case PortRole::ConnectionPolicyRole: return QVariant::fromValue(ConnectionPolicy::Many);
     case PortRole::DataType:
-        return QVariant::fromValue(NodeDataType{QStringLiteral("visionpro.control"), QStringLiteral("Control")});
+        return QVariant::fromValue(NodeDataType{QStringLiteral("visionpro.control"), QString{}});
     default: return {};
     }
 }

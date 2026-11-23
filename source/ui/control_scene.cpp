@@ -1,8 +1,14 @@
 #include "control_scene.hpp"
+#include "workspace_style.hpp"
 
 #include <QtNodes/ConnectionIdUtils>
+#include <QtNodes/DefaultNodePainter>
 #include <QtNodes/internal/ConnectionGraphicsObject.hpp>
+#include <QtNodes/internal/DefaultConnectionPainter.hpp>
 #include <QtNodes/internal/NodeGraphicsObject.hpp>
+#include <QtNodes/internal/NodeStyle.hpp>
+#include <QFontMetrics>
+#include <QJsonDocument>
 #include <QGraphicsSceneMouseEvent>
 #include <QGraphicsView>
 #include <QSignalBlocker>
@@ -24,6 +30,147 @@ namespace {
 
 using EditResult = core::Result<std::monostate>;
 using namespace workflow;
+
+constexpr int title_flags = Qt::AlignCenter | Qt::TextWrapAnywhere;
+
+// Control nodes have a title, one input and one or more execution outlets.
+// The geometry is also used by QtNodes for wire endpoints and hit testing.
+class ControlNodeGeometry final : public AbstractNodeGeometry {
+public:
+    ControlNodeGeometry(AbstractGraphModel& graph, Qt::Orientation orientation)
+        : AbstractNodeGeometry(graph), vertical_(orientation == Qt::Vertical)
+    {}
+
+    QSize size(NodeId id) const override { return _graphModel.nodeData<QSize>(id, NodeRole::Size); }
+    QRectF boundingRect(NodeId id) const override { return QRectF(QPointF{}, size(id)).adjusted(-20, -20, 20, 20); }
+    QPointF widgetPosition(NodeId) const override { return {}; }
+    QRect resizeHandleRect(NodeId) const override { return {}; }
+
+    void recomputeSize(NodeId id) const override
+    {
+        const QSize title = title_size(id);
+        const int ports = out_count(id);
+        const int port_width = widest_label(id);
+        const int width = vertical_ ? ports * slot_width(port_width) : port_width + 2 * padding;
+        const int port_height = vertical_ ? (port_width ? port_metrics_.height() + 3 : 0) : ports * row_height();
+        _graphModel.setNodeData(id, NodeRole::Size, QSize(std::max({80, width, title.width() + 2 * padding}),
+            title.height() + 2 * padding + port_height));
+    }
+
+    QRectF captionRect(NodeId id) const override
+    {
+        const auto title = title_size(id);
+        return {(size(id).width() - title.width()) / 2.0, padding, qreal(title.width()), qreal(title.height())};
+    }
+    QPointF captionPosition(NodeId id) const override { return captionRect(id).topLeft() + QPointF(0, title_metrics_.ascent()); }
+
+    QPointF portPosition(NodeId id, PortType type, PortIndex index) const override
+    {
+        const QSize node = size(id);
+        if (!vertical_) {
+            const qreal y = padding + title_size(id).height() + (index + 0.5) * row_height();
+            return {type == PortType::In ? 0.0 : qreal(node.width()), y};
+        }
+        if (type == PortType::In) { return {node.width() / 2.0, 0.0}; }
+        const int step = slot_width(widest_label(id));
+        return {node.width() / 2.0 + (index - (out_count(id) - 1) / 2.0) * step, qreal(node.height())};
+    }
+
+    QPointF portTextPosition(NodeId id, PortType type, PortIndex index) const override
+    {
+        const auto label = _graphModel.portData<QString>(id, type, index, PortRole::Caption);
+        const int width = port_metrics_.horizontalAdvance(label);
+        const QPointF port = portPosition(id, type, index);
+        if (vertical_) { return {port.x() - width / 2.0, port.y() - 5 - port_metrics_.descent()}; }
+        return {type == PortType::In ? qreal(padding) : port.x() - padding - width,
+            port.y() + (port_metrics_.ascent() - port_metrics_.descent()) / 2.0};
+    }
+
+    const QFont title_font = workspace_font(WorkspaceText::NodeTitle);
+    const QFont port_font = workspace_font(WorkspaceText::Secondary);
+
+private:
+    static constexpr int padding = 9;
+    QSize title_size(NodeId id) const
+    {
+        const auto text = _graphModel.nodeData<QString>(id, NodeRole::Caption);
+        const int width = std::clamp(title_metrics_.horizontalAdvance(text) + 2, 1, 150);
+        const auto rect = title_metrics_.boundingRect(QRect(0, 0, width, 0), title_flags, text);
+        return {std::max(width, rect.width()), std::max(title_metrics_.height(), rect.height())};
+    }
+    int out_count(NodeId id) const { return _graphModel.nodeData<int>(id, NodeRole::OutPortCount); }
+    int widest_label(NodeId id) const
+    {
+        int width = 0;
+        const auto count = _graphModel.nodeData<PortCount>(id, NodeRole::OutPortCount);
+        for (PortIndex index = 0; index < count; ++index) {
+            const auto label = _graphModel.portData<QString>(id, PortType::Out, index, PortRole::Caption);
+            width = std::max(width, port_metrics_.horizontalAdvance(label));
+        }
+        return width;
+    }
+    int row_height() const { return port_metrics_.height() + 7; }
+    static int slot_width(int label_width) { return std::max(24, label_width + 10); }
+    const QFontMetrics title_metrics_{title_font};
+    const QFontMetrics port_metrics_{port_font};
+    const bool vertical_;
+};
+
+class ControlNodePainter final : public DefaultNodePainter {
+public:
+    void paint(QPainter* painter, NodeGraphicsObject& node) const override
+    {
+        const auto& scene = static_cast<const ControlScene&>(*node.nodeScene());
+        const bool show_ports = scene.show_available_ports(node);
+        drawNodeRect(painter, node);
+        if (show_ports) { drawConnectionPoints(painter, node); }
+        drawFilledConnectionPoints(painter, node);
+        const auto& model = node.graphModel();
+        const auto id = node.nodeId();
+        const auto& geometry = static_cast<const ControlNodeGeometry&>(scene.nodeGeometry());
+        const NodeStyle style(QJsonDocument::fromVariant(model.nodeData(id, NodeRole::Style)).object());
+        painter->setPen(style.FontColor);
+        painter->setFont(geometry.title_font);
+        painter->drawText(geometry.captionRect(id), title_flags, model.nodeData<QString>(id, NodeRole::Caption));
+        painter->setFont(geometry.port_font);
+        if (show_ports) {
+            drawEntryLabels(painter, node);
+        } else {
+            // The ordinary continuation is implicit. Keep only wired branch labels visible.
+            const auto count = model.nodeData<PortCount>(id, NodeRole::OutPortCount);
+            for (PortIndex port = 1; port < count; ++port) {
+                if (!model.connections(id, PortType::Out, port).empty()) {
+                    painter->drawText(geometry.portTextPosition(id, PortType::Out, port),
+                        model.portData<QString>(id, PortType::Out, port, PortRole::Caption));
+                }
+            }
+        }
+        drawValidationIcon(painter, node);
+    }
+};
+
+class ControlConnectionPainter final : public DefaultConnectionPainter {
+public:
+    void paint(QPainter* painter, const ConnectionGraphicsObject& edge) const override
+    {
+        DefaultConnectionPainter::paint(painter, edge);
+        if (edge.connectionState().requiresPort()) { return; }
+        const auto [c1, c2] = edge.pointsC1C2();
+        QPainterPath path(edge.endPoint(PortType::Out));
+        path.cubicTo(c1, c2, edge.endPoint(PortType::In));
+        const auto tip = path.pointAtPercent(0.84);
+        const QLineF tangent(path.pointAtPercent(0.82), tip);
+        if (tangent.length() < 0.1) { return; }
+        const auto direction = tangent.unitVector().p2() - tangent.p1();
+        const QPointF perpendicular(-direction.y(), direction.x());
+        const auto base = tip - 8 * direction;
+        painter->save();
+        painter->setPen(Qt::NoPen);
+        painter->setBrush(edge.isSelected() ? QColor("#ffab50") : QColor("#7bd3cf"));
+        painter->drawPolygon(QPolygonF{tip, base + 4 * perpendicular, base - 4 * perpendicular});
+        painter->restore();
+    }
+};
 
 core::Diagnostic edit_error(core::ErrorCode code, std::string message)
 {
@@ -104,7 +251,12 @@ void delete_subgraph(Solution& draft, Workflow& flow, const std::set<core::NodeI
 } // namespace
 
 ControlScene::ControlScene(ControlGraphModel& model, QObject* parent)
-    : BasicGraphicsScene(model, parent), model_(model) {}
+    : BasicGraphicsScene(model, parent), model_(model)
+{
+    setNodePainter(std::make_unique<ControlNodePainter>());
+    setConnectionPainter(std::make_unique<ControlConnectionPainter>());
+    onModelReset();
+}
 
 bool ControlScene::open_group(NodeId node)
 {
@@ -187,8 +339,25 @@ bool ControlScene::set_class_palette(const core::NodeId& node, workflow::ClassPa
 
 void ControlScene::set_editing_enabled(bool enabled)
 {
+    if (editing_enabled_ == enabled) { return; }
     editing_enabled_ = enabled;
     if (!enabled) { cancel_gesture(); }
+    for (const auto id : model_.allNodeIds()) {
+        if (auto* node = nodeGraphicsObject(id)) { node->update(); }
+    }
+}
+
+bool ControlScene::show_available_ports(const NodeGraphicsObject& node) const
+{
+    return editing_enabled_ && (node.nodeState().hovered() || wiring_target_ == node.nodeId());
+}
+
+void ControlScene::set_wiring_target(NodeId target)
+{
+    if (wiring_target_ == target) { return; }
+    if (auto* previous = nodeGraphicsObject(wiring_target_)) { previous->update(); }
+    wiring_target_ = target;
+    if (auto* next = nodeGraphicsObject(target)) { next->update(); }
 }
 
 bool ControlScene::add_workflow(std::string name)
@@ -409,9 +578,12 @@ void ControlScene::onModelReset()
     const bool had_selection = !selectedItems().isEmpty();
     const auto selected = selected_nodes();
     drag_origins_.clear();
+    wiring_target_ = InvalidNodeId;
     resetDraftConnection();
     {
         const QSignalBlocker block(this);
+        // QtNodes replaces its geometry when the port orientation changes.
+        setNodeGeometry(std::make_unique<ControlNodeGeometry>(model_, orientation()));
         BasicGraphicsScene::onModelReset();
         for (const auto& id : selected) {
             if (auto* item = nodeGraphicsObject(model_.canvas_id(id))) { item->setSelected(true); }
@@ -422,6 +594,7 @@ void ControlScene::onModelReset()
 
 void ControlScene::cancel_gesture()
 {
+    set_wiring_target(InvalidNodeId);
     resetDraftConnection();
     for (const auto& move : drag_origins_) {
         if (auto* item = nodeGraphicsObject(move.node)) {
@@ -449,6 +622,11 @@ void ControlScene::mouseMoveEvent(QGraphicsSceneMouseEvent* event)
                 event->accept();
                 return;
             }
+            NodeId target = InvalidNodeId;
+            for (auto* item : items(event->scenePos(), Qt::IntersectsItemBoundingRect)) {
+                if (auto* node = qgraphicsitem_cast<NodeGraphicsObject*>(item)) { target = node->nodeId(); break; }
+            }
+            set_wiring_target(target);
             const auto previous_bounds = link->sceneBoundingRect();
             link->setEndPoint(port, link->mapFromScene(event->scenePos()));
             link->move();
@@ -507,6 +685,7 @@ void ControlScene::mouseReleaseEvent(QGraphicsSceneMouseEvent* event)
         const bool draft = link->connectionState().requiredPort() != PortType::None;
         if (draft && event->buttons() == Qt::NoButton) {
             // The domain command owns the stable ID of the completed connection.
+            set_wiring_target(InvalidNodeId);
             resetDraftConnection();
             if (event->button() == Qt::LeftButton) { finish_connection(connection, event->scenePos()); }
         } else if (!draft && event->buttons() == Qt::NoButton) {

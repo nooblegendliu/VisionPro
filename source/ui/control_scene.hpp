@@ -21,6 +21,7 @@ public:
     bool edit_draft(const QString& label, const DraftEdit& edit);
     bool set_class_palette(const core::NodeId& node, workflow::ClassPalette palette);
     void set_editing_enabled(bool enabled);
+    bool show_available_ports(const QtNodes::NodeGraphicsObject& node) const;
     bool add_workflow(std::string name);
     bool remove_workflow(core::WorkflowId workflow);
     bool add_tool(core::ToolTypeId type, QPointF position);
@@ -56,11 +57,13 @@ private:
 
     bool report_edit(core::Result<bool> result);
     void cancel_gesture();
+    void set_wiring_target(QtNodes::NodeId target);
     void finish_connection(const QtNodes::ConnectionId& draft, const QPointF& scene_point);
 
     ControlGraphModel& model_;
     std::vector<CanvasMove> drag_origins_;
     std::optional<Clipboard> clipboard_;
+    QtNodes::NodeId wiring_target_{QtNodes::InvalidNodeId};
     bool editing_enabled_{true};
 };
 

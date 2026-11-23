@@ -1,23 +1,28 @@
 #pragma once
 
 #include <visionpro/infrastructure/solution_file.hpp>
+#include <visionpro/workflow/run_handle.hpp>
 
 #include <QKeySequence>
 #include <QMainWindow>
 
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 
 class QAction;
 class QCloseEvent;
+class QComboBox;
 class QDockWidget;
 class QLabel;
 class QListWidget;
 class QListWidgetItem;
 class QMenu;
+class QResizeEvent;
 class QTimer;
-namespace QtNodes { class GraphicsView; }
+class QToolButton;
+class QVBoxLayout;
 
 namespace visionpro::ui {
 
@@ -25,8 +30,12 @@ class ControlGraphModel;
 class ControlScene;
 class EditorInspector;
 class ImagePanel;
+class ModuleHistoryPanel;
 class RunController;
 class RunPanel;
+class WorkspaceToolbox;
+class WorkflowCanvas;
+struct WorkspaceImageSelection;
 
 class EditorWindow final : public QMainWindow {
 public:
@@ -46,6 +55,7 @@ public:
 
 protected:
     void closeEvent(QCloseEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
 
 private:
     struct CommittedDocument;
@@ -57,6 +67,13 @@ private:
     void create_docks();
     void create_run_actions();
     void create_run_dock();
+    void add_workspace_tool(const QString& type, QPointF position);
+    void show_properties();
+    void refresh_workspace_selection();
+    void refresh_workspace_results();
+    void refresh_workspace_statistics();
+    void present_workspace_image();
+    std::optional<workflow::RunHandle> cancel_target() const;
     void start_run(std::optional<workflow::DebugStatePolicy> debug = {});
     void show_selected_run_image();
     void show_shared_preview();
@@ -64,7 +81,7 @@ private:
     void replace_canvas(workflow::Solution draft, bool writable = true);
     void refresh_canvas();
     void refresh_actions();
-    void frame_canvas();
+    void switch_canvas_view();
     void make_new_document();
     void add_coordinate_frame();
     bool confirm_replacement(Continuation action);
@@ -100,9 +117,14 @@ private:
     std::unique_ptr<ControlScene> scene_;
     EditorInspector* inspector_{};
     ImagePanel* images_{};
-    QtNodes::GraphicsView* view_{};
+    WorkflowCanvas* view_{};
     std::optional<core::WorkflowId> shown_workflow_;
     std::optional<core::NodeId> shown_scope_;
+    struct CanvasView {
+        qreal scale;
+        QPointF center;
+    };
+    std::map<std::pair<core::WorkflowId, std::optional<core::NodeId>>, CanvasView> canvas_views_;
     std::optional<std::filesystem::path> directory_;
     std::optional<infrastructure::SolutionDocument> source_;
     std::optional<workflow::Solution> pending_baseline_;
@@ -112,8 +134,15 @@ private:
     bool close_confirmed_{false};
     bool showing_run_image_{false};
 
-    QListWidget* workflows_{};
-    QListWidget* tools_{};
+    QComboBox* workflows_{};
+    WorkspaceToolbox* tools_{};
+    QToolButton* toolbox_toggle_{};
+    int expanded_toolbox_width_{244};
+    QVBoxLayout* canvas_layout_{};
+    QLabel* workspace_stats_{};
+    QToolButton* diagnostics_button_{};
+    ModuleHistoryPanel* module_history_{};
+    std::unique_ptr<WorkspaceImageSelection> workspace_image_selection_;
     QDockWidget* inspector_dock_{};
     QDockWidget* images_dock_{};
     RunController* run_controller_{};
@@ -148,6 +177,7 @@ private:
     QAction* debug_node_{};
     QAction* cancel_run_{};
     QAction* arm_trigger_{};
+    QAction* workspace_trigger_{};
     QAction* send_frame_{};
     QAction* drain_trigger_{};
     QAction* cancel_trigger_{};

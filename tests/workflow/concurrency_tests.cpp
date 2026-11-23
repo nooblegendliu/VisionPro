@@ -291,6 +291,8 @@ void exclusive_resources()
     f.gates->await(1);
     const auto logical = wait(holding, RunWaitTarget::Completion);
     check(logical.status == ExecutionStatus::Succeeded && !logical.quiescent, "Logical completion must precede the controlled physical exit.");
+    check(logical.elapsed && logical.elapsed->count() >= 0,
+        "A started run records its execution duration at logical completion while its tool is still live.");
     const auto cancelled = accepted(f.submit(snapshot, b.id, 2));
     check(number(output(accepted(f.submit(snapshot, c.id, 3)))) == 4, "Unrelated C did not complete during exclusive contention.");
     check(!f.gates->entered(2) && provider->counts->acquired == 1, "Contending B acquired a lease before A exited.");
@@ -299,6 +301,8 @@ void exclusive_resources()
     const auto second = accepted(f.submit(snapshot, b.id, 4));
     f.gates->release(1);
     check(number(output(second)) == 5 && number(output(holding)) == 2, "B should run once A physically exits.");
+    check(take(holding.inspect()).elapsed == logical.elapsed,
+        "Physical exit and quiescence preserve the duration recorded at logical completion.");
     check(provider->counts->peak == 1 && provider->counts->acquired == 2 && provider->counts->current == 0,
         "Exactly one physical lease may exist for the shared exclusive resource.");
 }
@@ -325,9 +329,11 @@ void bounded_admission()
     const auto occupied = accepted(f.submit(snapshot, a.id, 40));
     f.gates->await(40);
     const auto removed = accepted(f.submit(snapshot, a.id, 50));
+    check(!take(removed.inspect()).elapsed, "An accepted FIFO waiter has no execution duration before dispatch.");
     take(removed.cancel());
     const auto end = wait(removed);
     check(end.status == ExecutionStatus::Cancelled && end.call_order.empty() && !f.gates->entered(50), "Cancelling a pending run must skip every invocation.");
+    check(!end.elapsed, "A cancelled FIFO waiter never started and cannot report an execution duration.");
     const auto replacement = accepted(f.submit(snapshot, a.id, 60));
     check(replacement.admission() == RunAdmission::Queued && !take(occupied.inspect()).quiescent, "The cancelled queue slot must be reusable before the active run finishes.");
     f.gates->release(40);

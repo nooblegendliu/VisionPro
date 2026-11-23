@@ -311,6 +311,7 @@ void RunLifecycleTests::admits_multiple_runs_and_cancels_only_the_selected_ident
     EditorWindow window(std::move(draft), registry_for(driver));
     const DrainOnExit drain{*driver};
     auto& controller = control<RunController>(window, "runController");
+    window.findChild<QDockWidget*>(QStringLiteral("runDock"))->show();
     auto& panel = control<RunPanel>(window, "runPanel");
     auto& start = control<QAction>(window, "runWorkflow");
     auto& cancel = control<QAction>(window, "cancelRun");
@@ -335,7 +336,7 @@ void RunLifecycleTests::admits_multiple_runs_and_cancels_only_the_selected_ident
     QTRY_VERIFY(refusal && refusal->code == ErrorCode::RunQueueFull);
     QCOMPARE(controller.runs().size(), 3u);
 
-    auto* view = qobject_cast<QGraphicsView*>(window.centralWidget());
+    auto* view = window.findChild<QGraphicsView*>(QStringLiteral("workflowCanvas"));
     auto* scene = qobject_cast<ControlScene*>(view->scene());
     QVERIFY(scene && scene->select_workflow(other.id) && start.isEnabled());
     start.trigger();
@@ -376,6 +377,7 @@ void RunLifecycleTests::cancel_with_slow_panel_and_resume_after_hiding()
     EditorWindow window(solution_for('1'), registry_for(driver));
     const DrainOnExit drain{*driver};
     auto& controller = control<RunController>(window, "runController");
+    window.findChild<QDockWidget*>(QStringLiteral("runDock"))->show();
     auto& panel = control<RunPanel>(window, "runPanel");
     auto& dock = control<QDockWidget>(window, "runDock");
     auto& start = control<QAction>(window, "runWorkflow");
@@ -449,6 +451,7 @@ void RunLifecycleTests::replace_and_close_with_pending_physical_exit()
     EditorWindow window(std::move(original), registry_for(driver));
     const DrainOnExit drain{*driver};
     auto& controller = control<RunController>(window, "runController");
+    window.findChild<QDockWidget*>(QStringLiteral("runDock"))->show();
     auto& panel = control<RunPanel>(window, "runPanel");
     auto& start = control<QAction>(window, "runWorkflow");
     auto& identity = control<QLabel>(window, "runIdentity");
@@ -531,6 +534,7 @@ void RunLifecycleTests::edits_preserve_running_capture_and_displayed_image()
     EditorWindow window(solution_for('2'), registry_for(driver));
     const DrainOnExit drain{*driver};
     auto& controller = control<RunController>(window, "runController");
+    window.findChild<QDockWidget*>(QStringLiteral("runDock"))->show();
     auto& panel = control<RunPanel>(window, "runPanel");
     auto& dock = control<QDockWidget>(window, "runDock");
     auto& start = control<QAction>(window, "runWorkflow");
@@ -546,7 +550,7 @@ void RunLifecycleTests::edits_preserve_running_capture_and_displayed_image()
     start.trigger();
     QTRY_VERIFY(controller.runs().size() == 1 && driver->call(0));
     const auto first = controller.runs().front().identity();
-    auto* canvas = qobject_cast<QGraphicsView*>(window.centralWidget());
+    auto* canvas = window.findChild<QGraphicsView*>(QStringLiteral("workflowCanvas"));
     QVERIFY(canvas);
     auto* scene = qobject_cast<ControlScene*>(canvas->scene());
     QVERIFY(scene);

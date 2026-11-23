@@ -1,4 +1,7 @@
 #include "image_panel.hpp"
+#include "workspace_style.hpp"
+#include <QComboBox>
+#include <QSignalBlocker>
 #include "class_palette.hpp"
 
 #include <visionpro/core/schema_id_factory.hpp>
@@ -75,10 +78,12 @@ ImagePanel::ImagePanel(QWidget* parent)
       pixel_info_(new QLabel(this)), legend_(new QTreeWidget(this))
 {
     auto* layout = new QVBoxLayout(this);
+    layout->setContentsMargins(8, 6, 8, 4);
+    layout->setSpacing(4);
     auto* controls = new QHBoxLayout;
-    auto* fit = new QPushButton(QStringLiteral("Fit Image"), this);
+    auto* fit = new QPushButton(QStringLiteral("适应窗口"), this);
     fit->setObjectName(QStringLiteral("fitImage"));
-    fit->setToolTip(QStringLiteral("Fit the image to the view. Scroll to zoom, drag to pan."));
+    fit->setToolTip(QStringLiteral("适应图像窗口。滚轮缩放，拖动平移。"));
     connect(fit, &QPushButton::clicked, view_, &ImageView::fit_image);
     image_info_->setObjectName(QStringLiteral("imageInfo"));
     image_info_->setWordWrap(true);
@@ -86,9 +91,28 @@ ImagePanel::ImagePanel(QWidget* parent)
     provenance_->setTextFormat(Qt::PlainText);
     provenance_->setWordWrap(true);
     pixel_info_->setObjectName(QStringLiteral("imagePixel"));
+    const auto secondary = workspace_font(WorkspaceText::Secondary);
+    image_info_->setFont(secondary);
+    provenance_->setFont(secondary);
+    pixel_info_->setFont(secondary);
     view_->setObjectName(QStringLiteral("imageView"));
     view_->setMinimumSize(260, 170);
+    sources_ = new QComboBox(this);
+    sources_->setObjectName(QStringLiteral("workspaceImageSource"));
+    sources_->setAccessibleName(QStringLiteral("输出图来源"));
+    sources_->setMinimumContentsLength(7);
+    sources_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    sources_->setPlaceholderText(QStringLiteral("选择来源图"));
+    sources_->hide();
+    follow_ = new QPushButton(QStringLiteral("返回运行输出"), this);
+    follow_->setObjectName(QStringLiteral("resumeWorkspaceImage"));
+    follow_->hide();
+    connect(sources_, &QComboBox::currentIndexChanged, this, &ImagePanel::source_changed);
+    connect(sources_, &QComboBox::currentTextChanged, sources_, &QWidget::setToolTip);
+    connect(follow_, &QPushButton::clicked, this, &ImagePanel::follow_requested);
     controls->addWidget(fit);
+    controls->addWidget(sources_, 2);
+    controls->addWidget(follow_);
     controls->addWidget(image_info_, 1);
     layout->addLayout(controls);
     layout->addWidget(provenance_);
@@ -217,6 +241,24 @@ void ImagePanel::set_provenance(const QString& text)
     provenance_->setVisible(!text.isEmpty());
 }
 
+void ImagePanel::set_sources(const QStringList& labels, int selected)
+{
+    const QSignalBlocker block(sources_);
+    sources_->clear();
+    sources_->addItems(labels);
+    sources_->setCurrentIndex(selected);
+    sources_->setToolTip(sources_->currentText());
+    sources_->setVisible(!labels.isEmpty());
+}
+
+int ImagePanel::selected_source() const { return sources_->currentIndex(); }
+
+void ImagePanel::set_manual_view(bool manual)
+{
+    follow_->setVisible(manual);
+    sources_->setVisible(!manual && sources_->count() > 0);
+}
+
 void ImagePanel::clear_overlays()
 {
     if (frame_) { (void)view_->set_overlays({}, {}); }
@@ -230,7 +272,7 @@ void ImagePanel::clear_frame()
     palette_.clear();
     legend_->clear();
     legend_->hide();
-    image_info_->setText(QStringLiteral("Open an image from the View menu."));
+    image_info_->setText(QStringLiteral("暂无图像"));
     set_provenance({});
     pixel_info_->clear();
     emit frame_changed();

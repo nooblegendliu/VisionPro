@@ -8,6 +8,7 @@
 #include <visionpro/core/schema_id_factory.hpp>
 
 #include <QAction>
+#include <QDockWidget>
 #include <QApplication>
 #include <QComboBox>
 #include <QDialog>
@@ -56,7 +57,7 @@ template<UuidIdentity Id> Id id(char suffix = '1')
 
 ControlScene& scene(EditorWindow& window)
 {
-    return *qobject_cast<ControlScene*>(qobject_cast<QGraphicsView*>(window.centralWidget())->scene());
+    return *qobject_cast<ControlScene*>(window.findChild<QGraphicsView*>(QStringLiteral("workflowCanvas"))->scene());
 }
 
 QAction& action(EditorWindow& window, const char* name) { return *window.findChild<QAction*>(QString::fromLatin1(name)); }
@@ -188,6 +189,7 @@ void EditorRunTests::replays_saved_trigger_in_editor_and_cli()
     QTRY_VERIFY(!window.file_busy());
     QVERIFY(scene(window).select_workflow(external.id));
     auto& controller = *window.findChild<RunController*>();
+    action(window, "workflowProperties").trigger();
     auto* configure = window.findChild<QPushButton*>(QStringLiteral("editWorkflowTrigger"));
     QTRY_VERIFY((configure = window.findChild<QPushButton*>(QStringLiteral("editWorkflowTrigger"))) && configure->isVisible());
     const auto source = QStringLiteral("s66.desktop.frames");
@@ -294,6 +296,7 @@ void EditorRunTests::runs_and_debugs_selected_group_with_public_inputs()
     auto& debug = action(window, "debugSelectedNode");
     QVERIFY(run.isEnabled() && debug.isEnabled());
     auto& controller = *window.findChild<RunController*>();
+    window.findChild<QDockWidget*>(QStringLiteral("runDock"))->show();
     auto& panel = *window.findChild<RunPanel*>();
     auto& tree = *panel.findChild<QTreeWidget*>(QStringLiteral("runNodes"));
     auto& details = *panel.findChild<QPlainTextEdit*>(QStringLiteral("runDetails"));
@@ -356,6 +359,7 @@ void EditorRunTests::selects_each_iteration_of_the_same_node()
     const auto progress = take(controller.runs().front().inspect());
     QVERIFY2(progress.status == ExecutionStatus::Succeeded, progress.diagnostics.empty() ? "" : progress.diagnostics.front().message.c_str());
     QCOMPARE(progress.iterations.size(), 2u);
+    window.findChild<QDockWidget*>(QStringLiteral("runDock"))->show();
     auto& panel = *window.findChild<RunPanel*>();
     auto& tree = *panel.findChild<QTreeWidget*>(QStringLiteral("runNodes"));
     auto& details = *panel.findChild<QPlainTextEdit*>(QStringLiteral("runDetails"));
@@ -378,6 +382,7 @@ void EditorRunTests::publishes_draft_and_isolates_debug()
     EditorWindow window(counter_fixture(), counter_registry());
     window.show();
     auto& control = *window.findChild<RunController*>();
+    window.findChild<QDockWidget*>(QStringLiteral("runDock"))->show();
     auto& panel = *window.findChild<RunPanel*>();
     auto& workflow_action = action(window, "runWorkflow");
     auto& debug_action = action(window, "debugSelectedNode");
