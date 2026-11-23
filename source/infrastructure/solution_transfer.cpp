@@ -234,7 +234,7 @@ core::Result<SolutionTransferResult> transfer_solution(const fs::path& destinati
         if (source && source->solution().id != draft.id) {
             return error(ErrorCode::ResultIdentityMismatch, draft.id, "The draft and source document must share a solution identity.");
         }
-        if (draft.format_version != solution_format_version) {
+        if (!supports_solution_format(draft.format_version)) {
             return error(ErrorCode::UnsupportedSolutionFormat, draft.id, "The edited manifest format version is unsupported.");
         }
         if (auto checked = validate_model_shape(draft); auto* failure = std::get_if<Diagnostic>(&checked)) { return std::move(*failure); }

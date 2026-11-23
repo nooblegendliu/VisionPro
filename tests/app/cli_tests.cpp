@@ -550,6 +550,9 @@ void calculations(const fs::path& executable)
     success(invoke(executable, scratch.path, {L"save", L"--solution", manifest.native()}));
     const auto selected = success(run(0));
     check(selected.at("status") == "Succeeded" && produced(call(selected, 0, 1)) == "9", "Area at dynamic index 1 must be 9.");
+    check(produced(selected.at("public_result"), "area") == "9"
+        && find_by(selected.at("public_result").at("exports"), "output", "area").at("producer").at("run") == selected.at("run"),
+        "Running one workflow independently exposes its original public output and producer.");
     const auto& selector = sources(call(selected, 0, 1), "left");
     const auto& list = find_by(selector, "kind", "public_input");
     const auto& index = find_by(selector, "kind", "result");
@@ -594,6 +597,69 @@ void calculations(const fs::path& executable)
     check(stopped.at("status") == "Failed" && call(stopped, 2, 0).at("status") == "Failed"
         && downstream.at("status") == "Skipped" && downstream.at("invocation").is_null() && downstream.at("outputs").empty(),
         "Formatter tolerance never consumes an upstream technical failure.");
+}
+
+void solution_graph(const fs::path& executable)
+{
+    ScratchDirectory scratch;
+    const auto manifest = scratch.path / "solution.json";
+    write_file(manifest, read_file(VISIONPRO_SOLUTION_GRAPH_SAMPLE));
+    const auto configuration = Json::parse(read_file(manifest));
+    const auto& flows = configuration.at("workflows");
+    const auto first = flows.at(0).at("id").get<std::string>();
+    const auto second = flows.at(1).at("id").get<std::string>();
+    const std::wstring entry{first.begin(), first.end()};
+    const std::wstring downstream{second.begin(), second.end()};
+    const auto command = [&](const std::wstring& option, const std::wstring& value) {
+        return invoke(executable, scratch.path, {L"run-solution", L"--solution", manifest.native(), option, value});
+    };
+
+    success(invoke(executable, scratch.path, {L"save", L"--solution", manifest.native()}));
+    for (int index = 0; index < 2; ++index) {
+        const auto report = success(command(L"--entry-input", entry + L"/index=" + std::to_wstring(index)));
+        const auto& runs = report.at("runs");
+        check(report.at("status") == "Succeeded" && runs.size() == 2 && report.at("skipped").empty()
+            && report.at("deliveries").size() == 1 && report.at("sequence").is_string()
+            && report.at("control_links").at(0).at("status") == "Arrived",
+            "One solution execution admits both linked workflows exactly once.");
+        const auto& a = runs.at(0);
+        const auto& b = runs.at(1);
+        const auto& delivery = report.at("deliveries").at(0);
+        const auto& producer = find_by(a.at("public_result").at("exports"), "output", "area").at("producer");
+        check(a.at("workflow") == first && b.at("workflow") == second && a.at("run") != b.at("run")
+            && producer.at("workflow") == first && producer.at("run") == a.at("run")
+            && producer.at("node") == flows.at(0).at("nodes").at(1).at("id")
+            && delivery.at("source").at("run") == a.at("run") && delivery.at("source").at("output") == "area"
+            && delivery.at("target").at("run") == b.at("run") && delivery.at("target").at("input") == "fifth"
+            && delivery.at("source").at("snapshot") == report.at("snapshot")
+            && delivery.at("target").at("session") == report.at("session"),
+            "The report links the public output producer and the two actual child run identities.");
+        const bool passed = index == 0;
+        const auto value = passed ? "6" : "9";
+        check(produced(a.at("public_result"), "area") == value
+            && find_by(b.at("inputs"), "id", "fifth").at("value") == value
+            && produced(b.at("public_result"), "passed") == passed, "The mapped input drives the fifth judgement.");
+        for (int branch = 7; branch <= 8; ++branch) {
+            const auto id = flows.at(1).at("nodes").at(branch).at("id").get<std::string>();
+            const auto& node = find_by(b.at("nodes"), "id", id);
+            if ((branch == 7) == passed) { check(node.at("status") == "Succeeded", "Selected branch runs."); }
+            else { skipped(node); }
+        }
+    }
+    const auto failed = command(L"--entry-input", entry + L"/index=2");
+    rejected(failed, 1, "IndexOutOfRange");
+    const auto report = Json::parse(failed.output);
+    check(report.at("status") == "Failed" && report.at("runs").size() == 1
+        && report.at("runs").at(0).at("workflow") == first && report.at("deliveries").empty()
+        && report.at("skipped") == Json::array({second}) && report.at("control_links").at(0).at("status") == "Closed"
+        && report.at("control_links").at(0).at("close_reason") == "Failed",
+        "An upstream failure never admits the downstream workflow.");
+    const auto& absent = find_by(report.at("runs").at(0).at("public_result").at("outputs"), "id", "area");
+    check(absent.at("status") == "NotProduced" && absent.at("reason") == "Failed",
+        "Failed public outputs retain their absence reason.");
+    rejected(command(L"--input", L"index=0"), 2, "InvalidRunRequest");
+    rejected(command(L"--workflow", downstream), 2, "InvalidRunRequest");
+    rejected(command(L"--entry-input", downstream + L"/fifth=6"), 2, "InvalidRunRequest");
 }
 
 void replay(const fs::path& executable)
@@ -1230,6 +1296,7 @@ int wmain(int argc, wchar_t** argv)
         else if (group == L"external-diagnostics") { diagnostics(cli, PayloadStorage::External); }
         else if (group == L"output-failures") { output_failures(cli); }
         else if (group == L"calculations") { calculations(cli); }
+        else if (group == L"solution-graph") { solution_graph(cli); }
         else if (group == L"replay") { replay(cli); }
         else if (group == L"camera") { cameras(cli); }
         else if (group == L"shared") { shared_workflows(cli); }

@@ -9,6 +9,7 @@
 #include <variant>
 
 namespace visionpro::workflow {
+namespace detail { class SolutionWake; }
 
 class InvocationResourceProvider;
 
@@ -43,6 +44,10 @@ public:
     [[nodiscard]] core::Result<std::monostate> close();
 private:
     friend class WorkflowSession;
+    [[nodiscard]] bool on_worker_thread() const noexcept;
+    struct SolutionCapture;
+    [[nodiscard]] core::Result<std::shared_ptr<SolutionCapture>> pin_solution(const ConfigSnapshot& capture,
+        std::shared_ptr<detail::SolutionWake> wake);
     [[nodiscard]] core::Result<std::monostate> publish_shared(const ConfigSnapshot& capture);
     [[nodiscard]] core::Result<std::shared_ptr<const core::SharedData>> shared_preview() const;
     [[nodiscard]] core::Result<std::shared_ptr<const core::CorrelationJoinAccess>> correlation_preview() const;
@@ -52,7 +57,7 @@ private:
     // reserves no slot. Admission consumes one preparation after rechecking
     // the slot, without calling back into the provider.
     [[nodiscard]] Preparation prepare(const RunRequest& request,
-        std::shared_ptr<InvocationResourceProvider> provider);
+        std::shared_ptr<InvocationResourceProvider> provider, std::shared_ptr<SolutionCapture> pinned = {});
     [[nodiscard]] RunSubmission admit(std::shared_ptr<PreparedSubmission> prepared);
 
     struct Impl;

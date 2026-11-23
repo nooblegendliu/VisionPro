@@ -2,6 +2,12 @@
 
 ## 1. 当前阶段
 
+方案级编排的磁盘样例在 `samples/f3-solution-graph`。将下列命令的索引依次设为 0、1、2，可分别复现 6、9 和上游越界。最后一种以非零状态退出，JSON 中只有 A 的运行记录。单流程调试仍用 `run --workflow`。
+
+```powershell
+visionpro_cli run-solution --solution samples/f3-solution-graph/solution.json --entry-input 5ca4f87a-ea1e-4d62-89b0-000000006310/index=0
+```
+
 C01–C10 已整理为当前设计基线，权威契约见 [data-model.md](data-model.md)。
 S1 的 2026-10-27 文档审查结果见 [§8.1](#81-s1-文档审查记录)。
 S2.1–S2.4 已于 2026-10-30 完成：已有 `visionpro_core`、`visionpro_workflow`、核心领域类型、

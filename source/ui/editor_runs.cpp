@@ -6,6 +6,7 @@
 #include "run_controller.hpp"
 #include "run_image.hpp"
 #include "run_panel.hpp"
+#include "solution_run_actions.hpp"
 
 #include <visionpro/core/schema_id_factory.hpp>
 #include <visionpro/core/correlation_join.hpp>
@@ -101,6 +102,9 @@ SchemaId trigger_id(bool independent)
 void EditorWindow::create_run_actions()
 {
     auto& menu = *menuBar()->addMenu(QStringLiteral("运行(&R)"));
+    add_solution_run_actions(menu, *run_controller_, [this] {
+        return model_ && !busy_ && !close_confirmed_ && writable() ? &draft() : nullptr;
+    }, [this] { return RunDocument{source_, directory_, roots_}; });
     run_workflow_ = action(menu, QStringLiteral("单次运行"), "runWorkflow", [this] { start_run(); },
         QKeySequence(Qt::Key_F5));
     run_group_ = action(menu, QStringLiteral("运行所选 Group…"), "runSelectedGroup",

@@ -1,4 +1,5 @@
 #include "run_controller.hpp"
+#include <visionpro/core/schema_id_factory.hpp>
 
 #ifdef VISIONPRO_WITH_OPENCV
 #include "visual_preview.hpp"
@@ -32,7 +33,7 @@ Diagnostic request_issue(Diagnostic failure, const Solution& draft, const RunTar
     return failure;
 }
 
-Result<std::monostate> read_inputs(RunArguments& arguments, const std::vector<RunImageInput>& images)
+Result<std::monostate> read_inputs(std::vector<RunInput>& values, const std::vector<RunImageInput>& images)
 {
 #ifdef VISIONPRO_WITH_OPENCV
     for (const auto& input : images) {
@@ -46,7 +47,7 @@ Result<std::monostate> read_inputs(RunArguments& arguments, const std::vector<Ru
             failure->location.input = input.id;
             return std::move(*failure);
         }
-        arguments.inputs.push_back({input.id, std::get<DataValue>(std::move(value))});
+        values.push_back({input.id, std::get<DataValue>(std::move(value))});
     }
 #else
     if (!images.empty()) {
@@ -54,7 +55,7 @@ Result<std::monostate> read_inputs(RunArguments& arguments, const std::vector<Ru
         failure.location.input = images.front().id;
         return failure;
     }
-    Q_UNUSED(arguments);
+    Q_UNUSED(values);
 #endif
     return std::monostate{};
 }
@@ -67,11 +68,11 @@ struct Admission {
 Admission prepare_run(WorkflowSession& session, const Solution& draft, const RunDocument& document,
     RunArguments arguments, const std::vector<RunImageInput>& images, std::size_t subscribe_capacity)
 {
-    if (draft.format_version != solution_format_version || (document.source && !document.source->can_save())) {
+    if (!supports_solution_format(draft.format_version) || (document.source && !document.source->can_save())) {
         return {RunRejected{request_issue(issue(ErrorCode::UnsupportedSolutionContent,
             "This solution contains content that cannot be submitted from the editor."), draft, arguments.target)}};
     }
-    if (auto checked = read_inputs(arguments, images); auto* failure = std::get_if<Diagnostic>(&checked)) {
+    if (auto checked = read_inputs(arguments.inputs, images); auto* failure = std::get_if<Diagnostic>(&checked)) {
         return {RunRejected{request_issue(std::move(*failure), draft, arguments.target)}};
     }
     auto base = session.inspect().active;
@@ -97,6 +98,40 @@ Admission prepare_run(WorkflowSession& session, const Solution& draft, const Run
     }
     return {session.publish_and_submit(*base, draft, arguments, std::get<std::shared_ptr<FileResourceProvider>>(std::move(provider))),
         std::move(observation)};
+}
+
+Result<SolutionRunReport> execute_solution(WorkflowSession& session, const Solution& draft, const RunDocument& document,
+    std::vector<SolutionEntryInputs>& entries, std::stop_token stop)
+{
+    if (!supports_solution_format(draft.format_version) || (document.source && !document.source->can_save())) {
+        return issue(ErrorCode::UnsupportedSolutionContent, "The editor cannot run this solution format or its unknown fields.");
+    }
+    if (document.source && document.source->solution().id != draft.id) {
+        return issue(ErrorCode::ResultIdentityMismatch, "The draft and source document belong to different solutions.");
+    }
+    std::vector<WorkflowRunInputs> inputs;
+    for (auto& [workflow, entered] : entries) {
+        if (auto decoded = read_inputs(entered.values, entered.images); auto* failure = std::get_if<Diagnostic>(&decoded)) {
+            failure->location.workflow = workflow;
+            return *failure;
+        }
+        inputs.push_back({workflow, std::move(entered.values)});
+    }
+    auto provider = document.source ? FileResourceProvider::create(draft, document.source->directory(), document.source->resource_roots())
+                                    : FileResourceProvider::create(draft, document.directory, document.roots);
+    if (auto* failure = std::get_if<Diagnostic>(&provider)) { return std::move(*failure); }
+    const auto base = session.inspect().active;
+    const RunTrigger trigger{TriggerKind::Manual, std::get<SchemaId>(SchemaIdFactory::parse<SchemaId>("visionpro.editor.solution"))};
+    if (base) {
+        auto preview = ConfigSnapshot::capture(draft, base->tools(), base->identity());
+        if (auto* failure = std::get_if<Diagnostic>(&preview)) { return std::move(*failure); }
+        auto checked = validate_solution_inputs(std::get<ConfigSnapshot>(preview), inputs, trigger);
+        if (auto* failure = std::get_if<Diagnostic>(&checked)) { return std::move(*failure); }
+    }
+    auto resources = std::get<std::shared_ptr<FileResourceProvider>>(std::move(provider));
+    auto capture = base ? session.publish(*base, draft, resources) : session.activate(draft, resources);
+    if (auto* failure = std::get_if<Diagnostic>(&capture)) { return std::move(*failure); }
+    return session.run_solution(std::get<ConfigSnapshot>(capture), inputs, trigger, stop);
 }
 } // namespace
 
@@ -183,6 +218,46 @@ void RunController::start(Solution draft, RunDocument document, RunArguments arg
     worker->start();
 }
 
+void RunController::start_solution(Solution draft, RunDocument document, std::vector<SolutionEntryInputs> inputs)
+{
+    if (!can_start() || !ensure_session()) { return; }
+    solution_report_.reset();
+    solution_stop_.emplace();
+    auto outcome = std::make_shared<std::optional<Result<SolutionRunReport>>>();
+    auto* worker = QThread::create([outcome, session = session_, draft = std::move(draft), document = std::move(document),
+            inputs = std::move(inputs), stop = solution_stop_->get_token()]() mutable {
+        try { *outcome = execute_solution(*session, draft, document, inputs, stop); }
+        catch (...) { *outcome = issue(ErrorCode::ExecutionBoundaryFailure, "Unable to execute the solution round."); }
+    });
+    connect(worker, &QThread::finished, this, [this, outcome] {
+        preparing_ = false;
+        solution_stop_.reset();
+        if (retiring_) { close_session(); return; }
+        if (auto* failure = std::get_if<Diagnostic>(&outcome->value())) {
+            emit operation_failed(*failure);
+        } else {
+            solution_report_ = std::get<SolutionRunReport>(std::move(outcome->value()));
+            for (const auto& child : solution_report_->runs) { record_submission(child); }
+            for (const auto& diagnostic : solution_report_->diagnostics) { emit operation_failed(diagnostic); }
+            if (solution_report_->diagnostics.empty()) {
+                emit trigger_notice(tr("整方案第 %1 轮已结束，可在运行菜单查看方案结果。").arg(solution_report_->sequence));
+            }
+            subscribe();
+        }
+        emit changed();
+    });
+    connect(worker, &QThread::finished, worker, &QObject::deleteLater);
+    preparing_ = true;
+    emit changed();
+    emit trigger_notice(tr("整方案正在运行…"));
+    worker->start();
+}
+
+void RunController::cancel_solution()
+{
+    if (solution_stop_ && solution_stop_->request_stop()) { emit changed(); }
+}
+
 void RunController::record_submission(const RunSubmission& submission, std::string description)
 {
     if (const auto* handle = std::get_if<RunHandle>(&submission)) {
@@ -261,6 +336,8 @@ Result<std::monostate> RunController::reset_state(const NodeTarget& target)
 void RunController::reset_document()
 {
     if (retiring_) { return; }
+    if (solution_stop_) { solution_stop_->request_stop(); }
+    solution_report_.reset();
     ++document_generation_;
     disarm_triggers();
     camera_status_.clear();

@@ -127,6 +127,26 @@ struct NodePlacement {
     ClassPalette class_palette{};
 };
 struct WorkflowLayout { core::WorkflowId workflow; std::vector<NodePlacement> nodes; };
+inline constexpr std::uint32_t solution_graph_manifest_version = 2;
+struct WorkflowControlLink {
+    core::WorkflowId source;
+    core::WorkflowId target;
+    std::optional<core::ControlOutputId> output{};
+    bool operator==(const WorkflowControlLink&) const = default;
+};
+struct WorkflowPortBinding {
+    core::WorkflowId source;
+    core::OutputId output;
+    core::WorkflowId target;
+    core::InputId input;
+    bool operator==(const WorkflowPortBinding&) const = default;
+};
+struct SolutionGraph {
+    std::vector<core::WorkflowId> entries;
+    std::vector<WorkflowControlLink> links;
+    std::vector<WorkflowPortBinding> bindings;
+    bool operator==(const SolutionGraph&) const = default;
+};
 struct Solution {
     core::SolutionId id;
     std::string name;
@@ -138,6 +158,7 @@ struct Solution {
     std::vector<core::DataQueueDefinition> queues;
     std::vector<core::CoordinateFrameDefinition> coordinates;
     std::vector<WorkflowLayout> layouts;
+    std::optional<SolutionGraph> graph{};
 };
 
 // Borrowed pointers remain valid only while their editable owner is unchanged/alive.
@@ -149,6 +170,7 @@ struct Solution {
     std::optional<core::NodeId> parent = std::nullopt);
 [[nodiscard]] core::Result<std::vector<core::NodeId>> descendants(const Workflow& workflow, const core::NodeId& group);
 [[nodiscard]] core::Result<std::monostate> validate_public_interface(const PublicInterface& interface);
+[[nodiscard]] core::Result<std::monostate> validate_solution_graph(const Solution& solution);
 [[nodiscard]] core::Result<std::monostate> validate_workflow_admission(const WorkflowAdmission& admission);
 [[nodiscard]] core::Result<std::monostate> validate_workflow_trigger(const Workflow& workflow);
 [[nodiscard]] core::Result<std::monostate> validate_node_execution_policy(const NodeExecutionPolicy& policy,

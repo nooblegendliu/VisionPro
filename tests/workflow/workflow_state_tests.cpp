@@ -9,6 +9,7 @@
 #include <array>
 #include <chrono>
 #include <condition_variable>
+#include <future>
 #include <iostream>
 #include <map>
 #include <mutex>
@@ -97,7 +98,8 @@ public:
     Counts counts(NodeId node)
     {
         const std::lock_guard lock(mutex_);
-        return counts_.at(node);
+        const auto found = counts_.find(node);
+        return found == counts_.end() ? Counts{} : found->second;
     }
 
     bool publish(const PendingCall& call)
@@ -116,6 +118,20 @@ public:
             throw std::runtime_error("The stateful asynchronous invocation did not start.");
         }
         return pending_.at(run);
+    }
+
+    PendingCall await_node(NodeId node, std::optional<WorkflowRunId> after = {})
+    {
+        std::unique_lock lock(mutex_);
+        const auto next = [&] {
+            return std::ranges::find_if(pending_, [&](const auto& item) {
+                return item.second.identity.invocation.node == node && (!after || item.first > *after);
+            });
+        };
+        if (!changed_.wait_for(lock, 5s, [&] { return next() != pending_.end(); })) {
+            throw std::runtime_error("Expected solution child did not enter its asynchronous node.");
+        }
+        return next()->second;
     }
 
     void request_cancel()
@@ -693,6 +709,122 @@ void debug_isolation()
 void report_success(const PendingCall& pending)
 { take(pending.completion.complete(success(pending.identity, pending.sample.after))); }
 
+void solution_round_across_publication()
+{
+    const auto driver = std::make_shared<Driver>();
+    const auto tool = counter_descriptor(ToolExecutionMode::Asynchronous, StateMutationTiming::OnResultAccepted,
+        StateCompatibilityPolicy::PreserveCompatible);
+    const auto a = counter_node(tool, 'a', 0, "per-run");
+    auto b = counter_node(tool, 'b', 10, "session");
+    const auto first = uuid<WorkflowId>();
+    const auto second = uuid<WorkflowId>('2');
+    const auto delta = key<InputId>("delta");
+    const auto total = key<OutputId>("total");
+    b.bindings.back().sources = {ScopedInputReference{second, {}, delta, {}}};
+    auto draft = counters(tool, {a});
+    auto& source = draft.workflows.front();
+    source.interface.outputs = tool.outputs;
+    source.outputs = {{total, OutputReference{first, a.id, total, {}}}};
+    draft.workflows.push_back({second, "Receiver", {key<SchemaId>("s35.receiver"), 1, tool.inputs, tool.outputs},
+        {b}, {}, {}, {b.id}, {{total, OutputReference{second, b.id, total, {}}}}});
+    draft.format_version = solution_graph_manifest_version;
+    draft.graph = SolutionGraph{{first}, {{first, second}}, {{first, total, second, delta}}};
+    const auto session = take(WorkflowSession::create(counter_registry(tool, driver)));
+    const auto base = take(session->activate(draft));
+    const RunTrigger trigger{TriggerKind::Manual, key<SchemaId>("s35.round")};
+    const std::array args{WorkflowRunInputs{first, {{delta, DataValue::integer(3)}}}};
+    std::stop_source stop;
+    std::future<Result<SolutionRunReport>> running;
+    struct DrainOnExit {
+        std::stop_source& stop;
+        Driver& driver;
+        ~DrainOnExit() { stop.request_stop(); driver.drain(); }
+    } cleanup{stop, *driver}; // Unblock a held backend before an exceptional future join.
+    const auto run_receiver = [&](const ConfigSnapshot& snapshot, std::int64_t value) {
+        const auto request = take(RunRequest::create(snapshot, WorkflowTarget{second}, {{delta, DataValue::integer(value)}}, trigger));
+        const auto handle = accepted(session->submit(request));
+        const auto pending = driver->await_call(handle.identity().run);
+        report_success(pending);
+        take(pending.completion.mark_exited());
+        expect_total(handle, wait_for(handle), b.id, pending.sample.after);
+        return pending;
+    };
+    running = std::async(std::launch::async, [&, base] { return session->run_solution(base, args, trigger, stop.get_token()); });
+    const auto cold_source = driver->await_node(a.id);
+    check(driver->counts(b.id).created == 0 && driver->counts(b.id).initialized == 0,
+        "Pinning a cold downstream state must not construct or initialize its backend.");
+    draft.workflows.back().nodes.front().name = "Renamed receiver";
+    const auto compatible = take(session->publish(base, draft, {}));
+    const auto previous = run_receiver(compatible, 5);
+    report_success(cold_source);
+    take(cold_source.completion.mark_exited());
+    const auto cold_target = driver->await_node(b.id, previous.identity.invocation.workflow_run);
+    check(cold_target.sample.state == previous.sample.state && cold_target.sample.before == 15 && cold_target.sample.after == 18,
+        "Two compatible snapshots share a cold session node even when its first invocation uses the newer snapshot.");
+    report_success(cold_target);
+    take(cold_target.completion.mark_exited());
+    const auto cold_round = take(running.get());
+    check(cold_round.status == ExecutionStatus::Succeeded && driver->counts(b.id).initialized == 1,
+        "Both compatible invocations initialize their shared session cell exactly once.");
+    for (const auto& child : cold_round.runs) { wait_for(child); }
+
+    running = std::async(std::launch::async, [&, compatible] { return session->run_solution(compatible, args, trigger, stop.get_token()); });
+    const auto held = driver->await_node(a.id, cold_source.identity.invocation.workflow_run);
+    draft.workflows.back().nodes.front().bindings.front().sources = {ConfigValue::integer(100)};
+    const auto current = take(session->publish(compatible, draft, {}));
+    const auto fresh = run_receiver(current, 7);
+    check(fresh.sample.before == 100 && fresh.sample.after == 107 && fresh.sample.state != previous.sample.state,
+        "A changed downstream configuration starts its new generation while the old upstream is held.");
+    report_success(held);
+    take(held.completion.mark_exited());
+    const auto delayed = driver->await_node(b.id, fresh.identity.invocation.workflow_run);
+    check(delayed.sample.state == previous.sample.state && delayed.sample.before == 18 && delayed.sample.after == 21,
+        "A late child of the pinned solution round resumes the old downstream generation.");
+    report_success(delayed);
+    take(delayed.completion.mark_exited());
+    const auto result = take(running.get());
+    check(result.status == ExecutionStatus::Succeeded && result.runs.size() == 2 && result.deliveries.size() == 1
+        && result.runs.back().identity().snapshot == compatible.identity(),
+        "The admitted solution retains its original capture through downstream delivery.");
+    for (const auto& child : result.runs) { wait_for(child); }
+
+    draft.workflows.back().admission.max_in_flight = 2;
+    const auto expanded = take(session->publish(current, draft, {}));
+    running = std::async(std::launch::async, [&, expanded] { return session->run_solution(expanded, args, trigger, stop.get_token()); });
+    const auto second_source = driver->await_node(a.id, held.identity.invocation.workflow_run);
+    draft.workflows.back().admission.max_in_flight = 1;
+    const auto narrow = take(session->publish(expanded, draft, {}));
+    const auto occupied = accepted(session->submit(take(RunRequest::create(narrow, WorkflowTarget{second},
+        {{delta, DataValue::integer(0)}}, trigger))));
+    const auto occupying = driver->await_call(occupied.identity().run);
+    report_success(second_source);
+    take(second_source.completion.mark_exited());
+    check(running.wait_for(5s) == std::future_status::ready,
+        "A pinned child must not occupy a second slot forbidden by the live admission policy.");
+    const auto refused = take(running.get());
+    check(refused.status == ExecutionStatus::Failed && refused.runs.size() == 1 && refused.deliveries.empty()
+        && refused.skipped == std::vector<WorkflowId>{second} && !refused.diagnostics.empty()
+        && refused.diagnostics.front().location.workflow == second,
+        "A late child reports live capacity exhaustion without dispatch or duplicate delivery.");
+    report_success(occupying);
+    take(occupying.completion.mark_exited());
+    wait_for(occupied);
+    for (const auto& child : refused.runs) { wait_for(child); }
+
+    running = std::async(std::launch::async, [&, narrow] { return session->run_solution(narrow, args, trigger, stop.get_token()); });
+    const auto cancelled = driver->await_node(a.id, second_source.identity.invocation.workflow_run);
+    stop.request_stop();
+    driver->await_cancellation();
+    Driver::close(cancelled);
+    const auto aborted = take(running.get());
+    check(aborted.status == ExecutionStatus::Cancelled && aborted.runs.size() == 1 && aborted.deliveries.empty()
+        && aborted.skipped == std::vector<WorkflowId>{second} && driver->counts(b.id).started == 5,
+        "A cancelled second round cannot reuse the previous public result to start its receiver.");
+    const auto resumed = run_receiver(narrow, 1);
+    check(resumed.sample.state == fresh.sample.state && resumed.sample.before == 107 && resumed.sample.after == 108,
+        "The delayed child and the cancelled round leave the current downstream generation intact.");
+}
+
 void overlapping_state_generations()
 {
     Fixture fixture(ToolExecutionMode::Asynchronous);
@@ -859,7 +991,7 @@ int main(int argc, char** argv)
         else if (test == "enabled-set") { enabled_workflow_requests(); }
         else if (test == "debug") { debug_isolation(); }
         else if (test == "acceptance") { state_acceptance(); immediate_mutation(); overlapping_state_generations(); }
-        else if (test == "publication") { session_publication_preserves_compatible_state(); }
+        else if (test == "publication") { session_publication_preserves_compatible_state(); solution_round_across_publication(); }
         else { throw std::runtime_error("Unknown state-service test case."); }
         std::cout << test << ": " << checks << " checks passed\n";
         return 0;

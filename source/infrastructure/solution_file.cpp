@@ -142,7 +142,7 @@ core::Result<std::monostate> write_new_solution(const fs::path& directory, const
         if (!directory.is_absolute()) {
             return error(ErrorCode::InvalidPath, "The destination solution directory must be absolute.", solution.id);
         }
-        if (solution.format_version != solution_format_version) {
+        if (!supports_solution_format(solution.format_version)) {
             return error(ErrorCode::UnsupportedSolutionFormat, "The model's solution format version is unsupported.", solution.id);
         }
         auto checked = validate_model_shape(solution);
@@ -205,7 +205,7 @@ workflow::RunSubmission publish_solution_run(WorkflowSession& session, const Con
             return RunRejected{error(ErrorCode::ResultIdentityMismatch,
                 "The draft, active capture and source document must belong to the same solution.", draft.id)};
         }
-        if (draft.format_version != solution_format_version) {
+        if (!supports_solution_format(draft.format_version)) {
             return RunRejected{error(ErrorCode::UnsupportedSolutionFormat,
                 "The draft's solution format version is unsupported.", draft.id)};
         }

@@ -1,4 +1,5 @@
 #include "solution_codec.hpp"
+#include <visionpro/infrastructure/solution_file.hpp>
 #include "resource_codec.hpp"
 #include "value_codec.hpp"
 
@@ -67,7 +68,6 @@ using namespace core;
 using namespace workflow;
 
 constexpr std::string_view solution_format = "visionpro.solution";
-constexpr std::uint32_t supported_format_version = 1;
 
 Json encode_binding_source(const BindingSource& source);
 IndexSource decode_index_source(const Reader& reader);
@@ -643,36 +643,75 @@ WorkflowLayout decode_layout(const Reader& reader)
     return {read_id<WorkflowId>(reader.field("workflow")), read_array<NodePlacement>(reader.field("nodes"), decode_placement)};
 }
 
+Json encode_graph(const SolutionGraph& graph)
+{
+    return {{"entries", write_array(graph.entries, write_id<WorkflowId>)},
+        {"links", write_array(graph.links, [](const WorkflowControlLink& link) {
+            return Json{{"source", write_id(link.source)}, {"target", write_id(link.target)},
+                {"output", write_optional(link.output, write_id<ControlOutputId>)}};
+        })},
+        {"bindings", write_array(graph.bindings, [](const WorkflowPortBinding& binding) {
+            return Json{{"source", write_id(binding.source)}, {"output", write_id(binding.output)},
+                {"target", write_id(binding.target)}, {"input", write_id(binding.input)}};
+        })}};
+}
+
+SolutionGraph decode_graph(const Reader& reader)
+{
+    reader.object({"entries", "links", "bindings"});
+    return {read_array<WorkflowId>(reader.field("entries"), read_id<WorkflowId>),
+        read_array<WorkflowControlLink>(reader.field("links"), [](const Reader& link) {
+            link.object({"source", "target", "output"});
+            return WorkflowControlLink{read_id<WorkflowId>(link.field("source")), read_id<WorkflowId>(link.field("target")),
+                link.contains("output") ? read_optional<ControlOutputId>(link.field("output"), read_id<ControlOutputId>) : std::nullopt};
+        }),
+        read_array<WorkflowPortBinding>(reader.field("bindings"), [](const Reader& binding) {
+            binding.object({"source", "output", "target", "input"});
+            return WorkflowPortBinding{read_id<WorkflowId>(binding.field("source")), read_id<OutputId>(binding.field("output")),
+                read_id<WorkflowId>(binding.field("target")), read_id<InputId>(binding.field("input"))};
+        })};
+}
+
 } // namespace
 
 Json encode_solution(const workflow::Solution& solution)
 {
-    return {{"format", solution_format}, {"format_version", solution.format_version},
+    Json result{{"format", solution_format}, {"format_version", solution.format_version},
         {"id", write_id(solution.id)}, {"name", solution.name}, {"revision", std::to_string(solution.revision)},
         {"workflows", write_array(solution.workflows, encode_workflow)}, {"resources", write_array(solution.resources, encode_resource)},
         {"variables", write_array(solution.variables, encode_variable)}, {"queues", write_array(solution.queues, encode_queue)},
         {"coordinates", write_array(solution.coordinates, encode_coordinate)}, {"layouts", write_array(solution.layouts, encode_layout)}};
+    if (solution.graph) { result["graph"] = encode_graph(*solution.graph); }
+    return result;
 }
 
 workflow::Solution decode_solution(const Reader& reader)
 {
-    reader.object({"format", "format_version", "id", "name", "revision", "workflows", "resources", "variables", "queues", "coordinates", "layouts"});
+    reader.object({"format", "format_version", "id", "name", "revision", "workflows", "resources", "variables", "queues", "coordinates", "layouts", "graph"});
     const auto format = reader.field("format");
     if (format.text() != solution_format) {
         format.fail(core::ErrorCode::UnsupportedSolutionFormat, "Unknown solution manifest format.");
     }
     const auto version = reader.field("format_version");
     const auto number = version.u32();
-    if (number != supported_format_version) {
+    if (!supports_solution_format(number)) {
         version.fail(core::ErrorCode::UnsupportedSolutionFormat, "Unsupported solution manifest version.");
     }
-    return {read_id<core::SolutionId>(reader.field("id")), std::string{reader.field("name").text()}, number, reader.field("revision").u64(),
+    workflow::Solution solution{read_id<core::SolutionId>(reader.field("id")), std::string{reader.field("name").text()}, number, reader.field("revision").u64(),
         read_array<workflow::Workflow>(reader.field("workflows"), decode_workflow),
         read_array<core::ResourceDefinition>(reader.field("resources"), decode_resource),
         read_array<core::GlobalVariableDefinition>(reader.field("variables"), decode_variable),
         read_array<core::DataQueueDefinition>(reader.field("queues"), decode_queue),
         read_array<core::CoordinateFrameDefinition>(reader.field("coordinates"), decode_coordinate),
         read_array<workflow::WorkflowLayout>(reader.field("layouts"), decode_layout)};
+    if (reader.contains("graph")) {
+        const auto graph = reader.field("graph");
+        if (number != solution_graph_format_version) {
+            graph.fail(core::ErrorCode::UnsupportedSolutionFormat, "A solution graph requires manifest version 2.");
+        }
+        solution.graph = decode_graph(graph);
+    }
+    return solution;
 }
 
 } // namespace visionpro::infrastructure::detail

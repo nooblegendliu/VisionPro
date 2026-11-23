@@ -174,6 +174,15 @@ Solution solution(bool allow_omission, std::uint64_t revision)
          {first, "Source", ToolConfiguration{key<ToolTypeId>("s32.source"), 1},
             {{mode.id, {ScopedInputReference{flow, {}, mode.id, {}}}}}}},
         {{uuid<ControlLinkId>('2'), middle, {}, last}, {uuid<ControlLinkId>('1'), first, {}, middle}}, {}, {first}};
+    const auto reading = key<OutputId>("reading"), hint = key<OutputId>("hint"), match = key<OutputId>("match");
+    pipeline.interface.outputs = {{reading, "Reading", DataType::integer()},
+        {hint, "Hint", DataType::integer(), {}, false, {OutputAbsenceReason::ConditionNotMet}},
+        {match, "Match", DataType::optional(DataType::integer())}};
+    pipeline.outputs = {{match, source_ref("match")}, {hint, source_ref("hint")},
+        {reading, source_ref("samples", {FieldSelection{key<FieldId>("readings")}, ElementSelection{1}})}};
+    const auto done = key<ControlOutputId>("done");
+    pipeline.interface.control_outputs = {{done, "Done"}};
+    pipeline.control_exports = {{done, last, {}}};
     return {uuid<SolutionId>(), "Execution test", 1, revision, {pipeline}, {},
         {{uuid<VariableId>(), "Offset", DataType::integer(), ConfigValue::integer(999)}}};
 }
@@ -262,6 +271,16 @@ void execution_chain()
             && calls.insert(node.invocation->invocation).second, "Each actual call has a distinct identity in the root scope and one attempt.");
     }
     const auto first = result(run, progress.nodes.front());
+    const auto published = take(run.public_result());
+    check(published.outputs.size() == 3 && published.outputs[0].id == key<OutputId>("reading")
+        && std::get<DataValue>(published.outputs[0].content) == DataValue::integer(11)
+        && std::get<NotProduced>(published.outputs[1].content).reason == OutputAbsenceReason::ConditionNotMet
+        && std::get<DataValue>(published.outputs[2].content) == DataValue::none(DataType::integer()),
+        "Root exports preserve selected values, declared tool absence and available Optional None in interface order.");
+    check(published.exports.size() == 3 && published.exports.front().producer == first.data().identity
+        && published.exports.front().source.selector.size() == 2
+        && published.selected_control_outputs == std::vector{key<ControlOutputId>("done")},
+        "The root result identifies its exact source invocation, selector and selected public control outlet.");
     check(first.data().judgement == Judgement::NG
         && std::get<DataValue>(output(first, "match")) == DataValue::none(DataType::integer())
         && std::get<NotProduced>(output(first, "hint")).reason == OutputAbsenceReason::ConditionNotMet,
@@ -313,6 +332,12 @@ void execution_fail_fast()
         check(failure.location.node == uuid<NodeId>() && (mode != SourceMode::InvalidHint
             || failure.location.output == key<OutputId>("hint")), "Failure preserves the source and invalid output location.");
         const auto failed = result(bad, progress.nodes.front());
+        const auto published = take(bad.public_result());
+        check(published.outputs.size() == 3 && published.exports.empty() && published.selected_control_outputs.empty()
+            && std::ranges::all_of(published.outputs, [](const OutputSlot& port) {
+                const auto* missing = std::get_if<NotProduced>(&port.content);
+                return missing && missing->reason == OutputAbsenceReason::Failed;
+            }), "An unsuccessful root publishes typed failure at every port without stale values or control outlets.");
         check(failed.data().status == ExecutionStatus::Failed && std::ranges::none_of(failed.data().outputs,
             [](const OutputSlot& slot) { return std::holds_alternative<DataValue>(slot.content); }),
             "Failed calls retain a record without available algorithm output.");

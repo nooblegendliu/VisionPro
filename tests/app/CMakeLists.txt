@@ -1,6 +1,7 @@
 add_executable(visionpro_cli_tests cli_tests.cpp)
 target_compile_definitions(visionpro_cli_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX
     VISIONPRO_CALCULATION_SAMPLE="${PROJECT_SOURCE_DIR}/samples/s6-calculation/solution.json"
+    VISIONPRO_SOLUTION_GRAPH_SAMPLE="${PROJECT_SOURCE_DIR}/samples/f3-solution-graph/solution.json"
     VISIONPRO_CROSS_DIRECTORY="${PROJECT_SOURCE_DIR}/samples/s6-cross-workflow"
     VISIONPRO_SHARED_SAMPLE="${PROJECT_SOURCE_DIR}/samples/s6-shared/solution.json"
     VISIONPRO_TRIGGER_SAMPLE="${PROJECT_SOURCE_DIR}/samples/s6-trigger/solution.json"
@@ -56,8 +57,9 @@ add_test(NAME app.cli_external_roundtrip COMMAND visionpro_cli_tests $<TARGET_FI
 add_test(NAME app.cli_external_diagnostics COMMAND visionpro_cli_tests $<TARGET_FILE:visionpro_cli> external-diagnostics)
 add_test(NAME app.cli_output_failures COMMAND visionpro_cli_tests $<TARGET_FILE:visionpro_cli> output-failures)
 add_test(NAME app.cli_calculations COMMAND visionpro_cli_tests $<TARGET_FILE:visionpro_cli> calculations)
+add_test(NAME app.cli_solution_graph COMMAND visionpro_cli_tests $<TARGET_FILE:visionpro_cli> solution-graph)
 add_test(NAME app.cli_replay COMMAND visionpro_cli_tests $<TARGET_FILE:visionpro_cli> replay)
-set_tests_properties(app.cli_replay PROPERTIES TIMEOUT 30)
+set_tests_properties(app.cli_replay app.cli_solution_graph PROPERTIES TIMEOUT 30)
 set_tests_properties(app.cli_roundtrip app.cli_diagnostics app.cli_external_roundtrip app.cli_external_diagnostics app.cli_output_failures app.cli_calculations
     PROPERTIES TIMEOUT 60)
 
@@ -77,7 +79,7 @@ if(VISIONPRO_WITH_OPENCV)
     add_test(NAME app.vision_image_summary COMMAND visionpro_image_summary_tests)
     set_tests_properties(app.vision_image_summary PROPERTIES TIMEOUT 30)
     set_tests_properties(app.cli_roundtrip app.cli_diagnostics app.cli_external_roundtrip app.cli_external_diagnostics app.cli_output_failures app.cli_calculations
-        app.vision_image_summary app.structured_loops app.shared_package app.cli_shared_workflows app.cli_trigger_replay app.cli_error_recovery app.cli_replay
+        app.vision_image_summary app.structured_loops app.shared_package app.cli_shared_workflows app.cli_trigger_replay app.cli_error_recovery app.cli_replay app.cli_solution_graph
         app.vision_roundtrip app.vision_diagnostics app.cli_inspection app.cli_camera app.camera_stream_lifecycle PROPERTIES
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:opencv_core>"
     )

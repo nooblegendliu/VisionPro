@@ -454,6 +454,9 @@ void asynchronous_completion()
     Fixture fixture;
     const auto run = accepted(fixture.submit(11));
     const auto call = fixture.driver->await_call(0);
+    const auto pending = run.public_result();
+    check(std::holds_alternative<Diagnostic>(pending) && std::get<Diagnostic>(pending).code == ErrorCode::InputUnavailable,
+        "The root workflow has no public result while a producer is still running.");
     check(call.identity.session == run.identity().snapshot.session && call.identity.snapshot == run.identity().snapshot.snapshot
         && call.identity.invocation.workflow_run == run.identity().run && call.identity.invocation.scope == number<ExecutionScopeId>(0)
         && call.identity.attempt == number<AttemptId>(0), "The operation carries the exact accepted run and attempt identity.");

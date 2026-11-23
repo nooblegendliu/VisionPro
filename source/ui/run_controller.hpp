@@ -26,6 +26,11 @@ struct SessionSharedPreview {
     std::shared_ptr<const core::CorrelationJoinAccess> joins;
 };
 
+struct SolutionEntryInputs {
+    core::WorkflowId workflow;
+    EnteredRunInputs entered;
+};
+
 class RunController final : public QObject {
     Q_OBJECT
 
@@ -36,6 +41,10 @@ public:
     void start(workflow::Solution draft, RunDocument document, workflow::RunArguments arguments,
         std::vector<RunImageInput> images);
     void cancel(const workflow::RunHandle& run);
+    void start_solution(workflow::Solution draft, RunDocument document, std::vector<SolutionEntryInputs> inputs);
+    void cancel_solution();
+    bool can_cancel_solution() const noexcept { return solution_stop_ && !solution_stop_->stop_requested(); }
+    const std::optional<workflow::SolutionRunReport>& solution_report() const noexcept { return solution_report_; }
     void arm_trigger(workflow::Solution draft, RunDocument document, core::WorkflowId workflow);
     void send_frame(core::WorkflowId workflow, std::int64_t frame);
     void stop_trigger(core::WorkflowId workflow, workflow::TriggerStopMode mode);
@@ -108,6 +117,8 @@ private:
     bool observing_{false};
     bool preparing_{false};
     bool retiring_{false};
+    std::optional<std::stop_source> solution_stop_;
+    std::optional<workflow::SolutionRunReport> solution_report_;
 };
 
 } // namespace visionpro::ui

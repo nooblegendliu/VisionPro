@@ -2,6 +2,7 @@
 #include <visionpro/core/runtime_id_factory.hpp>
 #include <visionpro/core/schema_id_factory.hpp>
 #include <visionpro/infrastructure/solution_file.hpp>
+#include <visionpro/infrastructure/subgraph_package.hpp>
 #include <visionpro/workflow/copy.hpp>
 #include <visionpro/workflow/tool_execution.hpp>
 
@@ -388,6 +389,93 @@ void trigger_roundtrip(const ToolRegistry& registry, const PackageDirectories& d
         "Unknown trigger modes protect the manifest against reinterpretation or overwrite.");
 }
 
+void solution_graph_roundtrip(const Solution& original, const ToolRegistry& registry, const PackageDirectories& directories)
+{
+    auto draft = original;
+    const auto source = draft.workflows.front().id;
+    const auto target = uuid<WorkflowId>('2');
+    const auto input = key<InputId>("count");
+    const auto output = key<OutputId>("final");
+    draft.workflows.push_back({target, "Receiver", {key<SchemaId>("roundtrip.receiver"), 1,
+        {integer_input("count", 0)}}});
+    draft.format_version = solution_graph_format_version;
+    draft.graph = SolutionGraph{{source}, {{source, target, key<ControlOutputId>("finished")}}, {{source, output, target, input}}};
+    take(validate_solution(draft, registry.descriptors()));
+    const auto directory = directories.package(u8"方案编排");
+    take(write_new_solution(directory, draft));
+    const auto loaded = take(load_solution(directory, registry));
+    check(loaded.can_save() && loaded.solution().format_version == 2 && loaded.solution().graph == draft.graph,
+        "V2 graph entries, conditional control outlets and public port mappings round-trip.");
+    const auto clone = take(clone_solution(loaded.solution(), ExternalReferencePolicy::Reject));
+    const auto& ids = clone.identities.workflows;
+    const SolutionGraph expected{{ids.at(source)}, {{ids.at(source), ids.at(target), key<ControlOutputId>("finished")}},
+        {{ids.at(source), output, ids.at(target), input}}};
+    check(clone.solution.graph == expected && ids.at(source) != source && ids.at(target) != target,
+        "Independent copying remaps both endpoints and entries while retaining their public Schema member IDs.");
+    take(validate_solution(clone.solution, registry.descriptors()));
+
+    const auto package = directories.package(u8"编排内的单流程");
+    take(export_subgraph_package(package, draft, target, {}, registry));
+    const auto imported = take(import_subgraph_package(package, draft, {}, {}, registry));
+    check(imported.solution.graph == draft.graph && imported.workflow != target,
+        "Detaching a workflow exports its public definition. A new host controls its orchestration.");
+
+    const auto upgrade_directory = directories.package(u8"从旧方案升级");
+    Solution simple{original.id, "Host", solution_format_version, 1, {draft.workflows.back()}};
+    take(write_new_solution(upgrade_directory, simple));
+    const auto previous = take(load_solution(upgrade_directory, registry));
+    simple.format_version = solution_graph_format_version;
+    simple.graph = SolutionGraph{{target}, {}, {}};
+    take(save_solution(previous, simple));
+    const auto upgraded = take(load_solution(upgrade_directory, registry));
+    check(upgraded.solution().format_version == 2 && upgraded.solution().graph == simple.graph
+        && upgraded.solution().revision == previous.solution().revision + 1, "Explicit v1 to v2 upgrade commits in one save.");
+    const auto invalid = [&](auto edit, ErrorCode expected_code) {
+        auto changed = draft;
+        edit(changed);
+        const auto result = validate_solution(changed, registry.descriptors());
+        const auto* failure = std::get_if<Diagnostic>(&result);
+        check(failure && failure->code == expected_code && failure->location.solution == draft.id,
+            "Invalid solution graphs must be diagnosed before execution.");
+    };
+    invalid([](auto& s) { s.format_version = 1; }, ErrorCode::UnsupportedSolutionFormat);
+    invalid([](auto& s) { s.graph->bindings.push_back(s.graph->bindings.front()); }, ErrorCode::InvalidBinding);
+    invalid([&](auto& s) { s.graph->links.push_back({target, source}); }, ErrorCode::ControlCycle);
+    invalid([&](auto& s) { s.graph->links.clear(); s.graph->entries = {source, target}; }, ErrorCode::ControlOrderConflict);
+    invalid([](auto& s) { s.graph->entries = {uuid<WorkflowId>('3')}; }, ErrorCode::UnknownTarget);
+    invalid([](auto& s) { s.graph->bindings.front().output = key<OutputId>("private_child_result"); }, ErrorCode::UnknownTarget);
+    invalid([](auto& s) { s.graph->links.front().output = key<ControlOutputId>("private_child_outlet"); }, ErrorCode::InvalidControlLink);
+    invalid([](auto& s) { s.workflows.front().control_exports.clear(); }, ErrorCode::MissingRequiredValue);
+    invalid([](auto& s) {
+        auto& input_descriptor = s.workflows.back().interface.inputs.front();
+        input_descriptor = {input_descriptor.id, "Text", DataType::string()};
+    }, ErrorCode::TypeMismatch);
+    invalid([](auto& s) {
+        s.workflows.front().interface.outputs.front().semantics.unit = MeasurementUnit::Pixel;
+        s.workflows.back().interface.inputs.front().semantics.unit = MeasurementUnit::Millimetre;
+    }, ErrorCode::CoordinateMismatch);
+    invalid([](auto& s) {
+        auto& port = s.workflows.back().interface.inputs.front();
+        port.required = true; port.default_value.reset();
+        s.graph->bindings.clear();
+    }, ErrorCode::MissingRequiredValue);
+    auto disabled_target = draft;
+    disabled_target.workflows.back().enabled = false;
+    disabled_target.workflows.back().interface.inputs.front().required = true;
+    disabled_target.workflows.back().interface.inputs.front().default_value.reset();
+    disabled_target.graph->bindings.clear();
+    take(validate_solution(disabled_target, registry.descriptors()));
+
+    auto extended = read_manifest(directory);
+    const auto position = extended.find('{', extended.find("\"graph\""));
+    check(position != std::string::npos, "V2 encodes the solution graph as a named object.");
+    extended.insert(position + 1, "\"unknown_dispatch_rule\":true,");
+    { std::ofstream out(directory / "solution.json", std::ios::binary | std::ios::trunc); out << extended; }
+    const auto unknown = take(load_solution(directory, registry));
+    check(!unknown.can_save() && std::holds_alternative<Diagnostic>(save_solution(unknown, unknown.solution()))
+        && read_manifest(directory) == extended, "Unrecognized solution graph fields protect the source from overwrite.");
+}
+
 void roundtrip()
 {
     auto tool = counter_tool();
@@ -410,6 +498,8 @@ void roundtrip()
         "A v1 workflow without admission settings retains one slot, no waiting and Busy on overflow.");
     check(!loaded.solution().workflows.front().trigger,
         "Loading a pre-trigger workflow leaves its entry manual.");
+    check(!loaded.solution().graph && manifest.find("\"graph\"") == std::string::npos,
+        "Older manifests retain their original format and do not acquire an implicit solution graph.");
     check(manifest.find("\"execution_policy\"") == std::string::npos
         && loaded.solution().workflows.front().nodes.front().execution_policy == NodeExecutionPolicy{},
         "Existing manifests keep disabled timeouts and retries and an absent recovery outlet.");
@@ -425,6 +515,7 @@ void roundtrip()
         "Both Int64 boundaries reopen exactly and configuration handling leaves the tool factory unused.");
     loop_roundtrip(original, registry, directories);
     trigger_roundtrip(registry, directories);
+    solution_graph_roundtrip(original, registry, directories);
     auto timed = original;
     auto& timed_node = timed.workflows.front().nodes.at(1);
     timed_node.execution_policy = {350, 0, key<ControlOutputId>("fault")};

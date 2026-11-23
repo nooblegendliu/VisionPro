@@ -74,6 +74,11 @@ RunControl::RunControl(const RunRequest& request, core::WorkflowRunId run, RunAd
     : request_(request), identity_{request.snapshot().identity(),
         std::visit([](const auto& target) { return target.workflow; }, request.target()), run}, admission_(admission) {}
 
+Result<WorkflowPublicResult> RunControl::public_result() const
+{
+    return failure(request(), ErrorCode::MissingCapability, "This backend does not publish workflow outputs.");
+}
+
 Result<RunHandle> RunHandle::from_accepted(std::shared_ptr<RunControl> control)
 {
     if (!control) {
@@ -90,6 +95,14 @@ Result<RunProgress> RunHandle::inspect() const
         if (auto bad = validate_progress(request(), identity().run, std::get<RunProgress>(progress))) { return std::move(*bad); }
         return progress;
     });
+}
+
+Result<WorkflowPublicResult> RunHandle::public_result() const
+{
+    if (!std::holds_alternative<WorkflowTarget>(request().target())) {
+        return failure(request(), ErrorCode::InvalidRunRequest, "An independent node call has no root workflow result.");
+    }
+    return boundary<WorkflowPublicResult>(request(), [&] { return control_->public_result(); });
 }
 
 Result<RunWaitResult> RunHandle::wait(RunWaitTarget target, std::chrono::steady_clock::time_point deadline) const

@@ -343,6 +343,7 @@ Result<SolutionCopy> clone_solution(const Solution& solution, ExternalReferenceP
         return error(ErrorCode::InvalidModel, "Rebasing a copied scope requires exactly one source workflow.");
     }
     if (auto checked = validate_model_shape(solution); const auto* invalid = std::get_if<Diagnostic>(&checked)) { return *invalid; }
+    if (auto checked = validate_solution_graph(solution); const auto* invalid = std::get_if<Diagnostic>(&checked)) { return *invalid; }
     Copier copier(external_policy);
     std::set<SolutionId> solution_ids{solution.id};
     std::set<WorkflowId> workflow_ids;
@@ -389,6 +390,18 @@ Result<SolutionCopy> clone_solution(const Solution& solution, ExternalReferenceP
     if (copier.failure) { return *copier.failure; }
     auto result = solution;
     result.id = copier.identities.solutions.at(solution.id);
+    if (result.graph) {
+        const auto& ids = copier.identities.workflows;
+        for (auto& entry : result.graph->entries) { entry = ids.at(entry); }
+        for (auto& link : result.graph->links) {
+            link.source = ids.at(link.source);
+            link.target = ids.at(link.target);
+        }
+        for (auto& binding : result.graph->bindings) {
+            binding.source = ids.at(binding.source);
+            binding.target = ids.at(binding.target);
+        }
+    }
     for (auto& workflow : result.workflows) {
         const auto original_workflow = workflow.id;
         workflow.id = copier.identities.workflows.at(workflow.id);

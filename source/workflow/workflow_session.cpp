@@ -1,6 +1,7 @@
 #include <visionpro/workflow/workflow_session.hpp>
 #include <visionpro/core/runtime_id_factory.hpp>
 #include <visionpro/workflow/validation.hpp>
+#include "solution_run.hpp"
 
 #include <limits>
 #include <mutex>
@@ -85,6 +86,7 @@ struct WorkflowSession::Impl {
             last_snapshot = version;
             progress.active = snapshot;
             progress.status = WorkflowSessionStatus::Active;
+            round_shutdown = std::stop_source{};
         }
         return snapshot;
     }
@@ -162,6 +164,67 @@ struct WorkflowSession::Impl {
         return gate ? (*gate)(admit) : admit();
     }
 
+    Result<SolutionRunReport> run_solution(const ConfigSnapshot& snapshot, std::span<const WorkflowRunInputs> inputs,
+        RunTrigger trigger, std::stop_token caller, std::optional<CorrelationId> correlation)
+    {
+        const auto& solution = snapshot.solution();
+        if (!solution.graph) { return error(ErrorCode::InvalidRunRequest, "No explicit solution graph is configured.", solution.id); }
+        auto valid = validate_solution_graph(solution);
+        if (auto* failure = std::get_if<Diagnostic>(&valid)) { return std::move(*failure); }
+        auto wake = std::make_shared<detail::SolutionWake>();
+        std::shared_ptr<WorkflowEngine> selected;
+        std::shared_ptr<WorkflowEngine::SolutionCapture> pinned;
+        std::shared_ptr<InvocationResourceProvider> provider;
+        std::stop_token shutdown;
+        std::uint64_t sequence;
+        {
+            const std::lock_guard lock(mutex);
+            if (progress.status != WorkflowSessionStatus::Active || !snapshot.same_capture(*progress.active)) {
+                return error(ErrorCode::ResultIdentityMismatch, "Solution run requires the current active capture.", solution.id);
+            }
+            if (coordinating == this || engine->on_worker_thread()) {
+                return error(ErrorCode::InvalidState, "A solution run cannot wait on its own coordinator or worker.", solution.id);
+            }
+            if (last_round == std::numeric_limits<std::uint64_t>::max()) {
+                return error(ErrorCode::IdentityExhausted, "Solution run identities are exhausted.", solution.id);
+            }
+            auto capture = engine->pin_solution(snapshot, wake);
+            if (auto* failure = std::get_if<Diagnostic>(&capture)) { return std::move(*failure); }
+            pinned = std::get<std::shared_ptr<WorkflowEngine::SolutionCapture>>(std::move(capture));
+            selected = engine;
+            provider = active_provider;
+            sequence = ++last_round;
+            shutdown = round_shutdown.get_token();
+            ++active_rounds;
+        }
+        struct ReleaseRound {
+            Impl& owner;
+            const Impl* previous;
+            ~ReleaseRound() {
+                coordinating = previous;
+                const std::lock_guard lock(owner.mutex);
+                --owner.active_rounds;
+                owner.rounds_changed.notify_all();
+            }
+        } release{*this, std::exchange(coordinating, this)};
+        std::stop_source stopping;
+        const auto cancel = [&] { stopping.request_stop(); };
+        std::stop_callback user_cancel(caller, cancel);
+        std::stop_callback session_cancel(shutdown, cancel);
+        const auto submit_child = [&](const RunRequest& request) -> RunSubmission {
+            auto prepared = selected->prepare(request, provider, pinned);
+            if (auto* failure = std::get_if<RunRejected>(&prepared)) { return std::move(*failure); }
+            if (auto* busy = std::get_if<RunBusy>(&prepared)) { return *busy; }
+            const std::lock_guard lock(mutex);
+            if (stopping.stop_requested() || progress.status != WorkflowSessionStatus::Active || engine != selected) {
+                return RunRejected{error(ErrorCode::SourceCancelled, "Solution run stopped before child admission.", solution.id)};
+            }
+            return selected->admit(std::get<0>(std::move(prepared)));
+        };
+        return detail::coordinate_solution(snapshot, sequence, inputs, std::move(trigger), stopping.get_token(), *wake,
+            submit_child, std::move(correlation));
+    }
+
     Result<std::monostate> close()
     {
         {
@@ -213,6 +276,9 @@ private:
     Result<std::monostate> begin_operation(SessionOperationKind kind)
     {
         if (progress.operation) { return error(ErrorCode::InvalidState, "A session management operation is already in progress."); }
+        if (kind != SessionOperationKind::Publish && (coordinating == this || (engine && engine->on_worker_thread()))) {
+            return error(ErrorCode::InvalidState, "Cannot drain a session from its own coordinator or worker.");
+        }
         if (progress.status == WorkflowSessionStatus::Closed) {
             return error(ErrorCode::InvalidState, "The workflow session has been closed.");
         }
@@ -258,11 +324,22 @@ private:
     {
         // Only the reserved management operation can change the engine while
         // the session is Switching or Closing. Waiting never holds this lock.
-        if (engine) { return engine->close(); }
+        round_shutdown.request_stop();
+        if (engine) {
+            auto drained = engine->close();
+            if (auto* failure = std::get_if<Diagnostic>(&drained)) { return std::move(*failure); }
+        }
+        std::unique_lock lock(mutex);
+        rounds_changed.wait(lock, [&] { return active_rounds == 0; });
         return std::monostate{};
     }
 
     std::uint64_t last_operation{0};
+    inline static thread_local const Impl* coordinating{};
+    std::uint64_t last_round{0};
+    std::size_t active_rounds{};
+    std::condition_variable rounds_changed;
+    std::stop_source round_shutdown;
     std::optional<ConfigSnapshotId> last_snapshot;
 };
 
@@ -334,6 +411,13 @@ core::Result<std::shared_ptr<const core::CorrelationJoinAccess>> WorkflowSession
 
 RunSubmission WorkflowSession::submit(const RunRequest& request)
 { return submit_guarded(request, nullptr); }
+
+core::Result<SolutionRunReport> WorkflowSession::run_solution(const ConfigSnapshot& snapshot,
+    std::span<const WorkflowRunInputs> inputs, RunTrigger trigger, std::stop_token stop, std::optional<CorrelationId> correlation)
+{
+    try { return impl_->run_solution(snapshot, inputs, std::move(trigger), stop, std::move(correlation)); }
+    catch (...) { return error(ErrorCode::ExecutionBoundaryFailure, "Solution execution failed unexpectedly.", snapshot.solution().id); }
+}
 
 RunSubmission WorkflowSession::submit_guarded(const RunRequest& request, const AdmissionGate* gate)
 {

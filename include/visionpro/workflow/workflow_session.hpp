@@ -3,6 +3,7 @@
 #include <visionpro/workflow/workflow_engine.hpp>
 
 #include <functional>
+#include <stop_token>
 
 namespace visionpro::workflow {
 
@@ -30,6 +31,32 @@ struct RunArguments {
     std::optional<DebugStatePolicy> debug_state{};
     std::vector<core::GlobalVariableEntry> globals{};
 };
+
+struct SolutionDelivery {
+    RunIdentity source;
+    core::OutputId output;
+    RunIdentity target;
+    core::InputId input;
+};
+struct SolutionLinkProgress {
+    WorkflowControlLink link;
+    ControlLinkStatus status{ControlLinkStatus::Pending};
+    std::optional<ControlCloseReason> close_reason{};
+};
+struct SolutionRunReport {
+    std::uint64_t sequence;
+    SnapshotIdentity snapshot;
+    ExecutionStatus status{ExecutionStatus::Succeeded};
+    std::vector<RunHandle> runs{};
+    std::vector<SolutionDelivery> deliveries{};
+    std::vector<core::WorkflowId> skipped{};
+    std::vector<core::Diagnostic> diagnostics{};
+    std::vector<SolutionLinkProgress> links{};
+};
+
+// Side-effect-free preflight for a draft before replacing an active capture.
+[[nodiscard]] core::Result<std::monostate> validate_solution_inputs(const ConfigSnapshot& snapshot,
+    std::span<const WorkflowRunInputs> inputs, RunTrigger trigger);
 
 // Owns one active in-memory solution. Configuration and management operations
 // are independent of accepted run identities.
@@ -61,6 +88,11 @@ public:
     [[nodiscard]] core::Result<std::shared_ptr<const core::SharedData>> shared_preview() const;
     [[nodiscard]] core::Result<std::shared_ptr<const core::CorrelationJoinAccess>> correlation_preview() const;
     [[nodiscard]] RunSubmission submit(const RunRequest& request) override;
+    // Blocking host entry point. Each admitted child uses this round's capture;
+    // its handle remains available for result lookup after physical cleanup.
+    [[nodiscard]] core::Result<SolutionRunReport> run_solution(const ConfigSnapshot& snapshot,
+        std::span<const WorkflowRunInputs> inputs, RunTrigger trigger, std::stop_token stop = {},
+        std::optional<core::CorrelationId> correlation = {});
     [[nodiscard]] core::Result<RunObservation> observe(std::size_t capacity = 32);
     [[nodiscard]] core::Result<std::optional<NodeResult>> lookup_result(
         const RunIdentity& run, const core::InvocationKey& invocation) const;

@@ -275,6 +275,12 @@ Solution solution(std::uint64_t revision, bool accept_absence, bool asynchronous
          link('7', '2', '8'), link('8', '4', '8'), link('9', '6', '8'), link('a', '7', '8'), link('b', '8', '9')},
         {}, {uuid<NodeId>('5'), uuid<NodeId>()}};
     if (asynchronous) { graph.control_links.push_back(link('c', '2', '5')); }
+    const auto right = key<ControlOutputId>("right");
+    const auto right_value = key<OutputId>("right-reading");
+    graph.interface.outputs = {{right_value, "Right reading", DataType::integer()}};
+    graph.outputs = {{right_value, std::get<OutputReference>(source('4'))}};
+    graph.interface.control_outputs = {{right, "Right"}};
+    graph.control_exports = {{right, uuid<NodeId>('1'), right}};
     Workflow probe{uuid<WorkflowId>('2'), "Independent probe", {key<SchemaId>("s34.probe.flow"), 1},
         {node('a', "s34.probe", "Probe")}, {}, {}, {uuid<NodeId>('a')}};
     return {uuid<SolutionId>(), "Branch selection", 1, revision, {std::move(graph), std::move(probe)}};
@@ -364,6 +370,10 @@ void branch_selection()
     Fixture fixture;
     const auto both = fixture.submit(3, 2);
     const auto mixed = wait_for(both);
+    const auto exports = take(both.public_result());
+    check(exports.outputs.size() == 1 && std::get<NotProduced>(exports.outputs.front().content).reason == OutputAbsenceReason::NotSelected
+        && exports.exports.empty() && exports.selected_control_outputs.empty(),
+        "An unselected root branch has typed absence, no fabricated producer and no selected public outlet.");
     check(mixed.status == ExecutionStatus::Succeeded, "A named multi-selection with a nested partial selection completed.");
     for (const auto id : std::string_view("12467ab")) { edge(mixed, id, ControlLinkStatus::Arrived); }
     for (const auto id : std::string_view("3589")) { edge(mixed, id, ControlLinkStatus::Closed, ControlCloseReason::NotSelected); }
@@ -423,6 +433,7 @@ void group_exports_and_debug()
     };
     flow.interface = {key<SchemaId>("s62.flow"), 1, {port}};
     flow.outputs.clear();
+    flow.control_exports.clear();
     const auto branch = key<ControlOutputId>("left");
     flow.nodes = {
         {outer, "Outer", region("s62.outer", {inner}, {flow.id, inner, out, {}}, {yes, inner, yes}),

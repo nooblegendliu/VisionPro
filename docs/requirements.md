@@ -8,6 +8,8 @@ VisionPro 面向可配置的视觉应用开发，目标包含图像采集、视�
 S2.6 结果访问与绑定解析、S2.7 运行接口与组合验证已通过 Release 验证，S2 整体验收通过。
 S3 已通过无 GUI 执行与配置往返整体验收，覆盖分路调度、工具状态、单节点调用、结果与会话管理、文件方案诊断加载、保存事务及命令行闭环。范围见 §5。
 
+框架对齐首轮以磁盘上的 A→B 方案验收。A 输出 6 或 9 时，B 使用本轮映射值进入对应分支。A 取项越界时，B 的受理次数为零。方案运行还要保留分支关闭原因和跨流程来源，并在热发布与取消期间维持快照隔离。[验收方案](visionmaster-alignment-plan.md) · [可运行样例](../samples/f3-solution-graph/solution.json)
+
 参考资料：[VisionMaster 用户手册 V3.0.2](Manual/VisionMaster算法平台用户手册V3.0.2.pdf)
 及 [VisionMaster SDK 开发指南 V4.3.1（C++）](<Manual/VisionMaster算法平台SDK开发指南V4.3.1（C++）.chm>)。
 用户手册提供业务行为依据，SDK 指南补充公开调用接口的依据；不同版本不混作同一份实现规范。

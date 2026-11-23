@@ -162,6 +162,8 @@ add_executable(visionpro_workflow_session_tests workflow_session_tests.cpp)
 target_link_libraries(visionpro_workflow_session_tests PRIVATE visionpro_workflow visionpro_build_options Threads::Threads)
 add_test(NAME workflow.session_lifecycle COMMAND visionpro_workflow_session_tests)
 add_test(NAME workflow.session_publication COMMAND visionpro_workflow_session_tests publication)
+add_test(NAME workflow.solution_rounds COMMAND visionpro_workflow_session_tests solution-graph)
+set_tests_properties(workflow.solution_rounds PROPERTIES TIMEOUT 30)
 
 set_tests_properties(workflow.result_retention workflow.external_result_delivery
     workflow.run_observations workflow.session_lifecycle workflow.session_publication PROPERTIES TIMEOUT 30)

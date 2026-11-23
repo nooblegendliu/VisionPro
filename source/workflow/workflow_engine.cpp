@@ -9,6 +9,7 @@
 #include "loop_execution.hpp"
 #include "node_state_service.hpp"
 #include "observation_hub.hpp"
+#include "solution_run.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -155,11 +156,17 @@ private:
 
 enum class CallDecision { Waiting, Advance, Stop, Cancel, Retry };
 
+OutputAbsenceReason terminal_absence(ExecutionStatus status)
+{
+    if (status == ExecutionStatus::TimedOut) { return OutputAbsenceReason::TimedOut; }
+    if (status == ExecutionStatus::Cancelled) { return OutputAbsenceReason::Cancelled; }
+    return OutputAbsenceReason::Failed;
+}
+
 Result<NodeResult> unsuccessful_record(const RunIdentity& run, const InvocationContextData& context,
     ExecutionStatus status, std::vector<Diagnostic> diagnostics = {})
 {
-    const auto reason = status == ExecutionStatus::TimedOut ? OutputAbsenceReason::TimedOut
-        : status == ExecutionStatus::Cancelled ? OutputAbsenceReason::Cancelled : OutputAbsenceReason::Failed;
+    const auto reason = terminal_absence(status);
     std::vector<OutputSlot> outputs;
     for (const auto& port : context.configuration.data().tool.outputs) {
         outputs.push_back({port.id, port.type, NotProduced{reason}});
@@ -206,12 +213,25 @@ struct GroupExports {
     std::vector<RunExportTrace> sources;
 };
 
+OutputContent project_export(const NodeResult& record, const OutputReference& reference)
+{
+    if (const auto* id = std::get_if<OutputId>(&reference.output)) {
+        if (const auto* slot = record.output(*id); slot && !std::holds_alternative<DataValue>(slot->content)) {
+            return slot->content;
+        }
+    }
+    auto value = detail::project_region_export(record, reference);
+    if (auto* failure = std::get_if<Diagnostic>(&value)) { return InvalidOutput{std::move(*failure)}; }
+    return std::get<DataValue>(std::move(value));
+}
+
 class EngineRun final : public RunControl {
 public:
     EngineRun(const RunRequest& request, WorkflowRunId id, detail::ControlSchedule schedule,
-        const std::shared_ptr<SchedulerEvents>& events, const std::shared_ptr<detail::ObservationHub>& observers, RunAdmission admission)
+        const std::shared_ptr<SchedulerEvents>& events, const std::shared_ptr<detail::ObservationHub>& observers,
+        RunAdmission admission, std::shared_ptr<detail::SolutionWake> solution_wake)
         : RunControl(request, id, admission), wakeup_(std::make_shared<RunWakeup>(events)), observers_(observers),
-          schedule_(std::move(schedule)),
+          solution_wake_(std::move(solution_wake)), schedule_(std::move(schedule)),
           remaining_(schedule_.nodes().size()), eligible_(remaining_), results_(identity().snapshot.session)
     {
         progress_.nodes.reserve(remaining_);
@@ -224,6 +244,14 @@ public:
     {
         const std::lock_guard lock(mutex_);
         return snapshot();
+    }
+
+    Result<WorkflowPublicResult> public_result() const override
+    {
+        const std::lock_guard lock(mutex_);
+        if (public_result_) { return *public_result_; }
+        if (terminal(progress_.status) && !progress_.diagnostics.empty()) { return progress_.diagnostics.back(); }
+        return error(ErrorCode::InputUnavailable, "Workflow outputs become available at logical completion.", request());
     }
 
     Result<RunWaitResult> wait(RunWaitTarget target, std::chrono::steady_clock::time_point deadline) override
@@ -368,6 +396,20 @@ public:
         auto found = results_.lookup(identity(), *progress_.nodes[*at].invocation);
         if (const auto* value = std::get_if<std::optional<NodeResult>>(&found)) { return *value; }
         return {};
+    }
+
+    std::vector<ControlOutputId> exported_controls(std::size_t frame, std::span<const ControlOutputMapping> mappings) const
+    {
+        std::vector<ControlOutputId> selected;
+        for (const auto& mapping : mappings) {
+            const auto record = body_result(frame, mapping.source);
+            if (!record || record->data().status != ExecutionStatus::Succeeded) { continue; }
+            const auto& outlets = record->data().selected_control_outputs;
+            if (!mapping.source_output || std::ranges::find(outlets, *mapping.source_output) != outlets.end()) {
+                selected.push_back(mapping.output);
+            }
+        }
+        return selected;
     }
 
     bool start_region(std::size_t slot, const InvocationKey& call, std::vector<RunBindingTrace> traces)
@@ -712,14 +754,69 @@ private:
         }
     }
 
+    OutputAbsenceReason skipped_export(std::size_t slot) const
+    {
+        if (const auto absent = schedule_.source_absence(slot)) {
+            if (const auto* failed = std::get_if<UpstreamFailure>(&*absent)) {
+                return *failed == UpstreamFailure::TimedOut ? OutputAbsenceReason::TimedOut : OutputAbsenceReason::Failed;
+            }
+        }
+        const auto reason = progress_.nodes[slot].skip_reason;
+        return reason == NodeSkipReason::Disabled || reason == NodeSkipReason::UpstreamClosed
+            ? OutputAbsenceReason::Disabled : OutputAbsenceReason::NotSelected;
+    }
+
+    WorkflowPublicResult export_workflow(ExecutionStatus status) const
+    {
+        const auto& flow = *find_workflow(request().snapshot().solution(), identity().workflow);
+        WorkflowPublicResult result;
+        for (const auto& port : flow.interface.outputs) {
+            OutputContent content = NotProduced{terminal_absence(status)};
+            if (status == ExecutionStatus::Succeeded) {
+                const auto mapping = std::ranges::find(flow.outputs, port.id, &OutputMapping::output);
+                if (mapping == flow.outputs.end()) { throw std::logic_error("Missing validated workflow output mapping."); }
+                if (const auto record = body_result(0, mapping->source.node)) {
+                    content = project_export(*record, mapping->source);
+                    if (auto* invalid = std::get_if<InvalidOutput>(&content)) {
+                        auto& location = invalid->diagnostic.location;
+                        location.solution = request().snapshot().solution().id;
+                        location.workflow = flow.id;
+                        location.node = mapping->source.node;
+                        location.output = port.id;
+                        location.invocation = record->data().identity.invocation;
+                    }
+                    result.exports.push_back({port.id, mapping->source, record->data().identity});
+                } else if (const auto slot = schedule_.find(0, mapping->source.node)) {
+                    content = NotProduced{skipped_export(*slot)};
+                } else {
+                    content = NotProduced{OutputAbsenceReason::NotSelected};
+                }
+            }
+            result.outputs.push_back({port.id, port.type, std::move(content)});
+        }
+        if (status == ExecutionStatus::Succeeded) { result.selected_control_outputs = exported_controls(0, flow.control_exports); }
+        return result;
+    }
+
     void finish_if_done()
     {
         if (remaining_ != 0 || terminal(progress_.status)) { return; }
-        progress_.status = stopping_.value_or(ExecutionStatus::Succeeded);
+        auto status = stopping_.value_or(ExecutionStatus::Succeeded);
+        if (std::holds_alternative<WorkflowTarget>(request().target())) {
+            try {
+                public_result_ = export_workflow(status);
+            } catch (...) {
+                status = ExecutionStatus::Failed;
+                progress_.diagnostics.push_back(error(ErrorCode::ExecutionBoundaryFailure,
+                    "Could not publish the root workflow result.", request()));
+            }
+        }
+        progress_.status = status;
         if (started_at_) {
             progress_.elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - *started_at_);
         }
         publish(RunObservationKind::RunCompleted, progress_.status);
+        if (solution_wake_) { solution_wake_->signal(); }
         changed_.notify_all();
     }
 
@@ -732,10 +829,12 @@ private:
     std::condition_variable changed_;
     const std::shared_ptr<RunWakeup> wakeup_;
     const std::weak_ptr<detail::ObservationHub> observers_;
+    const std::shared_ptr<detail::SolutionWake> solution_wake_;
     detail::ScopedSchedule schedule_;
     std::set<std::size_t> active_regions_;
     std::vector<std::size_t> frame_trace_indices_;
     RunProgress progress_;
+    std::optional<WorkflowPublicResult> public_result_;
     std::optional<Clock::time_point> started_at_;
     bool cancel_requested_{false};
     std::optional<ExecutionStatus> stopping_;
@@ -878,10 +977,15 @@ struct GroupBody {
     std::size_t frame;
 };
 
+struct PinnedStateCatalog {
+    std::optional<detail::StateCatalog> retired;
+};
+
 struct SharedServices {
     ConfigSnapshot snapshot;
     std::shared_ptr<SharedDataService> data;
     std::shared_ptr<CorrelationJoinService> joins;
+    std::weak_ptr<PinnedStateCatalog> pins{};
 };
 
 Result<std::shared_ptr<SharedServices>> shared_services(const ConfigSnapshot& snapshot,
@@ -1130,20 +1234,17 @@ Result<std::vector<OutputSlot>> group_outputs(EngineRun& run, const GroupBody& g
             return failure;
         }
         traces.push_back({port.id, mapping.source, record->data().identity});
-        if (const auto* source_port = std::get_if<OutputId>(&mapping.source.output)) {
-            const auto* source = record->output(*source_port);
-            const auto* absent = source ? std::get_if<NotProduced>(&source->content) : nullptr;
-            if (absent && allows_output_absence(port, absent->reason)) {
-                outputs.push_back({port.id, port.type, *absent});
-                continue;
-            }
+        auto value = project_export(*record, mapping.source);
+        if (const auto* absent = std::get_if<NotProduced>(&value); absent && !allows_output_absence(port, absent->reason)) {
+            auto failure = error(ErrorCode::InputUnavailable, "Group output producer did not produce a required value.", run.request(), mapping.source.node);
+            failure.location.output = port.id;
+            return failure;
         }
-        auto value = detail::project_region_export(*record, mapping.source);
-        if (auto* failure = std::get_if<Diagnostic>(&value)) {
-            failure->location.output = port.id;
-            return *failure;
+        if (auto* invalid = std::get_if<InvalidOutput>(&value)) {
+            invalid->diagnostic.location.output = port.id;
+            return std::move(invalid->diagnostic);
         }
-        outputs.push_back({port.id, port.type, std::get<DataValue>(std::move(value))});
+        outputs.push_back({port.id, port.type, std::move(value)});
     }
     return outputs;
 }
@@ -1157,15 +1258,7 @@ bool finish_groups(Work& work)
         if (!run.body_done(group.frame)) { ++current; continue; }
         std::vector<RunExportTrace> traces;
         auto outputs = group_outputs(run, group, traces);
-        std::vector<ControlOutputId> selected;
-        for (const auto& mapping : group.configuration->control_exports) {
-            const auto result = run.body_result(group.frame, mapping.source);
-            if (!result || result->data().status != ExecutionStatus::Succeeded) { continue; }
-            const auto& outlets = result->data().selected_control_outputs;
-            if (!mapping.source_output || std::ranges::find(outlets, *mapping.source_output) != outlets.end()) {
-                selected.push_back(mapping.output);
-            }
-        }
+        auto selected = run.exported_controls(group.frame, group.configuration->control_exports);
         run.retire_body(group.frame);
         run.finish_region(slot, std::move(outputs), std::move(selected), GroupExports{group.frame, std::move(traces)});
         current = work.groups.erase(current);
@@ -1373,6 +1466,12 @@ WorkStep execute_step(Work& work, detail::NodeStateService& states, CallArbiter&
 }
 } // namespace
 
+struct WorkflowEngine::SolutionCapture {
+    std::shared_ptr<SharedServices> services;
+    std::shared_ptr<PinnedStateCatalog> states;
+    std::shared_ptr<detail::SolutionWake> wake;
+};
+
 struct WorkflowEngine::PreparedSubmission {
     PreparedSubmission(const ExecutionPlan& configured, WorkflowId target,
         std::shared_ptr<InvocationResourceProvider> provider)
@@ -1384,6 +1483,7 @@ struct WorkflowEngine::PreparedSubmission {
     detail::ControlSchedule schedule;
     std::shared_ptr<SharedServices> previous_services, candidate_services, run_services;
     bool consumed{false}; // Protected by the originating engine's scheduler mutex.
+    std::shared_ptr<SolutionCapture> pinned{};
 };
 
 struct WorkflowEngine::Impl {
@@ -1395,9 +1495,12 @@ struct WorkflowEngine::Impl {
 
     ~Impl() { static_cast<void>(close()); }
 
+    bool on_worker_thread() const noexcept
+    { return worker_engine == this || InvocationOperation::on_backend_thread(session); }
+
     Result<std::monostate> close()
     {
-        if (worker_engine == this || InvocationOperation::on_backend_thread(session)) {
+        if (on_worker_thread()) {
             return Diagnostic{ErrorCode::InvalidState, Severity::Error, {}, "Cannot wait for session closure on its workflow worker."};
         }
         {
@@ -1427,7 +1530,8 @@ struct WorkflowEngine::Impl {
     }
 
     Preparation prepare(const RunRequest& request,
-        std::optional<std::shared_ptr<InvocationResourceProvider>> supplied = std::nullopt)
+        std::optional<std::shared_ptr<InvocationResourceProvider>> supplied = std::nullopt,
+        const std::shared_ptr<SolutionCapture>& pinned = {})
     {
         try {
             if (request.snapshot().identity().session != session) {
@@ -1438,9 +1542,9 @@ struct WorkflowEngine::Impl {
             std::shared_ptr<SharedServices> previous;
             {
                 const std::lock_guard lock(events->mutex);
-                if (auto refusal = check_slot<Preparation>(request, workflow)) { return std::move(*refusal); }
+                if (auto refusal = check_slot<Preparation>(request, workflow, static_cast<bool>(pinned))) { return std::move(*refusal); }
                 provider = supplied ? std::move(*supplied) : default_resources;
-                previous = services;
+                previous = pinned ? pinned->services : services;
             }
             auto proposed = shared_services(request.snapshot(), previous);
             if (auto* bad = std::get_if<Diagnostic>(&proposed)) { return RunRejected{std::move(*bad)}; }
@@ -1474,6 +1578,7 @@ struct WorkflowEngine::Impl {
             prepared->previous_services = std::move(previous);
             prepared->candidate_services = std::move(candidate);
             prepared->run_services = std::move(scoped);
+            prepared->pinned = pinned;
             return prepared;
         } catch (...) {
             return RunRejected{error(ErrorCode::ExecutionBoundaryFailure, "Workflow preparation raised an unexpected exception.", request)};
@@ -1493,8 +1598,8 @@ struct WorkflowEngine::Impl {
                 return RunRejected{error(ErrorCode::InvalidRunRequest, "The prepared run has already been consumed.", request)};
             }
             // Planning does not reserve a slot. Another submit may have won it.
-            if (auto refusal = check_slot<RunSubmission>(request, workflow)) { return std::move(*refusal); }
-            if (services != prepared.previous_services && services != prepared.candidate_services) {
+            if (auto refusal = check_slot<RunSubmission>(request, workflow, static_cast<bool>(prepared.pinned))) { return std::move(*refusal); }
+            if (!prepared.pinned && services != prepared.previous_services && services != prepared.candidate_services) {
                 // Another workflow was admitted during preflight. Reuse its
                 // compatible cells without changing this request's frozen inputs.
                 auto updated = shared_services(request.snapshot(), services);
@@ -1506,14 +1611,14 @@ struct WorkflowEngine::Impl {
             const auto next = last_admitted ? RuntimeIdFactory::next(*last_admitted)
                                             : RuntimeIdFactory::from_value<WorkflowRunId>(1);
             if (const auto* failure = std::get_if<Diagnostic>(&next)) { return RunRejected{*failure}; }
-            const auto policy = find_workflow(request.snapshot().solution(), workflow)->admission;
+            const auto policy = admission_policy(request, workflow, static_cast<bool>(prepared.pinned));
             const auto current = slots.find(workflow);
             const auto occupied = current == slots.end() ? WorkflowSlots{} : current->second;
             const auto free = free_slots(occupied, policy);
             const auto ahead = occupied.waiting - occupied.cleaning;
             const auto admission = ahead < free ? RunAdmission::Immediate : RunAdmission::Queued;
             auto run = std::make_shared<EngineRun>(request, std::get<WorkflowRunId>(next),
-                std::move(prepared.schedule), events, observers, admission);
+                std::move(prepared.schedule), events, observers, admission, prepared.pinned ? prepared.pinned->wake : nullptr);
             auto handle = RunHandle::from_accepted(run);
             if (auto* failure = std::get_if<Diagnostic>(&handle)) { return RunRejected{std::move(*failure)}; }
             auto accepted = std::get<RunHandle>(std::move(handle));
@@ -1528,7 +1633,9 @@ struct WorkflowEngine::Impl {
             while (workers.size() < needed) { workers.emplace_back([this] { work_loop(); }); }
             auto [slot, inserted] = slots.try_emplace(workflow);
             try {
-                auto bound = states.bind(prepared.plan);
+                const bool retired = prepared.pinned && services != prepared.candidate_services;
+                if (!prepared.pinned) { retain_states_before_publication(prepared.candidate_services); }
+                auto bound = states.bind(prepared.plan, retired ? &prepared.pinned->states->retired.value() : nullptr);
                 if (auto* failure = std::get_if<Diagnostic>(&bound)) {
                     if (inserted) { slots.erase(slot); }
                     return RunRejected{std::move(*failure)};
@@ -1546,7 +1653,7 @@ struct WorkflowEngine::Impl {
             ++slot->second.waiting;
             promote(workflow, slot->second);
             last_admitted = run->identity().run;
-            services = prepared.candidate_services;
+            if (!prepared.pinned) { services = prepared.candidate_services; }
             events->changed.notify_all();
             return accepted;
         } catch (...) {
@@ -1600,12 +1707,37 @@ struct WorkflowEngine::Impl {
     const ToolRegistry registry;
     std::shared_ptr<SharedServices> services; // Published under the scheduler mutex.
 
+    Result<std::shared_ptr<SolutionCapture>> pin_solution(const ConfigSnapshot& snapshot, std::shared_ptr<detail::SolutionWake> wake)
+    {
+        const std::lock_guard lock(events->mutex);
+        if (stopping || !services || !services->snapshot.same_capture(snapshot)) {
+            return Diagnostic{ErrorCode::ResultIdentityMismatch, Severity::Error, {}, "Solution capture is no longer active."};
+        }
+        auto pin = services->pins.lock();
+        if (!pin) {
+            auto prepared = states.prepare_solution(snapshot);
+            if (const auto* failure = std::get_if<Diagnostic>(&prepared)) { return *failure; }
+            pin = std::make_shared<PinnedStateCatalog>();
+            services->pins = pin;
+        }
+        return std::make_shared<SolutionCapture>(SolutionCapture{services, std::move(pin), std::move(wake)});
+    }
+
+    void retain_states_before_publication(const std::shared_ptr<SharedServices>& next)
+    {
+        if (services && services != next) {
+            if (auto pin = services->pins.lock()) { pin->retired = states.capture(); }
+        }
+    }
+
     Result<std::monostate> publish_shared(const ConfigSnapshot& snapshot)
     {
         const std::lock_guard lock(events->mutex);
         auto created = shared_services(snapshot, services);
         if (auto* bad = std::get_if<Diagnostic>(&created)) { return std::move(*bad); }
-        services = std::get<std::shared_ptr<SharedServices>>(std::move(created));
+        auto next = std::get<std::shared_ptr<SharedServices>>(std::move(created));
+        retain_states_before_publication(next);
+        services = std::move(next);
         return std::monostate{};
     }
 
@@ -1671,8 +1803,18 @@ private:
         return supported;
     }
 
+    WorkflowAdmission admission_policy(const RunRequest& request, WorkflowId workflow, bool pinned) const
+    {
+        // All revisions compete for the same FIFO and physical slots. An older
+        // round must not restore its capacity after a new policy was published.
+        if (pinned && services) {
+            if (const auto* current = find_workflow(services->snapshot.solution(), workflow)) { return current->admission; }
+        }
+        return find_workflow(request.snapshot().solution(), workflow)->admission;
+    }
+
     template<class Outcome>
-    std::optional<Outcome> check_slot(const RunRequest& request, WorkflowId workflow) const
+    std::optional<Outcome> check_slot(const RunRequest& request, WorkflowId workflow, bool pinned) const
     {
         if (stopping) {
             return RunRejected{error(ErrorCode::InvalidRunRequest, "The workflow engine is draining accepted work.", request)};
@@ -1680,7 +1822,7 @@ private:
         const auto slot = slots.find(workflow);
         if (slot != slots.end()) {
             const auto& flow = slot->second;
-            const auto& policy = find_workflow(request.snapshot().solution(), workflow)->admission;
+            const auto policy = admission_policy(request, workflow, pinned);
             const auto free = free_slots(flow, policy);
             if (flow.waiting - flow.cleaning >= free && flow.waiting - free >= policy.queue_capacity) {
                 if (policy.overflow == AdmissionOverflow::Reject) {
@@ -1814,6 +1956,10 @@ WorkflowEngine::~WorkflowEngine() = default;
 core::Result<std::monostate> WorkflowEngine::publish_shared(const ConfigSnapshot& snapshot)
 { return impl_->publish_shared(snapshot); }
 
+core::Result<std::shared_ptr<WorkflowEngine::SolutionCapture>> WorkflowEngine::pin_solution(const ConfigSnapshot& capture,
+    std::shared_ptr<detail::SolutionWake> wake)
+{ return impl_->pin_solution(capture, std::move(wake)); }
+
 core::Result<std::shared_ptr<const core::SharedData>> WorkflowEngine::shared_preview() const
 { return impl_->shared_preview(); }
 core::Result<std::shared_ptr<const core::CorrelationJoinAccess>> WorkflowEngine::correlation_preview() const
@@ -1833,6 +1979,7 @@ core::Result<std::unique_ptr<WorkflowEngine>> WorkflowEngine::create(const core:
 }
 
 core::SolutionSessionId WorkflowEngine::session() const noexcept { return impl_->session; }
+bool WorkflowEngine::on_worker_thread() const noexcept { return impl_->on_worker_thread(); }
 
 RunSubmission WorkflowEngine::submit(const RunRequest& request)
 {
@@ -1845,9 +1992,9 @@ RunSubmission WorkflowEngine::submit(const RunRequest& request)
 }
 
 WorkflowEngine::Preparation WorkflowEngine::prepare(const RunRequest& request,
-    std::shared_ptr<InvocationResourceProvider> provider)
+    std::shared_ptr<InvocationResourceProvider> provider, std::shared_ptr<SolutionCapture> pinned)
 {
-    return impl_->prepare(request, std::move(provider));
+    return impl_->prepare(request, std::move(provider), pinned);
 }
 
 RunSubmission WorkflowEngine::admit(std::shared_ptr<PreparedSubmission> prepared)

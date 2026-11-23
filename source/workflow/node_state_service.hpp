@@ -6,7 +6,7 @@
 #include <map>
 #include <mutex>
 
-namespace visionpro::workflow { class ExecutionPlan; }
+namespace visionpro::workflow { class ConfigSnapshot; class ExecutionPlan; }
 
 namespace visionpro::workflow::detail {
 
@@ -14,6 +14,7 @@ struct StateCell;
 struct StateGeneration;
 using RunStateCells = std::map<core::NodeId, std::shared_ptr<StateCell>>;
 using RunStateBindings = std::map<core::NodeId, std::shared_ptr<StateGeneration>>;
+using StateCatalog = std::map<std::pair<core::WorkflowId, core::NodeId>, std::shared_ptr<StateGeneration>>;
 [[nodiscard]] std::optional<std::uint64_t> serialized_state_generation(
     const RunStateBindings& bindings, core::NodeId node) noexcept;
 
@@ -48,7 +49,9 @@ private:
 // reached nodes, against the exact generation retained by their request.
 class NodeStateService final {
 public:
-    [[nodiscard]] core::Result<RunStateBindings> bind(const ExecutionPlan& plan);
+    [[nodiscard]] core::Result<std::monostate> prepare_solution(const ConfigSnapshot& snapshot);
+    [[nodiscard]] core::Result<RunStateBindings> bind(const ExecutionPlan& plan, StateCatalog* retired = nullptr);
+    [[nodiscard]] StateCatalog capture();
     [[nodiscard]] core::Result<std::shared_ptr<InvocationStateLease>> acquire(
         const core::InvocationContext& context, core::ToolInstance& instance,
         const RunStateBindings& bindings, RunStateCells& run_states);
@@ -57,7 +60,8 @@ public:
 
 private:
     std::mutex mutex_;
-    std::map<std::pair<core::WorkflowId, core::NodeId>, std::shared_ptr<StateGeneration>> versions_;
+    StateCatalog versions_;
+    std::optional<core::ConfigSnapshotId> prepared_solution_;
     std::uint64_t last_generation_{0};
 };
 

@@ -21,6 +21,7 @@
 #include <QJsonObject>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMenu>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QProcess>
@@ -147,6 +148,7 @@ class EditorRunTests final : public QObject {
     Q_OBJECT
 
 private slots:
+    void runs_linked_solution_and_shows_delivery();
     void publishes_draft_and_isolates_debug();
     void runs_unsaved_absolute_resources();
     void selects_each_iteration_of_the_same_node();
@@ -154,6 +156,69 @@ private slots:
     void replays_saved_trigger_in_editor_and_cli();
     void arming_preserves_session_state();
 };
+
+void EditorRunTests::runs_linked_solution_and_shows_delivery()
+{
+    const auto registry = take(app::make_tool_registry());
+    auto draft = take(infrastructure::load_solution(VISIONPRO_S63_DIRECTORY, registry)).solution();
+    const auto source = draft.workflows.at(0).id, target = draft.workflows.at(1).id;
+    draft.format_version = solution_graph_manifest_version;
+    draft.graph = SolutionGraph{{source}, {{source, target}}, {{source, key<OutputId>("area"), target, key<InputId>("fifth")}}};
+    EditorWindow window(draft, registry);
+    window.show();
+    auto& controller = *window.findChild<RunController*>();
+    auto& start = action(window, "runSolution");
+    auto* menu = qobject_cast<QMenu*>(start.parent());
+    QVERIFY(menu);
+    menu->aboutToShow();
+    QVERIFY(start.isEnabled());
+    QVERIFY(submit_dialog(start, [](QDialog& dialog, QPushButton&) {
+        auto* mode = dialog.findChild<QComboBox*>(QStringLiteral("runInputMode.index"));
+        auto* field = dialog.findChild<QLineEdit*>(QStringLiteral("runInputValue.index"));
+        if (!mode || !field) { return false; }
+        mode->setCurrentIndex(1);
+        field->setText(QStringLiteral("0"));
+        return true;
+    }));
+    QTRY_VERIFY(controller.solution_report().has_value());
+    const auto& report = *controller.solution_report();
+    QCOMPARE(report.status, ExecutionStatus::Succeeded);
+    QCOMPARE(report.runs.size(), 2u);
+    QCOMPARE(report.deliveries.size(), 1u);
+    QCOMPARE(report.deliveries.front().source, report.runs.front().identity());
+    QCOMPARE(report.deliveries.front().target, report.runs.back().identity());
+    QCOMPARE(*report.runs.back().request().input(key<InputId>("fifth"))->value.as_int64(), 6);
+    action(window, "viewSolutionRunReport").trigger();
+    const auto* dialog = window.findChild<QDialog*>(QStringLiteral("solutionRunReportDialog"));
+    QVERIFY(dialog);
+    const auto text = dialog->findChild<QPlainTextEdit*>()->toPlainText();
+    QVERIFY(text.contains(QStringLiteral("area = 6")) && text.contains(QStringLiteral("passed = true"))
+        && text.contains(QStringLiteral("调用")) && text.contains(QStringLiteral("fifth")));
+
+    QTRY_VERIFY(controller.can_start());
+    QVERIFY(submit_dialog(start, [](QDialog& dialog, QPushButton&) {
+        dialog.findChild<QComboBox*>(QStringLiteral("runInputMode.index"))->setCurrentIndex(1);
+        dialog.findChild<QLineEdit*>(QStringLiteral("runInputValue.index"))->setText(QStringLiteral("2"));
+        return true;
+    }));
+    QTRY_VERIFY(controller.solution_report().has_value());
+    QCOMPARE(controller.solution_report()->status, ExecutionStatus::Failed);
+    QCOMPARE(controller.solution_report()->runs.size(), 1u);
+    QVERIFY(controller.solution_report()->deliveries.empty());
+    QVERIFY(std::ranges::find(controller.solution_report()->skipped, target) != controller.solution_report()->skipped.end());
+
+    QTRY_VERIFY(controller.can_start());
+    auto& cancel = action(window, "cancelSolutionRun");
+    const auto connection = connect(&controller, &RunController::changed, &window, [&] {
+        if (controller.can_cancel_solution()) { cancel.trigger(); }
+    });
+    QVERIFY(submit_dialog(start, [](QDialog&, QPushButton&) { return true; }));
+    disconnect(connection);
+    QTRY_VERIFY(controller.solution_report().has_value());
+    QCOMPARE(controller.solution_report()->status, ExecutionStatus::Cancelled);
+    QVERIFY(controller.solution_report()->runs.empty() && controller.solution_report()->deliveries.empty());
+    QVERIFY(!cancel.isEnabled());
+}
 
 void EditorRunTests::arming_preserves_session_state()
 {

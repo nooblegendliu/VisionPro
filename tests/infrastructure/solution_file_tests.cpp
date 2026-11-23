@@ -531,7 +531,7 @@ void diagnostics(ResourceFixtures files)
     auto version = original;
     const auto marker = version.find("\"format_version\": 1");
     check(marker != std::string::npos, "The manifest declares its version.");
-    version[marker + std::string_view("\"format_version\": ").size()] = '2';
+    version[marker + std::string_view("\"format_version\": ").size()] = '3';
     write(candidate, version);
     rejected(load_solution(broken, fixture.registry, fixture.roots), ErrorCode::UnsupportedSolutionFormat, "Unknown manifest versions are explicit.");
     write(candidate, std::string("{\"format\":\"other\",") + original.substr(original.find('{') + 1));

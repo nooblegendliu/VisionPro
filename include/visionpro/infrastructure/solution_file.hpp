@@ -6,6 +6,9 @@
 namespace visionpro::infrastructure {
 
 inline constexpr std::uint32_t solution_format_version = 1;
+inline constexpr std::uint32_t solution_graph_format_version = workflow::solution_graph_manifest_version;
+[[nodiscard]] constexpr bool supports_solution_format(std::uint32_t version) noexcept
+{ return version == solution_format_version || version == solution_graph_format_version; }
 inline constexpr std::string_view solution_manifest_name = "solution.json";
 
 struct LoadedSolutionExecution {

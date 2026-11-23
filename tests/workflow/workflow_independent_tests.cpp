@@ -194,6 +194,8 @@ void independent_calls()
     supplied.push_back({key<InputId>("adjustment"), DataValue::integer(2)});
     const auto second = accepted(*fixture.engine, take(RunRequest::create(snapshot, target(), supplied, debug())));
     const auto second_progress = finished(second);
+    check(std::get<Diagnostic>(second.public_result()).code == ErrorCode::InvalidRunRequest,
+        "Independent tool calls do not expose the surrounding workflow's public interface.");
     check(second.identity() != first.identity(), "Each independent request has a separate run identity.");
     sum_is(second, second_progress.nodes.front(), 4);
     independent_input(second, second_progress.nodes.front(), "adjustment", InputOrigin::Provided);
@@ -239,6 +241,8 @@ void group_boundary()
 
     const auto grouped = accepted(*fixture.engine, take(RunRequest::create(snapshot, target('4'), {}, debug())));
     const auto group_progress = finished(grouped);
+    check(std::get<Diagnostic>(grouped.public_result()).code == ErrorCode::InvalidRunRequest,
+        "Independent Group calls can query their node record but have no root workflow result.");
     check(group_progress.groups.size() == 1 && group_progress.groups.front().group.node == group
         && fixture.calls->started == std::vector{uuid<NodeId>('1'), target().node, uuid<NodeId>('3')},
         "An independent Group executes exactly its three internal tools in control order.");

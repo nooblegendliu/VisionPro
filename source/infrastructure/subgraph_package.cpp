@@ -40,7 +40,7 @@ template<class T, class Id> const T& by_id(const std::vector<T>& items, Id id, s
 
 void check_document(const Solution& draft, const SolutionDocument* document)
 {
-    if (draft.format_version != solution_format_version) { fail(ErrorCode::UnsupportedSolutionFormat, "Unsupported host solution version."); }
+    if (!supports_solution_format(draft.format_version)) { fail(ErrorCode::UnsupportedSolutionFormat, "Unsupported host solution version."); }
     if (!document) { return; }
     if (!document->can_save()) { fail(ErrorCode::UnsupportedSolutionContent, "The source has unknown fields."); }
     if (draft.id != document->solution().id) { fail(ErrorCode::ResultIdentityMismatch, "The document is not the draft's file base."); }
@@ -194,7 +194,7 @@ void resolve_dependencies(Package& pack, const Solution& source)
 void validate_package(const Package& pack, const Solution& host, const ToolRegistry& registry)
 {
     auto candidate = pack.model;
-    if (candidate.workflows.size() != 1 || candidate.format_version != solution_format_version
+    if (candidate.workflows.size() != 1 || !supports_solution_format(candidate.format_version) || candidate.graph
         || !candidate.variables.empty() || !candidate.queues.empty()) {
         fail(ErrorCode::InvalidModel, "A reusable package must contain exactly one workflow body and no embedded host state.");
     }

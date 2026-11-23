@@ -11,6 +11,8 @@ VisionPro 是一个采用 C++20、Qt、OpenCV 和 CMake 的桌面视觉算法软
 
 ## 当前状态
 
+方案编排支持从显式入口运行多条流程，并追溯每条跨流程端口映射。可用 `run-solution` 运行磁盘样例，核对上游输出 6、9 以及失败时下游的启动记录。[A→B 样例](samples/f3-solution-graph/solution.json) · [复现命令](docs/development.md#1-当前阶段)
+
 S6.12 软件综合验收已通过。三套方案完成 GUI 编辑、保存重载与独立 CLI 对照，桌面基准与并发负载已复测。工业相机、实物 PLC 及整线联动待现场验证。[S6.12 验收记录与复现](docs/s6-acceptance.md)
 
 S1 文档审查、S2 核心模型与绑定及 S3 无 GUI 执行与配置往返均已通过验收。S4 按本轮无 SHA-256 校验的范围完成验收和交接。固定方案覆盖真实视觉单链、五路汇合和旋转 ROI 继承。[S4 验收与样例复现](docs/s4-acceptance.md)
@@ -191,6 +193,7 @@ S3.9 在 Windows x64、MSVC 19.51、CMake/CTest 4.4.0 环境完成 Release 验�
 
 - [开发规则](AGENTS.md)
 - [需求与阶段验收](docs/requirements.md)
+- [VisionPro 框架与流程设计修复方案](docs/visionmaster-alignment-plan.md)（方案级编排、运行生命周期、事件分派和旧方案迁移）
 - [架构设计](docs/architecture.md)
 - [参考 VisionMaster 的桌面工作区改版方案](docs/architecture.md#42-参考-visionmaster-的桌面工作区改版方案)
 - [ANS1 设计建议的采纳与调整记录](docs/architecture.md#11-ans1-设计建议采纳记录)

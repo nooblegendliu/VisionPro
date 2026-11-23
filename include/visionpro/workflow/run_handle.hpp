@@ -56,6 +56,11 @@ struct RunExportTrace {
     OutputReference source;
     ResultIdentity producer;
 };
+struct WorkflowPublicResult {
+    std::vector<OutputSlot> outputs;
+    std::vector<RunExportTrace> exports;
+    std::vector<core::ControlOutputId> selected_control_outputs;
+};
 using RunLoopExportTrace = RunExportTrace;
 struct RunLoopIteration {
     core::ExecutionScopeId scope;
@@ -105,6 +110,7 @@ public:
     [[nodiscard]] virtual core::Result<RunCancelDisposition> cancel() = 0;
     [[nodiscard]] virtual core::Result<std::optional<NodeResult>> lookup(
         const core::InvocationKey& invocation) const = 0;
+    [[nodiscard]] virtual core::Result<WorkflowPublicResult> public_result() const;
 protected:
     RunControl(const RunRequest& request, core::WorkflowRunId run, RunAdmission admission = RunAdmission::Immediate);
 private:
@@ -133,6 +139,9 @@ public:
         std::chrono::steady_clock::time_point deadline) const;
     [[nodiscard]] core::Result<RunCancelDisposition> cancel() const;
     [[nodiscard]] core::Result<std::optional<NodeResult>> lookup(const core::InvocationKey& invocation) const;
+    // Root WorkflowTarget requests publish their complete public interface at logical completion.
+    // Failed, cancelled and timed-out runs expose only typed absence at their data ports.
+    [[nodiscard]] core::Result<WorkflowPublicResult> public_result() const;
 private:
     explicit RunHandle(std::shared_ptr<RunControl> control) : control_(std::move(control)) {}
     std::shared_ptr<RunControl> control_;

@@ -65,7 +65,7 @@ Result<SavePreparation> prepare_save(const SolutionDocument& source, const Solut
     if (previous.id != edited.id || previous.revision != edited.revision) {
         return error(ErrorCode::SolutionSaveConflict, previous, "The edit must be based on the loaded solution identity and revision.");
     }
-    if (edited.format_version != solution_format_version) {
+    if (!supports_solution_format(edited.format_version)) {
         return error(ErrorCode::UnsupportedSolutionFormat, previous, "The edited manifest format version is unsupported.");
     }
     if (previous.revision == std::numeric_limits<std::uint64_t>::max()) {

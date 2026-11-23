@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <map>
 #include <set>
+#include <tuple>
 #include <type_traits>
 
 namespace visionpro::workflow {
@@ -27,9 +28,10 @@ template<class T, class Id> const T* find(const std::vector<T>& values, const Id
     const auto it = std::ranges::find(values, id, &T::id);
     return it == values.end() ? nullptr : &*it;
 }
-std::set<NodeId> reachable(const Graph& graph, std::vector<NodeId> pending)
+template<class Id>
+std::set<Id> reachable(const std::map<Id, std::vector<Id>>& graph, std::type_identity_t<std::vector<Id>> pending)
 {
-    std::set<NodeId> result;
+    std::set<Id> result;
     while (!pending.empty()) {
         const auto node = pending.back(); pending.pop_back();
         if (!result.insert(node).second) { continue; }
@@ -350,6 +352,7 @@ Check Validator::initialize()
 Result<ValidationIndex> Validator::run()
 {
     if (auto shape = validate_model_shape(solution_); const auto* failure = std::get_if<Diagnostic>(&shape)) { return *failure; }
+    if (auto graph = validate_solution_graph(solution_); const auto* failure = std::get_if<Diagnostic>(&graph)) { return *failure; }
     if (auto setup = initialize(); const auto* failure = std::get_if<Diagnostic>(&setup)) { return *failure; }
     for (const auto& flow : solution_.workflows) {
         if (auto checked = workflow(flow); const auto* failure = std::get_if<Diagnostic>(&checked)) { return *failure; }
@@ -362,6 +365,9 @@ Result<std::vector<Diagnostic>> Validator::diagnose()
     if (auto shape = validate_global_invariants(solution_); const auto* failure = std::get_if<Diagnostic>(&shape)) { return *failure; }
     if (auto setup = initialize(); const auto* failure = std::get_if<Diagnostic>(&setup)) { return *failure; }
     std::vector<Diagnostic> diagnostics;
+    if (auto graph = validate_solution_graph(solution_); const auto* failure = std::get_if<Diagnostic>(&graph)) {
+        diagnostics.push_back(*failure);
+    }
     if (auto layout = detail::validate_layouts(solution_); const auto* failure = std::get_if<Diagnostic>(&layout)) {
         diagnostics.push_back(*failure);
     }
@@ -958,6 +964,115 @@ DataType enumeration(std::string_view schema, std::initializer_list<std::string_
     return std::get<DataType>(DataType::enumeration(key<SchemaId>(schema), 1, members));
 }
 } // namespace
+
+core::Result<std::monostate> validate_solution_graph(const Solution& solution)
+{
+    if (!solution.graph) { return std::monostate{}; }
+    const auto& graph = *solution.graph;
+    const auto location = [&](std::optional<WorkflowId> workflow = {}) {
+        DiagnosticLocation where;
+        where.solution = solution.id;
+        where.workflow = workflow;
+        return where;
+    };
+    if (solution.format_version != solution_graph_manifest_version) {
+        return error(ErrorCode::UnsupportedSolutionFormat, "A solution graph requires manifest version 2.", location());
+    }
+    if (graph.entries.empty()) {
+        return error(ErrorCode::IncompleteExecutionScope, "The solution graph requires at least one entry workflow.", location());
+    }
+    std::set<WorkflowId> entries;
+    for (const auto id : graph.entries) {
+        if (!find_workflow(solution, id)) { return error(ErrorCode::UnknownTarget, "Unknown solution entry workflow.", location(id)); }
+        if (!entries.insert(id).second) { return error(ErrorCode::DuplicateIdentity, "Duplicate solution entry workflow.", location(id)); }
+    }
+
+    std::map<WorkflowId, std::vector<WorkflowId>> successors;
+    std::map<WorkflowId, std::size_t> predecessors;
+    for (const auto id : entries) { predecessors.emplace(id, 0); }
+    std::set<std::tuple<WorkflowId, WorkflowId, std::optional<ControlOutputId>>> links;
+    for (const auto& link : graph.links) {
+        const auto* source = find_workflow(solution, link.source);
+        if (!source || !find_workflow(solution, link.target)) {
+            return error(ErrorCode::UnknownTarget, "Unknown endpoint of a solution control link.", location(source ? link.target : link.source));
+        }
+        if (link.output && !find(source->interface.control_outputs, *link.output)) {
+            return error(ErrorCode::InvalidControlLink, "The solution link uses an undeclared public control outlet.", location(link.source));
+        }
+        if (link.output && std::ranges::find(source->control_exports, *link.output, &ControlOutputMapping::output) == source->control_exports.end()) {
+            return error(ErrorCode::MissingRequiredValue, "The solution link's public control outlet has no export mapping.", location(link.source));
+        }
+        if (!links.emplace(link.source, link.target, link.output).second) {
+            return error(ErrorCode::InvalidControlLink, "Duplicate solution control link.", location(link.target));
+        }
+        successors[link.source].push_back(link.target);
+        predecessors.try_emplace(link.source, 0);
+        ++predecessors[link.target];
+    }
+
+    std::vector<WorkflowId> ready;
+    for (const auto& [id, count] : predecessors) { if (!count) { ready.push_back(id); } }
+    auto remaining = predecessors;
+    for (std::size_t index = 0; index < ready.size(); ++index) {
+        const auto adjacent = successors.find(ready[index]);
+        if (adjacent == successors.end()) { continue; }
+        for (const auto target : adjacent->second) {
+            if (--remaining.at(target) == 0) { ready.push_back(target); }
+        }
+    }
+    if (ready.size() != remaining.size()) {
+        const auto blocked = std::ranges::find_if(remaining, [](const auto& item) { return item.second != 0; });
+        return error(ErrorCode::ControlCycle, "Solution control links contain a cycle.", location(blocked->first));
+    }
+    for (const auto& [id, count] : predecessors) {
+        if ((count == 0) != entries.contains(id)) {
+            return error(ErrorCode::IncompleteExecutionScope, count == 0 ? "A solution control source is unreachable from the entries."
+                : "A solution entry also has incoming control links.", location(id));
+        }
+    }
+
+    std::map<WorkflowId, std::set<WorkflowId>> downstream;
+    std::set<std::pair<WorkflowId, InputId>> supplied;
+    for (const auto& binding : graph.bindings) {
+        const auto* source = find_workflow(solution, binding.source);
+        const auto* target = find_workflow(solution, binding.target);
+        auto where = location(binding.target);
+        where.input = binding.input;
+        where.output = binding.output;
+        if (!source || !target) {
+            return error(ErrorCode::UnknownTarget, "Unknown workflow in a solution port mapping.", where);
+        }
+        const auto* output = find(source->interface.outputs, binding.output);
+        const auto* input = find(target->interface.inputs, binding.input);
+        if (!output || !input) { return error(ErrorCode::UnknownTarget, "A solution mapping must connect declared public ports.", where); }
+        if (std::ranges::find(source->outputs, binding.output, &OutputMapping::output) == source->outputs.end()) {
+            return error(ErrorCode::MissingRequiredValue, "The mapped public output has no export mapping in its source workflow.", where);
+        }
+        if (!supplied.emplace(binding.target, binding.input).second) {
+            return error(ErrorCode::InvalidBinding, "A public input may have only one solution mapping.", where);
+        }
+        if (output->type != input->type) { return error(ErrorCode::TypeMismatch, "Mapped public port types must match exactly.", where); }
+        if (auto checked = compatible_semantics(output->semantics, input->semantics); auto* invalid = std::get_if<Diagnostic>(&checked)) {
+            invalid->location = where;
+            return checked;
+        }
+        if (!downstream.contains(binding.source)) { downstream.emplace(binding.source, reachable(successors, {binding.source})); }
+        if (binding.source == binding.target || !downstream.at(binding.source).contains(binding.target)) {
+            return error(ErrorCode::ControlOrderConflict, "A mapped output must originate in a strict control predecessor.", where);
+        }
+    }
+    for (const auto& [id, count] : predecessors) {
+        const auto* flow = find_workflow(solution, id);
+        if (count == 0 || !flow->enabled) { continue; } // The caller supplies entry inputs; disabled workflows never run.
+        for (const auto& input : flow->interface.inputs) {
+            if ((input.required || !input.default_value) && !supplied.contains({id, input.id})) {
+                auto where = location(id); where.input = input.id;
+                return error(ErrorCode::MissingRequiredValue, "A required downstream input needs a solution mapping or a default.", where);
+            }
+        }
+    }
+    return std::monostate{};
+}
 
 core::Result<core::DataType> system_field_type(SystemField field)
 {

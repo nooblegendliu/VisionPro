@@ -23,7 +23,7 @@ QString camera_summary(const QString& state, const CameraTriggerStream& stream, 
 Result<TriggerSource> arm(std::shared_ptr<WorkflowSession> session, const Solution& draft,
     const RunDocument& document, WorkflowId id)
 {
-    if (draft.format_version != solution_format_version || (document.source && !document.source->can_save())) {
+    if (!supports_solution_format(draft.format_version) || (document.source && !document.source->can_save())) {
         return Diagnostic{ErrorCode::UnsupportedSolutionContent, Severity::Error, {}, "This solution cannot be armed for triggers."};
     }
     if (document.source && draft.id != document.source->solution().id) {
@@ -51,6 +51,7 @@ Result<TriggerSource> arm(std::shared_ptr<WorkflowSession> session, const Soluti
 
 RunController::~RunController()
 {
+    if (solution_stop_) { solution_stop_->request_stop(); }
     disarm_triggers();
     for (auto& [id, source] : triggers_) {
         if (source.camera) {

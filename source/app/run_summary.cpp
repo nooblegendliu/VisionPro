@@ -638,6 +638,19 @@ json output_json(const OutputSlot& slot)
     return value;
 }
 
+json export_json(const RunExportTrace& item)
+{
+    const auto& id = item.producer;
+    return {{"output", id_text(item.output)}, {"producer", result_trace_json(
+        {item.source, id.run, id.invocation.scope, id.invocation.invocation, id.attempt})}};
+}
+
+json input_json(const FixedRunInput& input)
+{
+    return {{"id", id_text(input.id)}, {"origin", input.origin == InputOrigin::Provided ? "provided" : "default"},
+        {"value", data_json(input.value)}};
+}
+
 json node_json(const RunNodeProgress& node, const std::optional<NodeResult>& result)
 {
     json trace{{"id", id_text(node.node)}, {"status", name(node.status)}, {"skip_reason", optional_name(node.skip_reason)},
@@ -714,24 +727,28 @@ core::Result<nlohmann::json> summarize_run(const workflow::RunHandle& handle,
             if (link.scope) { edge["scope"] = id_text(*link.scope); }
             return edge;
         })}};
-    const auto export_trace = [](const RunExportTrace& item) {
-        const auto& id = item.producer;
-        return json{{"output", id_text(item.output)}, {"producer", result_trace_json(
-            {item.source, id.run, id.invocation.scope, id.invocation.invocation, id.attempt})}};
-    };
     summary["iterations"] = array_json(progress.iterations, [&](const RunLoopIteration& iteration) {
         return json{{"scope", id_text(iteration.scope)}, {"index", std::to_string(iteration.index)},
             {"loop_node", id_text(iteration.loop.node)}, {"parent_scope", id_text(iteration.loop.scope)},
             {"loop_invocation", id_text(iteration.loop.invocation)},
-            {"exports", array_json(iteration.exports, export_trace)}};
+            {"exports", array_json(iteration.exports, export_json)}};
     });
     summary["groups"] = array_json(progress.groups, [&](const RunGroupCall& call) {
         return json{{"scope", id_text(call.scope)}, {"group_node", id_text(call.group.node)},
             {"parent_scope", id_text(call.group.scope)}, {"group_invocation", id_text(call.group.invocation)},
-            {"exports", array_json(call.exports, export_trace)}};
+            {"exports", array_json(call.exports, export_json)}};
     });
     add_run_identity(summary, handle.identity());
     const auto& request = handle.request();
+    if (std::holds_alternative<WorkflowTarget>(request.target()) && progress.status != ExecutionStatus::Pending
+        && progress.status != ExecutionStatus::Running) {
+        auto result = handle.public_result();
+        if (const auto* error = std::get_if<Diagnostic>(&result)) { return *error; }
+        const auto& ports = std::get<WorkflowPublicResult>(result);
+        summary["public_result"] = {{"outputs", array_json(ports.outputs, output_json)},
+            {"exports", array_json(ports.exports, export_json)},
+            {"selected_control_outputs", array_json(ports.selected_control_outputs, id_text<ControlOutputId>)}};
+    }
     const auto& trigger = request.trigger();
     if (trigger.kind == TriggerKind::External || trigger.kind == TriggerKind::Continuous) {
         summary["trigger"] = {{"kind", trigger.kind == TriggerKind::External ? "external" : "continuous"},
@@ -739,12 +756,39 @@ core::Result<nlohmann::json> summarize_run(const workflow::RunHandle& handle,
         if (const auto& correlation = request.correlation()) {
             summary["trigger"]["correlation"] = {{"domain", id_text(correlation->domain())}, {"key", correlation->key()}};
         }
-        summary["inputs"] = array_json(request.inputs(), [](const FixedRunInput& input) {
-            return json{{"id", id_text(input.id)}, {"origin", input.origin == InputOrigin::Provided ? "provided" : "default"},
-                {"value", data_json(input.value)}};
-        });
+        summary["inputs"] = array_json(request.inputs(), input_json);
     }
     return summary;
+}
+
+core::Result<nlohmann::json> summarize_solution(const workflow::SolutionRunReport& run,
+    const workflow::Solution& solution, std::span<const core::Diagnostic> load_diagnostics)
+{
+    json runs = json::array();
+    for (const auto& handle : run.runs) {
+        auto progress = handle.inspect();
+        if (const auto* error = std::get_if<Diagnostic>(&progress)) { return *error; }
+        auto child = summarize_run(handle, std::get<RunProgress>(progress), {});
+        if (const auto* error = std::get_if<Diagnostic>(&child)) { return *error; }
+        auto& item = std::get<json>(child);
+        item["inputs"] = array_json(handle.request().inputs(), input_json);
+        runs.push_back(std::move(item));
+    }
+    auto deliveries = array_json(run.deliveries, [](const SolutionDelivery& binding) {
+        json source{{"output", id_text(binding.output)}}, target{{"input", id_text(binding.input)}};
+        add_run_identity(source, binding.source);
+        add_run_identity(target, binding.target);
+        return json{{"source", std::move(source)}, {"target", std::move(target)}};
+    });
+    return json{{"solution", id_text(solution.id)}, {"revision", std::to_string(solution.revision)},
+        {"sequence", std::to_string(run.sequence)}, {"session", id_text(run.snapshot.session)},
+        {"snapshot", id_text(run.snapshot.snapshot)}, {"status", name(run.status)},
+        {"load_diagnostics", diagnostics_json(load_diagnostics)}, {"diagnostics", diagnostics_json(run.diagnostics)},
+        {"runs", std::move(runs)}, {"deliveries", std::move(deliveries)}, {"skipped", array_json(run.skipped, id_text<WorkflowId>)},
+        {"control_links", array_json(run.links, [](const SolutionLinkProgress& item) {
+            return json{{"source", id_text(item.link.source)}, {"target", id_text(item.link.target)}, {"output", optional_id(item.link.output)},
+                {"status", name(item.status)}, {"close_reason", optional_name(item.close_reason)}};
+        })}};
 }
 
 } // namespace visionpro::app

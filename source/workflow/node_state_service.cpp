@@ -1,8 +1,10 @@
 #include "node_state_service.hpp"
 #include "runtime_values.hpp"
+#include "tool_configuration.hpp"
 #include <visionpro/workflow/execution_plan.hpp>
 
 #include <algorithm>
+#include <set>
 #include <stdexcept>
 
 namespace visionpro::workflow::detail {
@@ -148,48 +150,129 @@ void InvocationStateLease::settle(bool succeeded) noexcept
     else { access_ = Access::Sealed; }
 }
 
-Result<RunStateBindings> NodeStateService::bind(const ExecutionPlan& plan)
+StateCatalog NodeStateService::capture()
+{
+    const std::lock_guard lock(mutex_);
+    return versions_;
+}
+
+namespace {
+Result<std::shared_ptr<StateGeneration>> bind_generation(const ToolExecutionConfiguration& configuration,
+    const Node& node, StateCatalog& catalog, std::uint64_t& last)
+{
+    const auto& data = configuration.data();
+    const auto& spec = configuration.effective_state();
+    const auto key = std::pair{data.workflow, data.node};
+    const bool strict = spec->compatibility == StateCompatibilityPolicy::AlwaysNewGeneration;
+    const auto existing = catalog.find(key);
+    if (existing != catalog.end() && same_specification(existing->second->configuration, configuration)
+        && (!strict || same_configuration(existing->second->configuration, existing->second->bindings, configuration, node.bindings))) {
+        return existing->second;
+    }
+    auto initial = materialize_config_value(spec->initial_value);
+    if (const auto* failure = std::get_if<Diagnostic>(&initial)) { return *failure; }
+    const auto next = last ? next_state_generation(last) : Result<std::uint64_t>{std::uint64_t{1}};
+    if (const auto* failure = std::get_if<Diagnostic>(&next)) { return *failure; }
+    last = std::get<std::uint64_t>(next);
+    auto version = std::make_shared<StateGeneration>(StateGeneration{configuration,
+        strict ? node.bindings : std::vector<Binding>{}, last, std::get<DataValue>(std::move(initial)), {}});
+    if (spec->scope == StateScope::SolutionSession) {
+        version->session = std::make_shared<StateCell>(*spec, version->initial,
+            NodeStateKey{data.node, last, SessionStateDomain{data.session}}, data.workflow);
+    }
+    catalog.insert_or_assign(key, version);
+    return version;
+}
+
+Result<std::monostate> prepare_workflow_state(const ConfigSnapshot& snapshot, const Workflow& flow,
+    StateCatalog& catalog, std::uint64_t& last)
+{
+    std::map<NodeId, const Node*> nodes;
+    std::map<NodeId, std::vector<NodeId>> successors;
+    for (const auto& node : flow.nodes) { nodes.emplace(node.id, &node); }
+    for (const auto& link : flow.control_links) { successors[link.source].push_back(link.target); }
+    std::set<NodeId> visited;
+    auto pending = flow.entries;
+    while (!pending.empty()) {
+        const auto id = pending.back(); pending.pop_back();
+        if (!visited.insert(id).second) { continue; }
+        const auto found = nodes.find(id);
+        if (found == nodes.end()) { return error(ErrorCode::UnknownTarget, flow.id, id, "Unknown node in the solution execution scope."); }
+        const auto& node = *found->second;
+        if (!node.enabled) { continue; }
+        if (const auto it = successors.find(id); it != successors.end()) {
+            pending.insert(pending.end(), it->second.begin(), it->second.end());
+        }
+        if (const auto* group = std::get_if<GroupConfiguration>(&node.configuration)) {
+            pending.insert(pending.end(), group->entries.begin(), group->entries.end());
+            continue;
+        }
+        const auto* tool = snapshot.find_tool(std::get<ToolConfiguration>(node.configuration).type);
+        if (!tool) { return error(ErrorCode::UnknownTool, flow.id, id, "Unknown tool in the solution execution scope."); }
+        if (!tool->state) { continue; }
+        auto configured = project_tool_configuration(snapshot, flow.id, node);
+        if (const auto* failure = std::get_if<Diagnostic>(&configured)) { return *failure; }
+        auto generation = bind_generation(std::get<ToolExecutionConfiguration>(configured), node, catalog, last);
+        if (const auto* failure = std::get_if<Diagnostic>(&generation)) { return *failure; }
+    }
+    return std::monostate{};
+}
+} // namespace
+
+Result<std::monostate> NodeStateService::prepare_solution(const ConfigSnapshot& snapshot)
+{
+    const std::lock_guard lock(mutex_);
+    if (prepared_solution_ == snapshot.identity().snapshot) { return std::monostate{}; }
+    const auto& solution = snapshot.solution();
+    // Seed configurations before publication can fork this catalog. A compatible cold
+    // session node then has one cell, whichever round calls it first. Init stays lazy.
+    auto staged = versions_;
+    auto last = last_generation_;
+    std::map<WorkflowId, std::vector<WorkflowId>> successors;
+    for (const auto& link : solution.graph->links) { successors[link.source].push_back(link.target); }
+    auto pending = solution.graph->entries;
+    std::set<WorkflowId> visited;
+    while (!pending.empty()) {
+        const auto id = pending.back(); pending.pop_back();
+        if (!visited.insert(id).second) { continue; }
+        const auto* flow = find_workflow(solution, id);
+        if (!flow || !flow->enabled) { continue; } // Graph endpoints were checked before pinning.
+        auto result = prepare_workflow_state(snapshot, *flow, staged, last);
+        if (const auto* failure = std::get_if<Diagnostic>(&result)) { return *failure; }
+        if (const auto it = successors.find(id); it != successors.end()) {
+            pending.insert(pending.end(), it->second.begin(), it->second.end());
+        }
+    }
+    versions_.swap(staged);
+    last_generation_ = last;
+    prepared_solution_ = snapshot.identity().snapshot;
+    return std::monostate{};
+}
+
+Result<RunStateBindings> NodeStateService::bind(const ExecutionPlan& plan, StateCatalog* retired)
 {
     const bool isolated = plan.request().debug_state() == DebugStatePolicy::Isolated;
     const auto& solution = plan.request().snapshot().solution();
     const std::lock_guard lock(mutex_);
     // Stage the new catalog. A failed or rejected request cannot partially
     // replace live generations, and admitted older requests retain their cells.
-    auto updated = isolated ? decltype(versions_){} : versions_;
+    auto& catalog = retired ? *retired : versions_;
+    auto updated = isolated ? StateCatalog{} : catalog;
     auto last = last_generation_;
     RunStateBindings bindings;
     for (const auto& tool : plan.tools()) {
         const auto& configuration = tool.configuration();
         const auto& data = configuration.data();
-        const auto& spec = configuration.effective_state();
-        const auto key = std::pair{data.workflow, data.node};
-        if (!spec) {
-            updated.erase(key);
+        if (!configuration.effective_state()) {
+            updated.erase({data.workflow, data.node});
             continue;
         }
         const auto& node = *find_node(*find_workflow(solution, data.workflow), data.node);
-        const bool strict = spec->compatibility == StateCompatibilityPolicy::AlwaysNewGeneration;
-        const auto existing = updated.find(key);
-        if (existing != updated.end() && same_specification(existing->second->configuration, configuration)
-            && (!strict || same_configuration(existing->second->configuration, existing->second->bindings, configuration, node.bindings))) {
-            bindings.emplace(data.node, existing->second);
-            continue;
-        }
-        auto initial = materialize_config_value(spec->initial_value);
-        if (const auto* bad = std::get_if<Diagnostic>(&initial)) { return *bad; }
-        const auto next = last ? next_state_generation(last) : Result<std::uint64_t>{std::uint64_t{1}};
-        if (const auto* bad = std::get_if<Diagnostic>(&next)) { return *bad; }
-        last = std::get<std::uint64_t>(next);
-        auto version = std::make_shared<StateGeneration>(StateGeneration{configuration,
-            strict ? node.bindings : std::vector<Binding>{}, last, std::get<DataValue>(std::move(initial)), {}});
-        if (spec->scope == StateScope::SolutionSession) {
-            version->session = std::make_shared<StateCell>(*spec, version->initial,
-                NodeStateKey{data.node, last, SessionStateDomain{data.session}}, data.workflow);
-        }
-        bindings.emplace(data.node, version);
-        updated.insert_or_assign(key, std::move(version));
+        auto bound = bind_generation(configuration, node, updated, last);
+        if (const auto* failure = std::get_if<Diagnostic>(&bound)) { return *failure; }
+        bindings.emplace(data.node, std::get<std::shared_ptr<StateGeneration>>(std::move(bound)));
     }
-    if (!isolated) { versions_.swap(updated); }
+    if (!isolated) { catalog.swap(updated); }
     last_generation_ = last;
     return bindings;
 }
@@ -252,6 +335,7 @@ void NodeStateService::clear() noexcept
 {
     const std::lock_guard lock(mutex_);
     versions_.clear();
+    prepared_solution_.reset();
 }
 
 } // namespace visionpro::workflow::detail

@@ -18,7 +18,9 @@ struct SubgraphHostCapabilities {
 };
 
 // Exports the public definition. Parent control connections and input bindings
-// belong to the calling host. Regular files are copied into the package.
+// belong to the calling host, including solution-level workflow links and port
+// mappings. Importing never enrolls the copied workflow in a host graph.
+// Regular files are copied into the package.
 [[nodiscard]] core::Result<std::monostate> export_subgraph_package(const std::filesystem::path& directory,
     const workflow::Solution& draft, core::WorkflowId workflow, std::optional<core::NodeId> group,
     const core::ToolRegistry& registry, const SolutionDocument* source = nullptr);

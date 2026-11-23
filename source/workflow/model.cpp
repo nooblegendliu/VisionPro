@@ -413,6 +413,9 @@ Check validate_global_invariants(const Solution& solution)
     if (!valid_name(solution.name) || solution.format_version == 0 || solution.revision == 0) {
         return contextualize(error(core::ErrorCode::InvalidModel, "Solution requires a valid name, positive format version and revision."));
     }
+    if (solution.graph && solution.format_version != solution_graph_manifest_version) {
+        return contextualize(error(core::ErrorCode::UnsupportedSolutionFormat, "A solution graph requires manifest version 2."));
+    }
     std::set<core::WorkflowId> workflows;
     std::set<core::NodeId> nodes;
     std::set<core::ControlLinkId> links;

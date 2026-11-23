@@ -25,7 +25,7 @@ using namespace workflow;
 using nlohmann::json;
 namespace fs = std::filesystem;
 
-enum class Command { Run, Save, Trigger, Replay };
+enum class Command { Run, RunSolution, Save, Trigger, Replay };
 struct InputArgument { InputId id; std::string text; };
 struct ManualRun {
     WorkflowId workflow;
@@ -41,6 +41,7 @@ struct Arguments {
     std::vector<NamedResourceRoot> roots{};
     TriggerSequence sequence{};
     fs::path replay_sequence{};
+    std::vector<ManualRun> entry_inputs{};
 };
 
 class UsageError final : public std::runtime_error {
@@ -51,6 +52,7 @@ public:
 constexpr auto usage =
     "visionpro_cli cameras\n"
     "visionpro_cli run --solution <solution.json> --workflow <uuid> [--group <uuid>] [--input <id>=<value>]... [--root <id>=<directory>]...\n"
+    "visionpro_cli run-solution --solution <solution.json> [--entry-input <workflow-uuid>/<id>=<value>]... [--root <id>=<directory>]...\n"
     "visionpro_cli replay --solution <solution.json> --sequence <runs.json> [--root <id>=<directory>]...\n"
     "Replay runs in order in one session. The sequence is a JSON array of {\"workflow\":\"uuid\",\"inputs\":{\"id\":\"value\"}}.\n"
     "visionpro_cli save --solution <solution.json> [--root <id>=<directory>]...\n"
@@ -102,12 +104,13 @@ template<class T> T number(std::string_view text)
 
 Arguments parse_arguments(std::span<wchar_t*> args)
 {
-    if (args.empty()) { throw UsageError("Choose run, replay, save, trigger or cameras. See --help."); }
+    if (args.empty()) { throw UsageError("Choose run, run-solution, replay, save, trigger or cameras. See --help."); }
     const std::wstring_view command{args.front()};
     Arguments parsed{Command::Run};
     if (command == L"save") { parsed.command = Command::Save; }
     else if (command == L"trigger") { parsed.command = Command::Trigger; }
     else if (command == L"replay") { parsed.command = Command::Replay; }
+    else if (command == L"run-solution") { parsed.command = Command::RunSolution; }
     else if (command != L"run") { throw UsageError("Unknown command. See --help."); }
     for (std::size_t index = 1; index < args.size(); index += 2) {
         const std::wstring_view option{args[index]};
@@ -148,6 +151,21 @@ Arguments parse_arguments(std::span<wchar_t*> args)
         } else if (parsed.command == Command::Run && option == L"--group") {
             if (parsed.group) { throw UsageError("Specify one Group ID."); }
             parsed.group = argument_value(IdFactory::parse<NodeId>(utf8(value)));
+        } else if (parsed.command == Command::RunSolution && option == L"--entry-input") {
+            const auto [qualified, text] = assignment(value);
+            const auto slash = qualified.find(L'/');
+            if (slash == std::wstring_view::npos) { throw UsageError("An entry input requires <workflow-uuid>/<input-id>=<value>."); }
+            const auto workflow = argument_value(IdFactory::parse<WorkflowId>(utf8(qualified.substr(0, slash))));
+            const auto id = argument_value(SchemaIdFactory::parse<InputId>(utf8(qualified.substr(slash + 1))));
+            auto flow = std::ranges::find(parsed.entry_inputs, workflow, &ManualRun::workflow);
+            if (flow == parsed.entry_inputs.end()) {
+                parsed.entry_inputs.push_back({workflow, {}, {{id, utf8(text)}}});
+            } else {
+                if (std::ranges::find(flow->inputs, id, &InputArgument::id) != flow->inputs.end()) {
+                    throw UsageError("Specify each workflow entry input once.");
+                }
+                flow->inputs.push_back({id, utf8(text)});
+            }
         } else if (parsed.command == Command::Run && option == L"--input") {
             const auto [name, text] = assignment(value);
             const auto id = argument_value(SchemaIdFactory::parse<InputId>(utf8(name)));
@@ -348,6 +366,36 @@ int run(const Arguments& args, const SolutionDocument& document, const ToolRegis
     return status;
 }
 
+int run_solution(const Arguments& args, const SolutionDocument& document, const ToolRegistry& registry)
+{
+    const auto& solution = document.solution();
+    std::vector<WorkflowRunInputs> inputs;
+    for (const auto& entry : args.entry_inputs) {
+        const auto* flow = find_workflow(solution, entry.workflow);
+        if (!flow || !flow->enabled || (solution.graph
+            && std::ranges::find(solution.graph->entries, entry.workflow) == solution.graph->entries.end())) {
+            throw UsageError("An entry input must identify an enabled solution entry workflow.");
+        }
+        inputs.push_back({entry.workflow, fixed_inputs(entry, flow->interface)});
+    }
+    auto created = WorkflowSession::create(registry);
+    if (const auto* failure = std::get_if<Diagnostic>(&created)) { return report_failure("session", *failure); }
+    auto& session = *std::get<std::unique_ptr<WorkflowSession>>(created);
+    auto activated = activate_solution(session, document);
+    if (const auto* failure = std::get_if<Diagnostic>(&activated)) { return report_failure("load", *failure); }
+    const auto trigger = argument_value(SchemaIdFactory::parse<SchemaId>("visionpro.cli"));
+    auto result = session.run_solution(std::get<ConfigSnapshot>(activated), inputs, {TriggerKind::Manual, trigger});
+    if (const auto* failure = std::get_if<Diagnostic>(&result)) { return report_failure("solution", *failure); }
+    const auto& run = std::get<SolutionRunReport>(result);
+    auto summary = summarize_solution(run, solution, document.diagnostics());
+    if (const auto* failure = std::get_if<Diagnostic>(&summary)) { return report_failure("report", *failure); }
+    std::cout << std::get<json>(summary).dump(2) << '\n';
+    if (const auto output_error = finish_output(); output_error != 0) { return output_error; }
+    if (run.status == ExecutionStatus::Succeeded) { return 0; }
+    std::cerr << json{{"stage", "solution"}, {"diagnostics", diagnostics_json(run.diagnostics)}}.dump(2) << '\n';
+    return 1;
+}
+
 int execute(std::span<wchar_t*> args)
 {
     if (args.size() == 1 && std::wstring_view(args.front()) == L"--help") {
@@ -379,6 +427,7 @@ int execute(std::span<wchar_t*> args)
         auto loaded = load_solution(options.manifest.parent_path(), registry, options.roots);
         if (const auto* failure = std::get_if<Diagnostic>(&loaded)) { return report_failure("load", *failure); }
         const auto& document = std::get<SolutionDocument>(loaded);
+        if (options.command == Command::RunSolution) { return run_solution(options, document, registry); }
         if (options.command == Command::Trigger) {
             auto result = replay_triggers(document, registry, *options.workflow, options.sequence);
             if (const auto* failure = std::get_if<Diagnostic>(&result)) { return report_failure("trigger", *failure); }

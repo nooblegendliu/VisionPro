@@ -1,4 +1,5 @@
 #include <visionpro/core/id_factory.hpp>
+#include <visionpro/core/runtime_id_factory.hpp>
 #include <visionpro/core/schema_id_factory.hpp>
 #include <visionpro/workflow/execution_plan.hpp>
 #include <visionpro/workflow/workflow_session.hpp>
@@ -92,6 +93,7 @@ struct Call {
     std::int64_t value;
     std::weak_ptr<const InvocationContext> context;
     std::shared_ptr<ExitGate> exit;
+    std::shared_future<void> cancellation;
 };
 
 ToolCompletion success(const Call& call)
@@ -149,7 +151,9 @@ private:
 };
 
 class Control final : public InvocationControl {
-    void request_cancel() override {}
+public:
+    std::promise<void> cancelled;
+    void request_cancel() override { cancelled.set_value(); }
 };
 
 class TaggedLease final : public ResourceLease {
@@ -222,8 +226,8 @@ private:
             if (!lease) { throw std::runtime_error("The test backend expects a tagged lease."); }
             value += lease->tag;
         }
-        const Call call{token, context->data().identity, value, context, exit_};
         auto control = std::make_shared<Control>();
+        const Call call{token, context->data().identity, value, context, exit_, control->cancelled.get_future().share()};
         take(token.register_control(control));
         armed_ = driver->record(call);
         if (!armed_) { Driver::finish(call); }
@@ -257,10 +261,16 @@ ToolRegistry registry_for(const std::shared_ptr<Driver>& driver)
     auto resource = descriptor;
     resource.id = key<ToolTypeId>("test.session.resource");
     resource.resources = {{key<SchemaId>("test.session.binary"), ResourceKind::Binary}};
+    auto branch = descriptor;
+    branch.id = key<ToolTypeId>("test.session.branch");
+    branch.schema.id = key<SchemaId>("test.session.branch.schema");
+    branch.control_outputs = {{key<ControlOutputId>("left"), "Left"}, {key<ControlOutputId>("right"), "Right"}};
+    branch.execution.cancellation = ToolCancellation::Cooperative;
     const auto factory = std::make_shared<Factory>(driver);
     const SchemaSupport support{descriptor.schema.id, 1, 1, {}};
     const std::array registrations{ToolRegistration{descriptor, support, factory},
-        ToolRegistration{unsupported, support, factory}, ToolRegistration{resource, support, factory}};
+        ToolRegistration{unsupported, support, factory}, ToolRegistration{resource, support, factory},
+        ToolRegistration{branch, {branch.schema.id, 1, 1, {}}, factory}};
     return take(ToolRegistry::create(registrations));
 }
 
@@ -691,6 +701,185 @@ void submission_rechecks_capture_after_preflight()
     check(fixture.driver->created == 1, "Only the publication starts a run across the admission race.");
     value_is(lookup(current, call), 355);
 }
+
+void solution_round_pins_later_children()
+{
+    Fixture fixture;
+    auto candidate = resource_solution();
+    candidate.format_version = 2;
+    auto& first = candidate.workflows.front();
+    first.nodes.pop_back();
+    first.control_links.clear();
+    const auto second = candidate.workflows.back().id;
+    candidate.graph = SolutionGraph{{first.id}, {{first.id, second}}, {}};
+    const auto initial = take(fixture.session->activate(candidate, std::make_shared<TaggedResourceProvider>(1, 100)));
+    const auto workpiece = take(RuntimeIdFactory::correlation(key<CorrelationDomainId>("line.fixture"), "part-17"));
+    std::future<Result<SolutionRunReport>> running;
+    const DrainOnExit drain{*fixture.driver};
+    const auto start = [&](ConfigSnapshot snapshot) {
+        return std::async(std::launch::async, [&, snapshot] {
+            return fixture.session->run_solution(snapshot, {}, arguments().trigger, {}, workpiece);
+        });
+    };
+    running = start(initial);
+    const auto a = fixture.driver->await_call(0);
+    auto edited = candidate;
+    std::get<ManagedResource>(edited.resources.front().location).revision = 2;
+    edited.workflows.back().nodes.front().bindings.front().sources = {ConfigValue::integer(41)};
+    const auto current = take(fixture.session->publish(initial, edited, std::make_shared<TaggedResourceProvider>(2, 200)));
+    rejected(fixture.session->submit(request(initial, second)), ErrorCode::ResultIdentityMismatch,
+        "Publishing rejects new external requests for the old capture.");
+    complete_successfully(a);
+    const auto b = fixture.driver->await_call(1);
+    check(b.identity.snapshot == initial.identity().snapshot && b.value == 131,
+        "The admitted round starts its later child against the original resource lease and configuration.");
+    complete_successfully(b);
+    const auto previous = take(running.get());
+    check(previous.status == ExecutionStatus::Succeeded && previous.runs.size() == 2
+        && previous.runs.back().identity().workflow == second, "The published change did not interrupt the old round.");
+    check(std::ranges::all_of(previous.runs, [&](const RunHandle& child) {
+        return child.request().correlation() == workpiece;
+    }), "Each child receives the exact workpiece key submitted with the solution round.");
+    for (const auto& child : previous.runs) { wait_for(child, RunWaitTarget::Quiescence); }
+    revision_is(previous.runs.back(), id<NodeId>('3'), 1);
+
+    running = start(current);
+    complete_successfully(fixture.driver->await_call(2));
+    const auto next = fixture.driver->await_call(3);
+    complete_successfully(next);
+    const auto subsequent = take(running.get());
+    check(subsequent.sequence > previous.sequence && subsequent.snapshot == current.identity() && next.value == 241,
+        "The next round uses the published input and new resource.");
+    revision_is(subsequent.runs.back(), id<NodeId>('3'), 2);
+}
+
+Solution branching_solution()
+{
+    auto candidate = solution(1, 11);
+    candidate.format_version = 2;
+    const auto left = key<ControlOutputId>("left");
+    const auto right = key<ControlOutputId>("right");
+    for (char suffix : {'2', '3', '4'}) {
+        auto flow = candidate.workflows.front();
+        flow.id = id<WorkflowId>(suffix);
+        flow.nodes.front().id = id<NodeId>(suffix);
+        flow.entries = {flow.nodes.front().id};
+        candidate.workflows.push_back(std::move(flow));
+    }
+    auto& first = candidate.workflows.front();
+    std::get<ToolConfiguration>(first.nodes.front().configuration).type = key<ToolTypeId>("test.session.branch");
+    first.interface.id = key<SchemaId>("test.session.branch-flow");
+    first.interface.control_outputs = {{left, "Left"}, {right, "Right"}};
+    first.control_exports = {{left, id<NodeId>(), left}, {right, id<NodeId>(), right}};
+    const auto a = first.id, b = id<WorkflowId>('2'), c = id<WorkflowId>('3'), d = id<WorkflowId>('4');
+    candidate.graph = SolutionGraph{{a}, {{a, b, left}, {a, c, right}, {b, d}, {c, d}}, {}};
+    return candidate;
+}
+
+void solution_round_branches_and_joins()
+{
+    Fixture fixture;
+    const auto snapshot = take(fixture.session->activate(branching_solution()));
+    std::future<Result<SolutionRunReport>> running;
+    const DrainOnExit drain{*fixture.driver};
+    std::size_t next_call = 0;
+    for (const int selected : {2, 1, 0}) {
+        running = std::async(std::launch::async, [&] { return fixture.session->run_solution(snapshot, {}, arguments().trigger); });
+        const auto a = fixture.driver->await_call(next_call++);
+        auto result = success(a);
+        if (selected == 2) { result.selected_control_outputs.push_back(key<ControlOutputId>("left")); }
+        if (selected > 0) { result.selected_control_outputs.push_back(key<ControlOutputId>("right")); }
+        take(a.token.complete(std::move(result)));
+        a.exit->release();
+        take(a.token.mark_exited());
+        std::vector<Call> branches;
+        for (int i = 0; i < selected; ++i) { branches.push_back(fixture.driver->await_call(next_call++)); }
+        if (selected == 2) {
+            check(branches[0].identity.invocation.node != branches[1].identity.invocation.node,
+                "Both selected workflows can be in flight before either branch completes.");
+        } else if (selected == 1) {
+            check(branches.front().identity.invocation.node == id<NodeId>('3'), "Only the selected right workflow was dispatched.");
+        }
+        for (const auto& branch : branches) { complete_successfully(branch); }
+        if (selected > 0) {
+            const auto join = fixture.driver->await_call(next_call++);
+            check(join.identity.invocation.node == id<NodeId>('4'), "The join follows the active branches.");
+            complete_successfully(join);
+        }
+        const auto report = take(running.get());
+        const auto expected_runs = selected == 2 ? 4u : selected == 1 ? 3u : 1u;
+        check(report.status == ExecutionStatus::Succeeded && report.runs.size() == expected_runs
+            && report.skipped.size() == 4 - expected_runs, "Closed branches skip cleanly and a shared successor runs at most once.");
+        check(report.links.size() == 4 && std::ranges::none_of(report.links, [](const SolutionLinkProgress& link) {
+            return link.status == ControlLinkStatus::Pending;
+        }), "All graph control edges reach a terminal disposition.");
+        for (const auto& child : report.runs) { wait_for(child, RunWaitTarget::Quiescence); }
+    }
+}
+
+void solution_join_requires_a_current_mapped_value()
+{
+    Fixture fixture;
+    auto candidate = branching_solution();
+    auto& producer = candidate.workflows[1];
+    const auto value = key<OutputId>("value");
+    producer.interface.id = key<SchemaId>("test.producer");
+    producer.interface.outputs = {{value, "Value", DataType::integer()}};
+    producer.outputs = {{value, {producer.id, producer.nodes.front().id, value, {}}}};
+    auto& consumer = candidate.workflows.back();
+    const auto input = key<InputId>("mapped");
+    consumer.interface.id = key<SchemaId>("test.consumer");
+    consumer.interface.inputs = {{input, "Mapped value", DataType::integer(), false, ConfigValue::integer(9)}};
+    candidate.graph->bindings = {{producer.id, value, consumer.id, input}};
+    const auto snapshot = take(fixture.session->activate(candidate));
+    std::future<Result<SolutionRunReport>> running;
+    const DrainOnExit drain{*fixture.driver};
+    std::size_t index = 0;
+    for (bool produce : {true, false}) {
+        running = std::async(std::launch::async, [&] { return fixture.session->run_solution(snapshot, {}, arguments().trigger); });
+        const auto entry = fixture.driver->await_call(index++);
+        auto branch = success(entry);
+        branch.selected_control_outputs = {key<ControlOutputId>(produce ? "left" : "right")};
+        take(entry.token.complete(std::move(branch)));
+        entry.exit->release();
+        take(entry.token.mark_exited());
+        complete_successfully(fixture.driver->await_call(index++));
+        if (produce) { complete_successfully(fixture.driver->await_call(index++)); }
+        check(running.wait_for(5s) == std::future_status::ready, "An unavailable mapping must settle without starting a consumer.");
+        const auto report = take(running.get());
+        if (produce) {
+            check(report.status == ExecutionStatus::Succeeded && report.deliveries.size() == 1,
+                "The first round delivers the producer's value to the join.");
+        } else {
+            check(report.runs.size() == 2 && report.deliveries.empty() && report.status == ExecutionStatus::Failed
+                && std::ranges::any_of(report.diagnostics, [&](const Diagnostic& issue) {
+                    return issue.code == ErrorCode::InputUnavailable && issue.location.workflow == consumer.id && issue.location.input == input;
+                }), "An active control path cannot use a previous round's value or the mapped input's default.");
+        }
+        for (const auto& run : report.runs) { wait_for(run, RunWaitTarget::Quiescence); }
+    }
+}
+
+void solution_round_cancels_active_children()
+{
+    Fixture fixture;
+    const auto snapshot = take(fixture.session->activate(branching_solution()));
+    std::stop_source stop;
+    std::future<Result<SolutionRunReport>> running;
+    const DrainOnExit drain{*fixture.driver};
+    running = std::async(std::launch::async, [&] { return fixture.session->run_solution(snapshot, {}, arguments().trigger, stop.get_token()); });
+    const auto call = fixture.driver->await_call(0);
+    stop.request_stop();
+    check(call.cancellation.wait_for(5s) == std::future_status::ready && call.token.cancellation_requested(),
+        "Stopping the solution reaches the live cooperative tool.");
+    Driver::finish(call);
+    const auto report = take(running.get());
+    const auto cleanup = take(report.runs.at(0).wait(RunWaitTarget::Quiescence, std::chrono::steady_clock::now() + 5s));
+    check(report.status == ExecutionStatus::Cancelled && report.runs.size() == 1 && report.skipped.size() == 3
+        && fixture.driver->created == 1 && cleanup.outcome == RunWaitOutcome::Satisfied
+        && cleanup.progress.status == ExecutionStatus::Cancelled && cleanup.progress.quiescent,
+        "A cancelled round drains the accepted child and admits no successors.");
+}
 } // namespace
 
 int main(int argc, char* argv[])
@@ -704,6 +893,11 @@ int main(int argc, char* argv[])
             publication_pins_running_resources();
             failed_publication_keeps_active();
             submission_rechecks_capture_after_preflight();
+        } else if (test == "solution-graph") {
+            solution_round_pins_later_children();
+            solution_round_branches_and_joins();
+            solution_join_requires_a_current_mapped_value();
+            solution_round_cancels_active_children();
         } else {
             throw std::runtime_error("Unknown session test case.");
         }

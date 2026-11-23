@@ -1,5 +1,6 @@
 #include <visionpro/workflow/tool_execution.hpp>
 #include "runtime_values.hpp"
+#include "tool_configuration.hpp"
 
 #include <algorithm>
 #include <set>
@@ -153,9 +154,21 @@ core::Result<PreparedTool> PreparedTool::create(BindingResolver resolver, core::
     const auto& snapshot = resolver.snapshot();
     const auto* flow = find_workflow(snapshot.solution(), workflow);
     const auto* configured = flow ? find_node(*flow, node) : nullptr;
-    const auto* tool_config = configured ? std::get_if<ToolConfiguration>(&configured->configuration) : nullptr;
-    if (!flow || !configured || !tool_config) {
+    if (!configured) {
         return error(core::ErrorCode::UnknownTarget, "Tool execution projection requires a declared tool node, not a Group.", snapshot, workflow, node);
+    }
+    auto projected = detail::project_tool_configuration(snapshot, workflow, *configured);
+    if (const auto* failure = std::get_if<core::Diagnostic>(&projected)) { return *failure; }
+    return PreparedTool{snapshot, std::move(resolver), std::get<core::ToolExecutionConfiguration>(std::move(projected))};
+}
+
+core::Result<core::ToolExecutionConfiguration> detail::project_tool_configuration(
+    const ConfigSnapshot& snapshot, core::WorkflowId workflow, const Node& configured)
+{
+    const auto node = configured.id;
+    const auto* tool_config = std::get_if<ToolConfiguration>(&configured.configuration);
+    if (!tool_config) {
+        return error(core::ErrorCode::UnknownTarget, "Tool execution projection requires a tool node, not a Group.", snapshot, workflow, node);
     }
     const auto* tool = snapshot.find_tool(tool_config->type);
     if (!tool) { return error(core::ErrorCode::UnknownTool, "Tool execution metadata is absent from the snapshot.", snapshot, workflow, node); }
@@ -163,7 +176,7 @@ core::Result<PreparedTool> PreparedTool::create(BindingResolver resolver, core::
         workflow, node, *tool, {}, {}, tool_config->shared_targets};
     for (const auto& parameter : tool->parameters) {
         if (parameter.binding.time != core::BindingTime::SnapshotBuild) { continue; }
-        auto value = fixed_parameter(parameter, *configured);
+        auto value = fixed_parameter(parameter, configured);
         if (const auto* failure = std::get_if<core::Diagnostic>(&value)) {
             auto diagnostic = *failure;
             diagnostic.location.solution = snapshot.solution().id; diagnostic.location.workflow = workflow;
@@ -172,7 +185,7 @@ core::Result<PreparedTool> PreparedTool::create(BindingResolver resolver, core::
         }
         data.parameters.push_back({parameter.id, std::get<core::ConfigValue>(std::move(value))});
     }
-    for (const auto& resource : configured->resources) {
+    for (const auto& resource : configured.resources) {
         if (auto checked = core::validate_resource_reference(resource.resource, snapshot.solution().resources);
             const auto* failure = std::get_if<core::Diagnostic>(&checked)) { return *failure; }
         auto fixed = resource.resource;
@@ -181,9 +194,7 @@ core::Result<PreparedTool> PreparedTool::create(BindingResolver resolver, core::
         else if (const auto* external = std::get_if<core::ExternalFileResource>(&definition->location)) { fixed.revision = external->revision; }
         data.resources.push_back({resource.slot, fixed});
     }
-    auto projected = core::ToolExecutionConfiguration::create(data);
-    if (const auto* failure = std::get_if<core::Diagnostic>(&projected)) { return *failure; }
-    return PreparedTool{snapshot, std::move(resolver), std::get<core::ToolExecutionConfiguration>(std::move(projected))};
+    return core::ToolExecutionConfiguration::create(data);
 }
 
 InvocationPreparation PreparedTool::prepare(const ResolutionContext& context, core::AttemptId attempt,
