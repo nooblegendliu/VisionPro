@@ -1,11 +1,14 @@
 #include "control_scene.hpp"
 #include "editor_window.hpp"
+#include "module_history_panel.hpp"
 #include "run_controller.hpp"
 #include "run_panel.hpp"
 #include "tool_catalog.hpp"
 
 #include <visionpro/core/id_factory.hpp>
 #include <visionpro/core/schema_id_factory.hpp>
+#include <visionpro/infrastructure/camera.hpp>
+#include <visionpro/infrastructure/communication.hpp>
 
 #include <QAction>
 #include <QDockWidget>
@@ -63,7 +66,7 @@ ControlScene& scene(EditorWindow& window)
 
 QAction& action(EditorWindow& window, const char* name) { return *window.findChild<QAction*>(QString::fromLatin1(name)); }
 
-template<class Fill> bool submit_dialog(QAction& entry, const Fill& fill)
+template<class Fill> bool submit_dialog(QAction& entry, const Fill& fill, QWidget* button = nullptr)
 {
     bool accepted = false;
     QTimer interaction;
@@ -79,7 +82,8 @@ template<class Fill> bool submit_dialog(QAction& entry, const Fill& fill)
         if (!accepted) { dialog->reject(); }
     });
     interaction.start(0);
-    entry.trigger();
+    if (button) { QTest::mouseClick(button, Qt::LeftButton); }
+    else { entry.trigger(); }
     return accepted;
 }
 
@@ -149,13 +153,72 @@ class EditorRunTests final : public QObject {
 
 private slots:
     void runs_linked_solution_and_shows_delivery();
+    void overview_links_only_its_own_children();
     void publishes_draft_and_isolates_debug();
     void runs_unsaved_absolute_resources();
     void selects_each_iteration_of_the_same_node();
     void runs_and_debugs_selected_group_with_public_inputs();
     void replays_saved_trigger_in_editor_and_cli();
     void arming_preserves_session_state();
+    void browses_resource_definitions_and_edits_an_endpoint();
 };
+
+void EditorRunTests::browses_resource_definitions_and_edits_an_endpoint()
+{
+    auto draft = counter_fixture();
+    const auto plc = id<ResourceId>('2');
+    draft.resources = {
+        {id<ResourceId>(), "Inspection camera", ResourceKind::Device,
+            DeviceResource{key<SchemaId>("visionpro.camera.simulated"), take(infrastructure::camera_device_config("SIM-001"))}},
+        {plc, "Fixture PLC", ResourceKind::Device, DeviceResource{key<SchemaId>("visionpro.modbus.tcp"),
+            take(infrastructure::communication_config("127.0.0.1", 502, 1))}}};
+    draft.variables = {{id<VariableId>(), "Batch size", DataType::integer(), ConfigValue::integer(7)}};
+    EditorWindow window(draft, counter_registry());
+    window.show();
+    auto& controller = *window.findChild<RunController*>();
+    auto& undo = scene(window).undoStack();
+    action(window, "solutionResources").trigger();
+    auto* dialog = window.findChild<QDialog*>(QStringLiteral("solutionResourcesDialog"));
+    QVERIFY(dialog && dialog->isVisible());
+    auto* tree = dialog->findChild<QTreeWidget*>(QStringLiteral("solutionResourceTree"));
+    auto* edit = dialog->findChild<QPushButton*>(QStringLiteral("editResourceDefinition"));
+    auto find = [&](const QString& name) {
+        return tree->findItems(name, Qt::MatchExactly | Qt::MatchRecursive).value(0);
+    };
+    QVERIFY(dialog->findChild<QLabel*>(QStringLiteral("resourceSession"))->text().contains(QStringLiteral("尚无活动运行快照")));
+    auto* variable = find(QStringLiteral("Batch size"));
+    QVERIFY(variable && variable->text(1).contains(QStringLiteral("7")));
+    tree->setCurrentItem(variable);
+    QVERIFY(!edit->isEnabled());
+    auto* camera = find(QStringLiteral("Inspection camera"));
+    QVERIFY(camera && camera->text(1).contains(QStringLiteral("SIM-001")));
+    tree->setCurrentItem(camera);
+    QCOMPARE(camera->text(2), QStringLiteral("未查询设备"));
+    QVERIFY(edit->isEnabled());
+    // The device is available for an independent owner while its definition is on screen.
+    QVERIFY(std::holds_alternative<std::shared_ptr<infrastructure::CameraLease>>(infrastructure::open_camera(draft.resources.front())));
+    auto* endpoint = find(QStringLiteral("Fixture PLC"));
+    QVERIFY(endpoint && endpoint->text(1).contains(QStringLiteral("127.0.0.1:502")));
+    tree->setCurrentItem(endpoint);
+    QCOMPARE(endpoint->text(2), QStringLiteral("未查询设备"));
+    QVERIFY(!controller.has_session_work());
+    QVERIFY(undo.isClean());
+    QTimer::singleShot(0, dialog, [] {
+        auto* editor = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+        auto* name = editor->findChild<QLineEdit*>(QStringLiteral("endpointName"));
+        name->setText(QStringLiteral("Renamed PLC"));
+        editor->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Ok)->click();
+    });
+    edit->click();
+    QVERIFY(find(QStringLiteral("Renamed PLC")));
+    QCOMPARE(window.draft().resources.back().id, plc);
+    QCOMPARE(undo.count(), 1);
+    dialog->close();
+    undo.undo();
+    QCOMPARE(window.draft().resources.back().name, std::string("Fixture PLC"));
+    QCOMPARE(window.draft().resources.back().id, plc);
+    QVERIFY(!controller.has_session_work());
+}
 
 void EditorRunTests::runs_linked_solution_and_shows_delivery()
 {
@@ -178,7 +241,7 @@ void EditorRunTests::runs_linked_solution_and_shows_delivery()
         mode->setCurrentIndex(1);
         field->setText(QStringLiteral("0"));
         return true;
-    }));
+    }, toolbar->widgetForAction(&start)));
     QTRY_VERIFY(controller.solution_report().has_value());
     const auto& report = *controller.solution_report();
     QCOMPARE(report.status, ExecutionStatus::Succeeded);
@@ -217,6 +280,50 @@ void EditorRunTests::runs_linked_solution_and_shows_delivery()
     QCOMPARE(controller.solution_report()->status, ExecutionStatus::Cancelled);
     QVERIFY(controller.solution_report()->runs.empty() && controller.solution_report()->deliveries.empty());
     QVERIFY(!cancel.isEnabled());
+}
+
+void EditorRunTests::overview_links_only_its_own_children()
+{
+    const auto registry = take(app::make_tool_registry());
+    const auto package = std::filesystem::path{VISIONPRO_S63_DIRECTORY}.parent_path() / "f3-solution-graph";
+    const auto draft = take(infrastructure::load_solution(package, registry)).solution();
+    EditorWindow window(draft, registry);
+    window.show();
+    auto& controller = *window.findChild<RunController*>();
+    auto* history = window.findChild<ModuleHistoryPanel*>();
+    auto* tree = window.findChild<QTreeWidget*>(QStringLiteral("solutionOverview"));
+    auto* origin = window.findChild<QLabel*>(QStringLiteral("resultContext"));
+    QVERIFY(history && tree && origin);
+    const auto submit = [&](int index) {
+        controller.start_solution(draft, {}, {{draft.workflows[0].id,
+            {{{key<InputId>("index"), DataValue::integer(index)}}, {}}}});
+    };
+    submit(0);
+    QTRY_VERIFY(controller.can_start() && controller.solution_report().has_value());
+    const auto old_b = controller.solution_report()->runs.back();
+    QVERIFY(submit_dialog(action(window, "runWorkflow"), [](QDialog&, QPushButton&) { return true; }));
+    QTRY_VERIFY(controller.can_start() && controller.runs().size() == 3);
+    const auto independent = controller.runs().back().identity();
+    submit(1);
+    QTRY_VERIFY(controller.can_start() && controller.solution_report().has_value());
+    const auto& latest = *controller.solution_report();
+    QCOMPARE(latest.runs.size(), 2u);
+    QVERIFY(std::ranges::none_of(latest.runs, [&](const auto& run) { return run.identity() == independent; }));
+    action(window, "showSolutionOverview").trigger();
+    QTRY_VERIFY(tree->isVisible());
+    QCOMPARE(tree->topLevelItem(1)->childCount(), 1);
+    QVERIFY(tree->topLevelItem(2)->child(0)->text(0).contains("area"));
+    QVERIFY(tree->topLevelItem(2)->child(0)->text(1).contains("fifth"));
+    auto* round = tree->topLevelItem(3);
+    QCOMPARE(round->childCount(), 2);
+    tree->setCurrentItem(round->child(1));
+    QTest::keyClick(tree, Qt::Key_Return);
+    QTRY_VERIFY(history->selected_run() && history->selected_run()->identity() == latest.runs.back().identity());
+    QVERIFY(!tree->isVisible());
+    QVERIFY(origin->text().contains(QStringLiteral("方案第 %1 轮").arg(latest.sequence)));
+    history->browse_run(old_b);
+    QTRY_VERIFY(origin->text().contains(QStringLiteral("无可用的所属方案报告")));
+    QCOMPARE(*history->selected_run()->request().input(key<InputId>("fifth"))->value.as_int64(), 6);
 }
 
 void EditorRunTests::arming_preserves_session_state()

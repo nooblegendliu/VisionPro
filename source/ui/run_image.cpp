@@ -368,7 +368,7 @@ Result<QImage> workspace_thumbnail(const RunHandle& run, const WorkspaceImageSou
 }
 
 Result<std::monostate> show_run_image(ImagePanel& panel, const RunHandle& run, const InvocationKey& invocation,
-    const std::optional<OutputId>& output, const Solution* display_config)
+    const std::optional<OutputId>& output, const Solution* display_config, bool exact_port)
 {
     const auto queried = run.lookup(invocation);
     if (const auto* failure = std::get_if<Diagnostic>(&queried)) { return *failure; }
@@ -376,7 +376,7 @@ Result<std::monostate> show_run_image(ImagePanel& panel, const RunHandle& run, c
     if (!selected) { return issue(ErrorCode::InputUnavailable, "The selected invocation has no published result."); }
     const auto* tool = run_tool(run, invocation.node);
     const bool blob = version_one_tool(tool, "visionpro.image.blob");
-    if (blob || version_one_tool(tool, "visionpro.measure.color_mean")) {
+    if (!exact_port && (blob || version_one_tool(tool, "visionpro.measure.color_mean"))) {
         if (output) {
             const auto value = available_output(selected->output(*output));
             if (const auto* failure = std::get_if<Diagnostic>(&value)) { return *failure; }

@@ -84,6 +84,7 @@ private Q_SLOTS:
     void keyboard_connects_steps_and_undoes();
     void drag_icon_onto_canvas();
     void canvas_remembers_workflow_and_group_views();
+    void saves_explicitly_arranged_positions();
     void canvas_zoom_controls_stay_visible_when_scrolling();
     void new_document_creates_empty_workflow();
     void workflow_and_clipboard_share_history();
@@ -200,6 +201,8 @@ void EditorTests::toolbox_search_add_and_compact_view()
         }
         return matches;
     };
+    QVERIFY(visible().isEmpty());
+    action(window, "showDeveloperTools").setChecked(true);
     QCOMPARE(visible().size(), 1);
     auto* adder = visible().front();
     QCOMPARE(adder->property("toolType").toString(), search->text());
@@ -261,6 +264,7 @@ void EditorTests::keyboard_connects_steps_and_undoes()
     flow.entries.clear();
     initial.layouts.clear();
     EditorWindow window(std::move(initial), registry());
+    action(window, "showDeveloperTools").setChecked(true);
     window.show();
     window.activateWindow();
     QVERIFY(QTest::qWaitForWindowActive(&window));
@@ -369,6 +373,7 @@ void EditorTests::drag_icon_onto_canvas()
 {
     const auto original = canvas_example();
     EditorWindow window(original, registry());
+    action(window, "showDeveloperTools").setChecked(true);
     window.show();
     const auto tool_id = QStringLiteral("visionpro.sim.add");
     auto* search = window.findChild<QLineEdit*>(QStringLiteral("toolSearch"));
@@ -380,7 +385,7 @@ void EditorTests::drag_icon_onto_canvas()
     const auto tile = std::ranges::find_if(buttons, [&](const auto* button) { return button->property("toolType").toString() == tool_id; });
     QVERIFY(tile != buttons.end() && (*tile)->isVisibleTo(toolbox));
     canvas->scale(1.5, 1.5);
-    const QPoint target(115, 160);
+    const QPoint target(300, 160);
     const auto expected_position = canvas->mapToScene(target);
     QMimeData data;
     const auto format = QStringLiteral("application/x-visionpro-tool-type");
@@ -405,6 +410,29 @@ void EditorTests::drag_icon_onto_canvas()
     const auto& placement = window.draft().layouts.front().nodes.back();
     QCOMPARE(placement.node, node.id);
     QCOMPARE(QPointF(placement.x, placement.y), expected_position);
+}
+
+void EditorTests::saves_explicitly_arranged_positions()
+{
+    QTemporaryDir scratch;
+    const auto catalog = registry();
+    EditorWindow window(canvas_example(), catalog);
+    action(window, "arrangeScope").trigger();
+    QCOMPARE(scene(window).undoStack().count(), 1);
+    const auto expected = window.draft().layouts;
+    const auto dir = fs::path(scratch.path().toStdWString()) / "arranged";
+    window.transfer_document(dir, SolutionTransfer::SaveAs);
+    QTRY_VERIFY(!window.file_busy());
+    const auto persisted = take(load_solution(dir, catalog));
+    EditorWindow reopened(persisted.solution(), catalog);
+    for (const auto& layout : expected) {
+        for (const auto& saved : layout.nodes) {
+            const auto* point = find_placement(reopened.draft(), layout.workflow, saved.node);
+            QVERIFY(point);
+            QCOMPARE(QPointF(point->x, point->y), QPointF(saved.x, saved.y));
+        }
+    }
+    QVERIFY(scene(reopened).undoStack().isClean());
 }
 
 void EditorTests::imports_reusable_subgraphs_as_undoable_edits()

@@ -1,6 +1,8 @@
 #include "control_scene.hpp"
 #include "workspace_appearance.hpp"
 #include "workspace_style.hpp"
+#include "run_panel.hpp"
+#include "toolbox_catalog.hpp"
 
 #include <QtNodes/ConnectionIdUtils>
 #include <QtNodes/DefaultNodePainter>
@@ -14,6 +16,7 @@
 #include <QGraphicsSceneMouseEvent>
 #include <QGraphicsView>
 #include <QSignalBlocker>
+#include <QTextDocument>
 
 #include <visionpro/core/id_factory.hpp>
 #include <visionpro/core/schema_id_factory.hpp>
@@ -33,7 +36,7 @@ namespace {
 using EditResult = core::Result<std::monostate>;
 using namespace workflow;
 
-constexpr int title_flags = Qt::AlignCenter | Qt::TextWrapAnywhere;
+constexpr int title_flags = Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine;
 
 // Control nodes have a title, one input and one or more execution outlets.
 // The geometry is also used by QtNodes for wire endpoints and hit testing.
@@ -48,21 +51,23 @@ public:
     QPointF widgetPosition(NodeId) const override { return {}; }
     QRect resizeHandleRect(NodeId) const override { return {}; }
 
-    void recomputeSize(NodeId id) const override
+    void recomputeSize(NodeId id) const override { _graphModel.setNodeData(id, NodeRole::Size, measured_size(id)); }
+
+    QSize measured_size(NodeId id) const
     {
-        const QSize title = title_size(id);
         const int ports = out_count(id);
         const int port_width = widest_label(id);
         const int width = vertical_ ? ports * slot_width(port_width) : port_width + 2 * padding;
         const int port_height = vertical_ ? (port_width ? port_metrics_.height() + 3 : 0) : ports * row_height();
-        _graphModel.setNodeData(id, NodeRole::Size, QSize(std::max({80, width, title.width() + 2 * padding}),
-            title.height() + 2 * padding + port_height));
+        const int name_width = title_metrics_.horizontalAdvance(_graphModel.nodeData<QString>(id, NodeRole::Caption));
+        const int title_width = std::clamp(name_width + 2 * padding + icon_space, 110, 134);
+        return {std::max(width, title_width), header_height() + 2 * padding + port_height};
     }
 
     QRectF captionRect(NodeId id) const override
     {
-        const auto title = title_size(id);
-        return {(size(id).width() - title.width()) / 2.0, padding, qreal(title.width()), qreal(title.height())};
+        return {padding + icon_space, padding, qreal(size(id).width() - 2 * padding - icon_space),
+            qreal(title_metrics_.height())};
     }
     QPointF captionPosition(NodeId id) const override { return captionRect(id).topLeft() + QPointF(0, title_metrics_.ascent()); }
 
@@ -70,7 +75,7 @@ public:
     {
         const QSize node = size(id);
         if (!vertical_) {
-            const qreal y = padding + title_size(id).height() + (index + 0.5) * row_height();
+            const qreal y = padding + header_height() + (index + 0.5) * row_height();
             return {type == PortType::In ? 0.0 : qreal(node.width()), y};
         }
         if (type == PortType::In) { return {node.width() / 2.0, 0.0}; }
@@ -92,14 +97,9 @@ public:
     const QFont port_font = workspace_font(WorkspaceText::Secondary);
 
 private:
-    static constexpr int padding = 9;
-    QSize title_size(NodeId id) const
-    {
-        const auto text = _graphModel.nodeData<QString>(id, NodeRole::Caption);
-        const int width = std::clamp(title_metrics_.horizontalAdvance(text) + 2, 1, 150);
-        const auto rect = title_metrics_.boundingRect(QRect(0, 0, width, 0), title_flags, text);
-        return {std::max(width, rect.width()), std::max(title_metrics_.height(), rect.height())};
-    }
+    static constexpr int padding = workspace_size::gap;
+    static constexpr int icon_space = workspace_size::toolbar_icon + workspace_size::small_gap;
+    int header_height() const { return title_metrics_.height() + port_metrics_.height(); }
     int out_count(NodeId id) const { return _graphModel.nodeData<int>(id, NodeRole::OutPortCount); }
     int widest_label(NodeId id) const
     {
@@ -133,8 +133,33 @@ public:
         const NodeStyle style(QJsonDocument::fromVariant(model.nodeData(id, NodeRole::Style)).object());
         painter->setPen(style.FontColor);
         painter->setFont(geometry.title_font);
-        painter->drawText(geometry.captionRect(id), title_flags, model.nodeData<QString>(id, NodeRole::Caption));
+        const auto caption = geometry.captionRect(id);
+        const auto name = model.nodeData<QString>(id, NodeRole::Caption);
+        const auto type = model.nodeData<QString>(id, NodeRole::Type);
+        if (dark_ != workspace_is_dark()) { icons_.clear(); dark_ = workspace_is_dark(); }
+        auto icon = icons_.find(type);
+        if (icon == icons_.end()) { icon = icons_.insert(type, toolbox_entry(type.toStdString(), {}).icon); }
+        const int side = workspace_size::toolbar_icon;
+        icon->paint(painter, QRect(workspace_size::gap, int(caption.center().y()) - side / 2, side, side));
+        painter->drawText(caption, title_flags, QFontMetrics(geometry.title_font).elidedText(name, Qt::ElideMiddle, int(caption.width())));
         painter->setFont(geometry.port_font);
+        const auto badge = scene.node_badge(id);
+        auto status_box = caption.translated(0, caption.height());
+        status_box.setHeight(QFontMetrics(geometry.port_font).height());
+        const auto ordinal = QString::number(static_cast<const ControlGraphModel&>(model).display_number(id));
+        painter->setPen(style.FontColorFaded);
+        painter->drawText(QRectF(2, status_box.top(), caption.left() - 4, status_box.height()),
+            Qt::AlignCenter, ordinal);
+        const auto& colors = workspace_colors();
+        QColor ink = style.FontColorFaded;
+        if (badge.status == ExecutionStatus::Failed || badge.status == ExecutionStatus::TimedOut) { ink = colors.error; }
+        else if (badge.status == ExecutionStatus::Cancelled) { ink = colors.warning; }
+        else if (badge.judgement == Judgement::OK) { ink = colors.positive; }
+        else if (badge.judgement == Judgement::NG) { ink = colors.negative; }
+        painter->setPen(ink);
+        painter->drawText(status_box, title_flags, QFontMetrics(geometry.port_font).elidedText(badge.text, Qt::ElideRight, int(caption.width())));
+        node.setToolTip(Qt::convertFromPlainText(ordinal + QStringLiteral("  ") + name + u'\n' + badge.text + badge.elapsed));
+        painter->setPen(style.FontColor);
         if (show_ports) {
             drawEntryLabels(painter, node);
         } else {
@@ -149,6 +174,9 @@ public:
         }
         drawValidationIcon(painter, node);
     }
+private:
+    mutable QHash<QString, QIcon> icons_;
+    mutable bool dark_{};
 };
 
 class ControlConnectionPainter final : public DefaultConnectionPainter {
@@ -326,6 +354,64 @@ std::vector<core::NodeId> ControlScene::selected_nodes() const
         }
     }
     return result;
+}
+
+void ControlScene::display_run(const std::optional<RunHandle>& run, std::optional<core::ExecutionScopeId> scope,
+    std::optional<core::InvocationKey> invocation)
+{
+    if (run && finished_run_ == run->identity() && display_scope_ == scope && display_call_ == invocation) { return; }
+    finished_run_.reset();
+    display_scope_ = scope;
+    display_call_ = invocation;
+    std::map<core::NodeId, NodeBadge> next;
+    if (run && run->identity().workflow == model_.workflow_id()) {
+        auto inspected = run->inspect();
+        if (const auto* progress = std::get_if<RunProgress>(&inspected)) {
+            for (const auto& call : progress->nodes) {
+                // Root progress has no explicit scope; its invocation uses scope zero.
+                if (scope && scope->value() != (call.scope ? call.scope->value() : 0)) { continue; }
+                if (invocation && call.node == invocation->node && call.invocation != invocation) { continue; }
+                auto [item, unique] = next.try_emplace(call.node);
+                if (!unique) { item->second = {tr("请选择调用")}; continue; }
+                auto& badge = item->second;
+                badge.status = call.status;
+                auto& label = badge.text;
+                label = call.skip_reason == NodeSkipReason::Disabled ? tr("已禁用") : execution_status_text(call.status);
+                if (call.invocation && call.status == ExecutionStatus::Succeeded) {
+                    const auto lookup = run->lookup(*call.invocation);
+                    if (const auto* result = std::get_if<std::optional<NodeResult>>(&lookup); result && *result) {
+                        const auto& data = (*result)->data();
+                        badge.judgement = data.judgement;
+                        if (data.elapsed) {
+                            badge.elapsed = tr(" · 耗时 %1 ms").arg(std::chrono::duration<double, std::milli>(*data.elapsed).count(), 0, 'f', 2);
+                        }
+                        switch (badge.judgement) {
+                        case Judgement::OK: label += QStringLiteral(" · OK"); break;
+                        case Judgement::NG: label += QStringLiteral(" · NG"); break;
+                        case Judgement::NotEvaluated: break;
+                        }
+                    }
+                }
+            }
+            if (progress->quiescent) { finished_run_ = run->identity(); }
+        }
+    }
+    if (next == statuses_) { return; }
+    next.swap(statuses_);
+    for (auto id : model_.allNodeIds()) {
+        const auto key = *model_.domain_node(id);
+        const auto old = next.find(key), current = statuses_.find(key);
+        if (old == next.end() && current == statuses_.end()) { continue; }
+        if (old != next.end() && current != statuses_.end() && old->second == current->second) { continue; }
+        if (auto* item = nodeGraphicsObject(id)) { item->update(); }
+    }
+}
+
+ControlScene::NodeBadge ControlScene::node_badge(NodeId id) const
+{
+    if (const auto entry = statuses_.find(*model_.domain_node(id)); entry != statuses_.end()) { return entry->second; }
+    const auto& node = model_.active_workflow()->nodes[model_.nodes_.at(id).source_index];
+    return {node.enabled ? tr("未运行") : tr("已禁用")};
 }
 
 bool ControlScene::report_edit(core::Result<bool> result)
@@ -583,6 +669,53 @@ bool ControlScene::move_nodes(std::span<const CanvasMove> moves)
         Q_EMIT edit_failed(QString::fromUtf8(error.what()));
         return false;
     }
+}
+
+bool ControlScene::arrange_scope()
+{
+    if (!editing_enabled_ || !model_.active_workflow()) { return false; }
+    // Place a node only after every visible predecessor. Each edge contributes
+    // one count even when two different branch outlets share a destination.
+    std::map<NodeId, int> incoming;
+    std::map<NodeId, std::vector<NodeId>> next;
+    for (auto id : model_.allNodeIds()) { incoming.emplace(id, 0); }
+    for (const auto& edge : model_.active_workflow()->control_links) {
+        const auto source = model_.canvas_id(edge.source);
+        const auto target = model_.canvas_id(edge.target);
+        if (incoming.contains(source) && incoming.contains(target)) {
+            next[source].push_back(target);
+            ++incoming[target];
+        }
+    }
+    std::vector<NodeId> row;
+    for (const auto& [node, count] : incoming) { if (count == 0) { row.push_back(node); } }
+    std::vector<CanvasMove> moves;
+    const ControlNodeGeometry vertical(model_, Qt::Vertical);
+    qreal top = 0;
+    while (!row.empty()) {
+        std::ranges::sort(row);
+        qreal left = 0;
+        int height = 0;
+        std::vector<NodeId> following;
+        for (auto node : row) {
+            const auto size = vertical.measured_size(node);
+            moves.push_back({node, {left, top}});
+            left += size.width() + 48;
+            height = std::max(height, size.height());
+            for (auto target : next[node]) {
+                if (--incoming[target] == 0) { following.push_back(target); }
+            }
+        }
+        top += height + 72;
+        row.swap(following);
+    }
+    if (moves.size() != incoming.size()) {
+        Q_EMIT edit_notice(tr("当前层级含循环控制连接，无法按执行先后整理。"));
+        return false;
+    }
+    return model_.move_nodes(undoStack(), moves, [this, workflow = model_.workflow_id(), scope = model_.scope()] {
+        if (workflow == model_.workflow_id() && scope == model_.scope()) { setOrientation(model_.layout_orientation()); }
+    });
 }
 
 std::optional<ConnectionId> ControlScene::selected_control() const

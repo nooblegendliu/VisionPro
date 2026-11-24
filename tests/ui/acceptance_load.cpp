@@ -164,9 +164,9 @@ void write_frame(const QString& path)
     require(image.save(path, "PNG"), "Unable to save the load fixture image.");
 }
 
-template<class Control> Control& control(EditorWindow& window, const char* object_name)
+template<class Control> Control& control(QWidget& owner, const char* object_name)
 {
-    auto* found = window.findChild<Control*>(QString::fromLatin1(object_name));
+    auto* found = owner.findChild<Control*>(QString::fromLatin1(object_name));
     require(found, std::string("Missing desktop control ") + object_name);
     return *found;
 }
@@ -278,7 +278,7 @@ double show_and_paint(EditorWindow& window, std::size_t node, const ImageHandle&
     tree.setCurrentItem(item);
     auto& show = control<QPushButton>(window, "showRunImage");
     auto& panel = control<ImagePanel>(window, "imagePanel");
-    auto& view = control<ImageView>(window, "imageView");
+    auto& view = control<ImageView>(panel, "imageView");
     require(show.isEnabled(), "The result has no image presentation action.");
     QCoreApplication::processEvents();
 
@@ -437,7 +437,7 @@ QJsonObject measure()
     const auto retained = static_cast<qint64>(controller.runs().size());
     const auto dropped = static_cast<qint64>(controller.dropped());
     const auto canvas_pixels = control<QtNodes::GraphicsView>(window, "workflowCanvas").viewport()->size();
-    const auto image_pixels = control<ImageView>(window, "imageView").viewport()->size();
+    const auto image_pixels = control<ImageView>(panel, "imageView").viewport()->size();
     const auto size_json = [](QSize size) { return QJsonArray{size.width(), size.height()}; };
     controller.set_limits(0, controller.observation_capacity());
     require(controller.runs().empty() && panel.frame().has_value(), "Clearing history released the image display's own frame.");

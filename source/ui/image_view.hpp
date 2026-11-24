@@ -60,6 +60,7 @@ public:
 
 signals:
     void pixel_changed(const QString& pixel);
+    void zoom_changed(double ratio);
     void rectangle_drawn(const QRectF& rectangle);
     void vertex_picked(const QPointF& position);
 

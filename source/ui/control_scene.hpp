@@ -1,6 +1,7 @@
 #pragma once
 
 #include "control_graph_model.hpp"
+#include <visionpro/workflow/run_handle.hpp>
 
 #include <QtNodes/BasicGraphicsScene>
 
@@ -34,6 +35,17 @@ public:
     bool connect_control(QtNodes::ConnectionId connection);
     bool remove_control(QtNodes::ConnectionId connection);
     bool move_nodes(std::span<const CanvasMove> moves);
+    bool arrange_scope();
+    void display_run(const std::optional<workflow::RunHandle>& run, std::optional<core::ExecutionScopeId> scope,
+        std::optional<core::InvocationKey> invocation);
+    struct NodeBadge {
+        QString text;
+        QString elapsed;
+        workflow::ExecutionStatus status{workflow::ExecutionStatus::Pending};
+        workflow::Judgement judgement{workflow::Judgement::NotEvaluated};
+        bool operator==(const NodeBadge&) const = default;
+    };
+    NodeBadge node_badge(QtNodes::NodeId id) const;
     std::optional<QtNodes::ConnectionId> selected_control() const;
 
 Q_SIGNALS:
@@ -65,6 +77,10 @@ private:
     std::optional<Clipboard> clipboard_;
     QtNodes::NodeId wiring_target_{QtNodes::InvalidNodeId};
     bool editing_enabled_{true};
+    std::map<core::NodeId, NodeBadge> statuses_;
+    std::optional<workflow::RunIdentity> finished_run_;
+    std::optional<core::ExecutionScopeId> display_scope_;
+    std::optional<core::InvocationKey> display_call_;
 };
 
 } // namespace visionpro::ui

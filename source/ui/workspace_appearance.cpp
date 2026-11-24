@@ -15,16 +15,18 @@ const WorkspaceColors light{
     .window = 0xf3f4f5, .surface = 0xffffff, .text = 0x172634, .secondary = 0x506370,
     .button = 0xeff2f4, .border = 0xc2cbd1, .highlight = 0xc4e4ea, .highlightedText = 0x143b44,
     .accent = 0x006d75, .canvas = 0x32393e, .grid = 0x3b4247, .node = 0xe9edf1,
-    .nodeText = 0x172634, .nodeBorder = 0xa7b3bb, .nodePortFilled = 0x006d75, .selection = 0xff993c,
-    .connection = 0x7bd3cf, .connectionSelected = 0xffab50, .positive = 0x167045, .negative = 0xaa3028,
+    .nodeText = 0x172634, .nodeBorder = 0xa7b3bb, .nodePortFilled = 0x006d75, .selection = 0x009c9b,
+    .connection = 0x7bd3cf, .connectionSelected = 0xb9fff8, .positive = 0x167045, .negative = 0xaa3028,
+    .disabled = 0x697984, .warning = 0x855307, .error = 0xb32c30,
 };
 
 const WorkspaceColors dark{
     .window = 0x20252b, .surface = 0x292f36, .text = 0xe6ebef, .secondary = 0xb4bfc8,
     .button = 0x343c45, .border = 0x49535e, .highlight = 0x284952, .highlightedText = 0xedf6f8,
     .accent = 0x80d4d0, .canvas = 0x1c2228, .grid = 0x2b343d, .node = 0x34414b,
-    .nodeText = 0xe6ebef, .nodeBorder = 0x768794, .nodePortFilled = 0x80d4d0, .selection = 0xffb35c,
-    .connection = 0x80d4d0, .connectionSelected = 0xffb35c, .positive = 0x89d5a7, .negative = 0xff9d93,
+    .nodeText = 0xe6ebef, .nodeBorder = 0x768794, .nodePortFilled = 0x80d4d0, .selection = 0x80d4d0,
+    .connection = 0x80d4d0, .connectionSelected = 0xbefff5, .positive = 0x89d5a7, .negative = 0xff9d93,
+    .disabled = 0x88949e, .warning = 0xf1c779, .error = 0xffaaa5,
 };
 
 QSettings user_settings()
@@ -42,7 +44,7 @@ QPalette widget_palette(const WorkspaceColors& c, bool isDark)
     palette.setColor(QPalette::Button, c.button);
     for (auto role : {QPalette::Text, QPalette::WindowText, QPalette::ButtonText}) {
         palette.setColor(role, c.text);
-        palette.setColor(QPalette::Disabled, role, isDark ? QColor(0x88949e) : QColor(0x697984));
+        palette.setColor(QPalette::Disabled, role, c.disabled);
     }
     palette.setColor(QPalette::PlaceholderText, c.secondary);
     palette.setColor(QPalette::Light, c.button.lighter(isDark ? 135 : 108));

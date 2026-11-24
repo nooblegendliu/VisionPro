@@ -1,0 +1,396 @@
+{
+    "environment": {
+        "canvas_input": "Synthetic QMouseEvent sequence to Qt canvas viewport",
+        "canvas_viewport_size_at_run": [
+            701,
+            727
+        ],
+        "canvas_zoom_percent": 100,
+        "device_pixel_ratio": 1,
+        "image_viewport_size_at_run": [
+            635,
+            476
+        ],
+        "platform": "offscreen",
+        "qt_version": "6.11.1",
+        "window_size": [
+            1440,
+            900
+        ]
+    },
+    "fixture": {
+        "background": 24,
+        "blob_area_pixels": 230400,
+        "control_edges": 300,
+        "foreground": 220,
+        "image_file": "PNG",
+        "image_height": 1080,
+        "image_width": 1920,
+        "nodes": 100,
+        "rectangle_xywh": [
+            320,
+            240,
+            640,
+            360
+        ],
+        "sample_format": "UInt8 Mono",
+        "simulation_nodes": 97,
+        "threshold": 128,
+        "vision_nodes": 3
+    },
+    "memory_samples": [
+        {
+            "display_logical_image_bytes_outside_history": 0,
+            "dropped_notifications": 0,
+            "private_bytes": 98291712,
+            "retained_distinct_image_buffers": 0,
+            "retained_logical_image_bytes": 0,
+            "retained_runs": 0,
+            "stage": "before_runs",
+            "working_set_bytes": 52944896
+        },
+        {
+            "display_logical_image_bytes_outside_history": 0,
+            "dropped_notifications": 69,
+            "private_bytes": 117121024,
+            "retained_distinct_image_buffers": 3,
+            "retained_logical_image_bytes": 6220800,
+            "retained_runs": 1,
+            "stage": "run_1",
+            "working_set_bytes": 73601024
+        },
+        {
+            "display_logical_image_bytes_outside_history": 0,
+            "dropped_notifications": 139,
+            "private_bytes": 124366848,
+            "retained_distinct_image_buffers": 6,
+            "retained_logical_image_bytes": 12441600,
+            "retained_runs": 2,
+            "stage": "run_2",
+            "working_set_bytes": 81129472
+        },
+        {
+            "display_logical_image_bytes_outside_history": 0,
+            "dropped_notifications": 209,
+            "private_bytes": 131424256,
+            "retained_distinct_image_buffers": 9,
+            "retained_logical_image_bytes": 18662400,
+            "retained_runs": 3,
+            "stage": "run_3",
+            "working_set_bytes": 88170496
+        },
+        {
+            "display_logical_image_bytes_outside_history": 0,
+            "dropped_notifications": 279,
+            "private_bytes": 138506240,
+            "retained_distinct_image_buffers": 12,
+            "retained_logical_image_bytes": 24883200,
+            "retained_runs": 4,
+            "stage": "run_4",
+            "working_set_bytes": 95232000
+        },
+        {
+            "display_logical_image_bytes_outside_history": 0,
+            "dropped_notifications": 349,
+            "private_bytes": 145539072,
+            "retained_distinct_image_buffers": 15,
+            "retained_logical_image_bytes": 31104000,
+            "retained_runs": 5,
+            "stage": "run_5",
+            "working_set_bytes": 102264832
+        },
+        {
+            "display_logical_image_bytes_outside_history": 0,
+            "dropped_notifications": 419,
+            "private_bytes": 152641536,
+            "retained_distinct_image_buffers": 18,
+            "retained_logical_image_bytes": 37324800,
+            "retained_runs": 6,
+            "stage": "run_6",
+            "working_set_bytes": 109268992
+        },
+        {
+            "display_logical_image_bytes_outside_history": 0,
+            "dropped_notifications": 489,
+            "private_bytes": 159703040,
+            "retained_distinct_image_buffers": 21,
+            "retained_logical_image_bytes": 43545600,
+            "retained_runs": 7,
+            "stage": "run_7",
+            "working_set_bytes": 116346880
+        },
+        {
+            "display_logical_image_bytes_outside_history": 0,
+            "dropped_notifications": 559,
+            "private_bytes": 166662144,
+            "retained_distinct_image_buffers": 24,
+            "retained_logical_image_bytes": 49766400,
+            "retained_runs": 8,
+            "stage": "run_8",
+            "working_set_bytes": 123314176
+        },
+        {
+            "display_logical_image_bytes_outside_history": 0,
+            "dropped_notifications": 629,
+            "private_bytes": 173780992,
+            "retained_distinct_image_buffers": 27,
+            "retained_logical_image_bytes": 55987200,
+            "retained_runs": 9,
+            "stage": "run_9",
+            "working_set_bytes": 130281472
+        },
+        {
+            "display_logical_image_bytes_outside_history": 0,
+            "dropped_notifications": 699,
+            "private_bytes": 181080064,
+            "retained_distinct_image_buffers": 30,
+            "retained_logical_image_bytes": 62208000,
+            "retained_runs": 10,
+            "stage": "run_10",
+            "working_set_bytes": 137621504
+        },
+        {
+            "display_logical_image_bytes_outside_history": 0,
+            "dropped_notifications": 769,
+            "private_bytes": 187867136,
+            "retained_distinct_image_buffers": 33,
+            "retained_logical_image_bytes": 68428800,
+            "retained_runs": 11,
+            "stage": "run_11",
+            "working_set_bytes": 144404480
+        },
+        {
+            "display_logical_image_bytes_outside_history": 0,
+            "dropped_notifications": 839,
+            "private_bytes": 194940928,
+            "retained_distinct_image_buffers": 36,
+            "retained_logical_image_bytes": 74649600,
+            "retained_runs": 12,
+            "stage": "run_12",
+            "working_set_bytes": 151359488
+        },
+        {
+            "display_logical_image_bytes_outside_history": 0,
+            "dropped_notifications": 909,
+            "private_bytes": 201682944,
+            "retained_distinct_image_buffers": 39,
+            "retained_logical_image_bytes": 80870400,
+            "retained_runs": 13,
+            "stage": "run_13",
+            "working_set_bytes": 158208000
+        },
+        {
+            "display_logical_image_bytes_outside_history": 0,
+            "dropped_notifications": 979,
+            "private_bytes": 208818176,
+            "retained_distinct_image_buffers": 42,
+            "retained_logical_image_bytes": 87091200,
+            "retained_runs": 14,
+            "stage": "run_14",
+            "working_set_bytes": 165113856
+        },
+        {
+            "display_logical_image_bytes_outside_history": 0,
+            "dropped_notifications": 1049,
+            "private_bytes": 215838720,
+            "retained_distinct_image_buffers": 45,
+            "retained_logical_image_bytes": 93312000,
+            "retained_runs": 15,
+            "stage": "run_15",
+            "working_set_bytes": 172122112
+        },
+        {
+            "display_logical_image_bytes_outside_history": 0,
+            "dropped_notifications": 1119,
+            "private_bytes": 222638080,
+            "retained_distinct_image_buffers": 48,
+            "retained_logical_image_bytes": 99532800,
+            "retained_runs": 16,
+            "stage": "run_16",
+            "working_set_bytes": 179167232
+        },
+        {
+            "display_logical_image_bytes_outside_history": 0,
+            "dropped_notifications": 1189,
+            "private_bytes": 223285248,
+            "retained_distinct_image_buffers": 48,
+            "retained_logical_image_bytes": 99532800,
+            "retained_runs": 16,
+            "stage": "run_17",
+            "working_set_bytes": 179814400
+        },
+        {
+            "display_logical_image_bytes_outside_history": 0,
+            "dropped_notifications": 1259,
+            "private_bytes": 223641600,
+            "retained_distinct_image_buffers": 48,
+            "retained_logical_image_bytes": 99532800,
+            "retained_runs": 16,
+            "stage": "run_18",
+            "working_set_bytes": 180154368
+        },
+        {
+            "display_logical_image_bytes_outside_history": 2073600,
+            "dropped_notifications": 1259,
+            "private_bytes": 118079488,
+            "retained_distinct_image_buffers": 0,
+            "retained_logical_image_bytes": 0,
+            "retained_runs": 0,
+            "stage": "history_cleared",
+            "working_set_bytes": 73412608
+        },
+        {
+            "display_logical_image_bytes_outside_history": 0,
+            "dropped_notifications": 1259,
+            "private_bytes": 107679744,
+            "retained_distinct_image_buffers": 0,
+            "retained_logical_image_bytes": 0,
+            "retained_runs": 0,
+            "stage": "display_released",
+            "working_set_bytes": 63037440
+        }
+    ],
+    "policy": {
+        "drags_per_load": 4,
+        "dropped_notifications": 1259,
+        "history_limit": 16,
+        "io_rounds": 5,
+        "observation_capacity": 32,
+        "retained_runs": 16,
+        "rounds": 18
+    },
+    "timings_ms": {
+        "blob_show_to_paint": {
+            "max": 13.7967,
+            "p50": 12.6937,
+            "p95": 13.7967,
+            "sample_count": 18,
+            "samples": [
+                7.8998,
+                12.4236,
+                12.8482,
+                13.6661,
+                12.6482,
+                12.934,
+                13.7626,
+                12.8145,
+                12.3853,
+                12.9197,
+                11.9644,
+                12.8989,
+                13.7967,
+                13.1611,
+                12.5971,
+                12.6413,
+                12.364,
+                12.6937
+            ]
+        },
+        "canvas_drag_to_paint": {
+            "max": 78.5926,
+            "p50": 49.9121,
+            "p95": 78.5762,
+            "sample_count": 20,
+            "samples": [
+                75.6923,
+                48.1339,
+                51.1978,
+                49.5124,
+                78.5926,
+                49.4179,
+                50.6215,
+                49.6418,
+                74.4217,
+                48.3813,
+                50.5964,
+                47.9481,
+                77.9234,
+                48.0922,
+                50.2586,
+                49.9121,
+                78.5762,
+                48.4849,
+                52.1494,
+                49.5753
+            ]
+        },
+        "load_to_ready": {
+            "max": 84.4309,
+            "p50": 83.5447,
+            "p95": 84.4309,
+            "sample_count": 5,
+            "samples": [
+                66.1446,
+                83.568,
+                84.4309,
+                83.5447,
+                82.5803
+            ]
+        },
+        "run_to_quiescent_ui": {
+            "max": 142.9478,
+            "p50": 85.1739,
+            "p95": 142.9478,
+            "sample_count": 18,
+            "samples": [
+                142.9478,
+                86.4538,
+                85.1739,
+                101.0783,
+                100.5872,
+                82.9851,
+                80.6473,
+                100.7909,
+                82.7574,
+                100.5035,
+                82.2807,
+                84.6467,
+                84.0073,
+                101.7188,
+                81.5829,
+                79.9363,
+                101.9029,
+                86.6653
+            ]
+        },
+        "save_to_committed": {
+            "max": 77.6742,
+            "p50": 62.0237,
+            "p95": 77.6742,
+            "sample_count": 5,
+            "samples": [
+                62.9873,
+                61.0395,
+                62.0237,
+                60.0684,
+                77.6742
+            ]
+        },
+        "threshold_show_to_paint": {
+            "max": 28.1791,
+            "p50": 16.037,
+            "p95": 28.1791,
+            "sample_count": 18,
+            "samples": [
+                19.0534,
+                16.036,
+                15.1198,
+                14.6755,
+                14.9607,
+                16.17,
+                18.3832,
+                14.5446,
+                16.037,
+                15.2887,
+                16.7594,
+                14.3645,
+                13.7595,
+                20.2901,
+                16.7253,
+                16.2868,
+                28.1791,
+                25.4695
+            ]
+        }
+    }
+}

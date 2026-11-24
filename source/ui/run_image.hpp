@@ -5,6 +5,7 @@
 #include <visionpro/workflow/run.hpp>
 
 #include <optional>
+#include <map>
 #include <vector>
 #include <QImage>
 #include <QString>
@@ -30,6 +31,9 @@ struct WorkspaceImageSelection {
     bool waiting_for_result{};
     std::optional<core::WorkflowId> workflow;
     std::optional<core::NodeId> node;
+    std::uint64_t edit_generation{};
+    std::map<workflow::SnapshotIdentity, std::uint64_t> capture_generations;
+    std::optional<workflow::SnapshotIdentity> last_publication;
     enum class Mode { Follow, DraftPreview, RunDetails };
     Mode mode{Mode::Follow};
 };
@@ -41,7 +45,7 @@ struct WorkspaceImageSelection {
 
 [[nodiscard]] core::Result<std::monostate> show_run_image(ImagePanel& panel, const workflow::RunHandle& run,
     const core::InvocationKey& invocation, const std::optional<core::OutputId>& output,
-    const workflow::Solution* display_config = nullptr);
+    const workflow::Solution* display_config = nullptr, bool exact_port = false);
 
 } // namespace ui
 } // namespace visionpro

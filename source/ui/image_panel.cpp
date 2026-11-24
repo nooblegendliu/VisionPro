@@ -13,6 +13,7 @@
 
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QPainter>
 #include <QPushButton>
 #include <QTreeWidget>
 #include <QToolButton>
@@ -22,6 +23,24 @@ namespace visionpro::ui {
 namespace {
 using namespace core;
 using workflow::NodeResult;
+
+class InfoLabel final : public QLabel {
+public:
+    explicit InfoLabel(QWidget* parent) : QLabel(parent)
+    {
+        setTextFormat(Qt::PlainText);
+        setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+    }
+    QSize sizeHint() const override { return {0, fontMetrics().height()}; }
+protected:
+    void paintEvent(QPaintEvent*) override
+    {
+        QPainter painter(this);
+        painter.setPen(palette().color(foregroundRole()));
+        painter.drawText(contentsRect(), Qt::AlignLeft | Qt::AlignVCenter,
+            fontMetrics().elidedText(text().simplified(), Qt::ElideRight, contentsRect().width()));
+    }
+};
 
 template<class Id>
 Id key(std::string_view name) { return std::get<Id>(SchemaIdFactory::parse<Id>(name)); }
@@ -129,8 +148,8 @@ private:
 };
 
 ImagePanel::ImagePanel(QWidget* parent)
-    : QWidget(parent), view_(new ImageView(this)), image_info_(new QLabel(this)), provenance_(new QLabel(this)),
-      pixel_info_(new QLabel(this)), legend_(new QTreeWidget(this))
+    : QWidget(parent), view_(new ImageView(this)), image_info_(new InfoLabel(this)), provenance_(new InfoLabel(this)),
+      pixel_info_(new InfoLabel(this)), legend_(new QTreeWidget(this))
 {
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(8, 6, 8, 4);
@@ -141,12 +160,8 @@ ImagePanel::ImagePanel(QWidget* parent)
     fit->setToolTip(QStringLiteral("适应图像窗口。滚轮缩放，拖动平移。"));
     connect(fit, &QPushButton::clicked, view_, &ImageView::fit_image);
     image_info_->setObjectName(QStringLiteral("imageInfo"));
-    image_info_->setWordWrap(true);
     provenance_->setObjectName(QStringLiteral("imageProvenance"));
-    provenance_->setTextFormat(Qt::PlainText);
-    provenance_->setWordWrap(true);
     pixel_info_->setObjectName(QStringLiteral("imagePixel"));
-    pixel_info_->setWordWrap(true);
     const auto secondary = workspace_font(WorkspaceText::Secondary);
     image_info_->setFont(secondary);
     provenance_->setFont(secondary);
@@ -168,12 +183,10 @@ ImagePanel::ImagePanel(QWidget* parent)
     follow_->hide();
     connect(sources_, &QComboBox::currentTextChanged, sources_, &QWidget::setToolTip);
     connect(follow_, &QPushButton::clicked, this, &ImagePanel::follow_requested);
-    controls->addWidget(fit);
     controls->addWidget(sources_, 2);
     controls->addWidget(follow_);
-    controls->addWidget(image_info_, 1);
+    controls->addWidget(provenance_, 2);
     layout->addLayout(controls);
-    layout->addWidget(provenance_);
     layout->addWidget(view_, 1);
     thumbnails_ = new QListView(this);
     thumbnails_->setObjectName(QStringLiteral("workspaceImageThumbnails"));
@@ -205,18 +218,36 @@ ImagePanel::ImagePanel(QWidget* parent)
         emit source_changed();
     });
     legend_->setObjectName(QStringLiteral("classLegend"));
-    legend_->setHeaderLabels({QStringLiteral("Class ID"), QStringLiteral("Name"), QStringLiteral("Pixels")});
+    legend_->setHeaderLabels({tr("类别 ID"), tr("名称"), tr("像素数")});
     legend_->setRootIsDecorated(false);
     legend_->setMaximumHeight(130);
     layout->addWidget(legend_);
     auto* inspection = new QHBoxLayout;
+    inspection->setSpacing(workspace_size::small_gap);
+    inspection->addWidget(image_info_, 1);
     inspection->addWidget(pixel_info_, 1);
+    auto* zoom_level = new QLabel(this);
+    zoom_level->setObjectName(QStringLiteral("imageZoomLevel"));
+    zoom_level->setFont(workspace_font(WorkspaceText::Technical));
+    zoom_level->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    zoom_level->setMinimumWidth(zoom_level->fontMetrics().horizontalAdvance(QStringLiteral("9999%")));
+    inspection->addWidget(zoom_level);
+    inspection->addWidget(fit);
+    fit->setMinimumHeight(workspace_size::control_height);
+    connect(view_, &ImageView::zoom_changed, zoom_level, [zoom_level](double ratio) {
+        zoom_level->setText(QString::number(qRound(100 * ratio)) + u'%');
+    });
+    connect(this, &ImagePanel::frame_changed, this, [this, fit, zoom_level] {
+        fit->setEnabled(frame_.has_value());
+        zoom_level->setVisible(frame_.has_value());
+    });
     const auto button = [&](const QString& name, const QString& label, const QString& description, auto invoke) {
         auto* control = new QToolButton(this);
         control->setObjectName(name);
         control->setText(label);
         control->setAccessibleName(description);
         control->setToolTip(description);
+        control->setMinimumHeight(workspace_size::control_height);
         inspection->addWidget(control);
         connect(control, &QToolButton::clicked, this, invoke);
         connect(this, &ImagePanel::frame_changed, control, [this, control] { control->setEnabled(frame_.has_value()); });
@@ -225,7 +256,10 @@ ImagePanel::ImagePanel(QWidget* parent)
     button("imageZoomIn", QStringLiteral("+"), tr("放大图像 (+)"), [this] { view_->zoom_by(1.2); });
     button("imageActualSize", QStringLiteral("1:1"), tr("原始像素大小 (1)"), [this] { view_->actual_size(); });
     layout->addLayout(inspection);
-    connect(view_, &ImageView::pixel_changed, pixel_info_, &QLabel::setText);
+    connect(view_, &ImageView::pixel_changed, this, [this](const QString& sample) {
+        pixel_info_->setText(sample);
+        pixel_info_->setToolTip(sample);
+    });
     clear_frame();
 }
 
@@ -252,8 +286,9 @@ void ImagePanel::describe_frame(const ImageHandle& image)
 {
     frame_ = image;
     const auto frame = image.coordinate_frame().text();
-    image_info_->setText(QStringLiteral("%1 × %2  ·  %3")
-        .arg(image.width()).arg(image.height()).arg(QString::fromUtf8(frame.data(), static_cast<qsizetype>(frame.size()))));
+    image_info_->setText(QStringLiteral("%1 × %2 · %3").arg(image.width()).arg(image.height())
+        .arg(image.format().order == ChannelOrder::Mono ? QStringLiteral("Mono8") : QStringLiteral("BGR8")));
+    image_info_->setToolTip(image_info_->text() + QStringLiteral(" · ") + QString::fromUtf8(frame));
     set_provenance({});
     emit frame_changed();
 }
@@ -346,6 +381,7 @@ Result<std::monostate> ImagePanel::present_image(const ImageHandle& image, const
 void ImagePanel::set_provenance(const QString& text)
 {
     provenance_->setText(text);
+    provenance_->setToolTip(text);
     provenance_->setVisible(!text.isEmpty());
 }
 
@@ -388,6 +424,7 @@ void ImagePanel::clear_frame(bool retain_view)
     legend_->clear();
     legend_->hide();
     image_info_->setText(QStringLiteral("暂无图像"));
+    image_info_->setToolTip({});
     set_provenance({});
     pixel_info_->clear();
     emit frame_changed();

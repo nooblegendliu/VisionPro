@@ -50,7 +50,7 @@ public:
         setCheckable(true);
         setAutoRaise(true);
         setFocusPolicy(Qt::StrongFocus);
-        setIconSize({24, 24});
+        setIconSize({workspace_size::tool_icon, workspace_size::tool_icon});
         setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
     }
 
@@ -75,7 +75,7 @@ protected:
             painter.setRenderHint(QPainter::Antialiasing);
             painter.setPen(Qt::NoPen);
             painter.setBrush(option.palette.highlight());
-            painter.drawRoundedRect(rect().adjusted(2, 2, -2, -2), 3, 3);
+            painter.drawRoundedRect(rect().adjusted(2, 2, -2, -2), workspace_size::radius, workspace_size::radius);
         }
 
         const int side = iconSize().height();
@@ -191,7 +191,7 @@ WorkspaceToolbox::WorkspaceToolbox(const core::ToolRegistry& registry, QWidget* 
     search_button_->setFocusPolicy(Qt::StrongFocus);
     search_button_->installEventFilter(this);
     search_button_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    search_button_->setMinimumHeight(32);
+    search_button_->setMinimumHeight(workspace_size::header_height);
     rail_layout->addWidget(search_button_);
 
     const auto scroll = [](QWidget* parent) {
@@ -221,7 +221,22 @@ WorkspaceToolbox::WorkspaceToolbox(const core::ToolRegistry& registry, QWidget* 
     search_->setClearButtonEnabled(true);
     search_->setAccessibleName(tr("搜索节点"));
     search_->installEventFilter(this);
-    drawer_layout->addWidget(search_);
+    auto* search_row = new QHBoxLayout;
+    search_row->setSpacing(workspace_size::small_gap);
+    search_row->addWidget(search_, 1);
+    pin_ = new QToolButton(drawer_);
+    pin_->setObjectName(QStringLiteral("pinToolDrawer"));
+    pin_->setText(tr("固定"));
+    pin_->setCheckable(true);
+    pin_->setToolTip(tr("固定或取消固定工具抽屉"));
+    pin_->setAccessibleName(pin_->toolTip());
+    pin_->installEventFilter(this);
+    search_row->addWidget(pin_);
+    drawer_layout->addLayout(search_row);
+    connect(pin_, &QToolButton::toggled, this, [this](bool pinned) {
+        emit drawerChanged(pinned && !drawer_->isHidden());
+        position_drawer();
+    });
     auto* tools = scroll(drawer_);
     drawer_layout->addWidget(tools, 1);
     auto* content = new QWidget;
@@ -332,6 +347,12 @@ QString WorkspaceToolbox::selected_type() const
 
 bool WorkspaceToolbox::eventFilter(QObject* watched, QEvent* event)
 {
+    if (slot_ && (watched == slot_ || watched == slot_->parentWidget())) {
+        if (event->type() == QEvent::Move || event->type() == QEvent::Resize || event->type() == QEvent::Show) {
+            position_drawer();
+        }
+        return false;
+    }
     if ((event->type() == QEvent::ShortcutOverride || event->type() == QEvent::KeyPress) && !drawer_->isHidden()) {
         const auto* key = static_cast<QKeyEvent*>(event);
         if (key->key() == Qt::Key_Escape && key->modifiers() == Qt::NoModifier) {
@@ -366,6 +387,43 @@ void WorkspaceToolbox::filter(const QString& query)
     update_sections();
 }
 
+void WorkspaceToolbox::attach_to_slot(QWidget& slot)
+{
+    slot_ = &slot;
+    slot_->installEventFilter(this);
+    slot_->parentWidget()->installEventFilter(this);
+    setAutoFillBackground(true);
+    position_drawer();
+}
+
+void WorkspaceToolbox::position_drawer()
+{
+    if (!slot_) { return; }
+    const auto origin = slot_->mapTo(parentWidget(), QPoint{});
+    const int width = pinned() || drawer_->isHidden() ? slot_->width() : drawer_width_;
+    setGeometry(QRect(origin, QSize(std::min(width, parentWidget()->width() - origin.x()), slot_->height())));
+    raise();
+}
+
+bool WorkspaceToolbox::pinned() const { return pin_->isChecked(); }
+
+void WorkspaceToolbox::set_pinned(bool pinned)
+{
+    category_.reset();
+    browsing_all_ = pinned;
+    search_->clear();
+    pin_->setChecked(pinned);
+    update_sections();
+}
+
+void WorkspaceToolbox::set_drawer_width(int width) { drawer_width_ = std::max(240, width); }
+
+void WorkspaceToolbox::set_developer_tools(bool visible)
+{
+    developer_tools_ = visible;
+    update_sections();
+}
+
 void WorkspaceToolbox::update_sections()
 {
     const auto term = search_->text().trimmed();
@@ -378,8 +436,11 @@ void WorkspaceToolbox::update_sections()
         const bool by_name = section.header->text().contains(term, Qt::CaseInsensitive);
         section.header->setChecked(selected);
         int shown = 0;
+        bool available = false;
         for (auto* tile : section.tiles) {
-            const bool visible = by_name || tile->toolTip().contains(term, Qt::CaseInsensitive);
+            const bool offered = developer_tools_ || !tile->property("toolType").toString().startsWith(QStringLiteral("visionpro.sim."));
+            available |= offered;
+            const bool visible = offered && (by_name || tile->toolTip().contains(term, Qt::CaseInsensitive));
             section.grid->removeWidget(tile);
             tile->setVisible(visible);
             if (visible) {
@@ -387,7 +448,8 @@ void WorkspaceToolbox::update_sections()
                 ++shown;
             }
         }
-        const bool show_section = searching ? by_name || shown > 0 : (browsing_all_ ? shown > 0 : selected);
+        section.header->setVisible(available);
+        const bool show_section = available && (searching || browsing_all_ ? shown > 0 : selected);
         section.label->setVisible(show_section);
         section.grid->parentWidget()->setVisible(show_section && shown > 0);
         found |= show_section && shown > 0;
@@ -396,7 +458,10 @@ void WorkspaceToolbox::update_sections()
     empty_->setVisible(!found);
     const bool was_open = !drawer_->isHidden();
     drawer_->setVisible(open);
-    if (was_open != open) { emit drawerChanged(open); }
+    if (was_open != open) {
+        emit drawerChanged(open && pinned());
+        position_drawer();
+    }
     emit selectionChanged();
 }
 

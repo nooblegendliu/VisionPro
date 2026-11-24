@@ -1,5 +1,6 @@
 #include "editor_window.hpp"
 #include "run_image.hpp"
+#include "workspace_results.hpp"
 
 #include "control_scene.hpp"
 #include "image_panel.hpp"
@@ -17,6 +18,7 @@
 #include <QLineEdit>
 #include <QStringList>
 #include <QThread>
+#include <QTabBar>
 #include <QTimer>
 #include <QUndoStack>
 
@@ -535,6 +537,7 @@ void EditorWindow::open_preview_resource(ResourceReference resource, CoordinateS
 
 void EditorWindow::accept_preview_frame(const ImageHandle& image)
 {
+    results_->image_tabs()->setCurrentIndex(0);
     if (const auto shown = images_->set_frame(image); const auto* failure = std::get_if<Diagnostic>(&shown)) {
         report_error(QString::fromStdString(failure->message));
         return;
@@ -542,7 +545,7 @@ void EditorWindow::accept_preview_frame(const ImageHandle& image)
     showing_run_image_ = false;
     workspace_image_selection_->mode = WorkspaceImageSelection::Mode::DraftPreview;
     images_->set_manual_view(true);
-    images_->set_provenance(QStringLiteral("草稿预览"));
+    images_->set_provenance(QStringLiteral("手动预览"));
     images_dock_->show();
     images_dock_->raise();
     show_status(QStringLiteral("Image ready."));

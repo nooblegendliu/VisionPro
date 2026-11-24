@@ -6,6 +6,7 @@ import json
 import socket
 import socketserver
 import struct
+import sys
 import threading
 import time
 
@@ -142,12 +143,21 @@ if __name__ == "__main__":
     parser.add_argument("--protocol", choices=("tcp", "modbus"), required=True)
     parser.add_argument("--port", type=int, default=0)
     parser.add_argument("--record-tcp", action="store_true", help="print one JSON array of payload hex per closed TCP connection")
+    parser.add_argument("--counts-on-stdin", action="store_true", help="report connection and Modbus request counts for each input line")
     parser.add_argument("--fault", action="append", choices=("mid-frame", "oversize", "lost-ack", "lost-read",
                                                             "exception", "unknown-exception", "wrong-transaction", "wrong-echo"))
     args = parser.parse_args()
     with Peer(args.protocol, args.port, args.fault, args.record_tcp) as peer:
         print(peer.server_address[1], flush=True)
         try:
-            peer.serve_forever()
+            if args.counts_on_stdin:
+                worker = threading.Thread(target=peer.serve_forever, daemon=True)
+                worker.start()
+                for _ in sys.stdin:
+                    with peer.lock:
+                        print(json.dumps([peer.connections, len(peer.requests)]), flush=True)
+                peer.shutdown()
+            else:
+                peer.serve_forever()
         except KeyboardInterrupt:
             pass

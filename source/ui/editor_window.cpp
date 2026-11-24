@@ -4,6 +4,7 @@
 #include "editor_inspector.hpp"
 #include "image_panel.hpp"
 #include "module_history_panel.hpp"
+#include "workspace_results.hpp"
 #include "run_controller.hpp"
 #include "run_image.hpp"
 #include "run_panel.hpp"
@@ -35,7 +36,11 @@
 #include <QPointer>
 #include <QPushButton>
 #include <QTabBar>
+#include <QStackedWidget>
+#include <QTreeWidget>
 #include <QSignalBlocker>
+#include <QScreen>
+#include <QSettings>
 #include <QSplitter>
 #include <QStatusBar>
 #include <QStringList>
@@ -53,6 +58,7 @@
 
 #include <algorithm>
 #include <exception>
+#include <ranges>
 
 namespace visionpro::ui {
 namespace {
@@ -102,7 +108,7 @@ protected:
     }
 };
 
-QWidget* panel_header(QLabel* title, QToolButton* action = nullptr)
+QWidget* panel_header(QLabel* title, QWidget* action = nullptr)
 {
     auto* header = new QWidget(title->parentWidget());
     header->setObjectName(QStringLiteral("workspacePanelHeader"));
@@ -121,7 +127,7 @@ QWidget* panel_header(QLabel* title, QToolButton* action = nullptr)
     separator->setForegroundRole(QPalette::Midlight);
     separator->setFixedHeight(1);
     layout->addWidget(separator);
-    header->setMinimumHeight(std::max(32, title->fontMetrics().height() + 8));
+    header->setMinimumHeight(std::max(workspace_size::header_height, title->fontMetrics().height() + workspace_size::gap));
     return header;
 }
 
@@ -150,8 +156,8 @@ QString diagnostic_location(const Solution& draft, const DiagnosticLocation& loc
 }
 } // namespace
 
-EditorWindow::EditorWindow(Solution draft, ToolRegistry registry, QWidget* parent)
-    : QMainWindow(parent), registry_(std::move(registry))
+EditorWindow::EditorWindow(Solution draft, ToolRegistry registry, QWidget* parent, QSettings* layout_settings)
+    : QMainWindow(parent), registry_(std::move(registry)), layout_settings_(layout_settings)
 {
     setFont(workspace_font());
     resize(1440, 800);
@@ -161,9 +167,24 @@ EditorWindow::EditorWindow(Solution draft, ToolRegistry registry, QWidget* paren
     connect(validation_timer_, &QTimer::timeout, this, [this] { validate_draft(); });
     create_docks();
     properties_dialog_ = new PropertiesDialog(this);
+    auto* buttons = properties_dialog_->findChild<QDialogButtonBox*>();
+    configured_debug_ = buttons->addButton(tr("调试本模块"), QDialogButtonBox::ActionRole);
+    configured_debug_->setObjectName(QStringLiteral("debugConfiguredNode"));
+    configured_debug_->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_F5));
+    configured_debug_->setAutoDefault(false);
+    configured_status_ = new QLabel(properties_dialog_);
+    configured_status_->setObjectName(QStringLiteral("configuredRunStatus"));
+    static_cast<QVBoxLayout*>(properties_dialog_->layout())->insertWidget(0, configured_status_);
+    connect(configured_debug_, &QPushButton::clicked, this, [this] {
+        if (const auto target = inspector_->pinned_node()) { start_run(DebugStatePolicy::Isolated, target); }
+    });
+    connect(properties_dialog_, &QDialog::finished, this, [this] { inspector_->pin({}); });
     create_actions();
     create_log_bar();
     replace_canvas(std::move(draft));
+    default_window_state_ = saveState(1);
+    default_canvas_state_ = canvas_host_->saveState(1);
+    restore_workspace_layout();
 }
 
 EditorWindow::~EditorWindow()
@@ -218,6 +239,7 @@ void EditorWindow::create_actions()
     file.addSeparator();
     resource_copy_ = action(file, tr("复制资源到方案…"), "copyResource", [this] { choose_resource_copy(); });
     resource_root_ = action(file, tr("设置资源根目录…"), "setResourceRoot", [this] { choose_resource_root(); });
+    resources_ = action(file, tr("方案资源…"), "solutionResources", [this] { show_solution_resources(); });
     file.addSeparator();
     action(file, tr("退出"), "exitEditor", [this] { close(); }, QKeySequence::Quit);
 
@@ -269,6 +291,7 @@ void EditorWindow::create_actions()
         if (const auto link = scene_->selected_control()) { scene_->remove_control(*link); }
     }, QKeySequence::Delete);
     up_ = action(graph, tr("返回上层"), "parentGroup", [this] { scene_->parent_scope(); });
+    arrange_ = action(graph, tr("整理当前层级"), "arrangeScope", [this] { scene_->arrange_scope(); });
     auto* props = action(graph, tr("模块属性…"), "showProperties", [this] { show_properties(); });
     auto* flow_props = action(graph, tr("流程属性…"), "workflowProperties", [this] {
         scene_->clearSelection();
@@ -277,6 +300,16 @@ void EditorWindow::create_actions()
 
     create_run_actions();
     auto& view = *menuBar()->addMenu(tr("视图(&V)"));
+    auto* developer_tools = view.addAction(tr("显示模拟工具"));
+    developer_tools->setObjectName(QStringLiteral("showDeveloperTools"));
+    developer_tools->setCheckable(true);
+    connect(developer_tools, &QAction::toggled, tools_, &WorkspaceToolbox::set_developer_tools);
+    show_history_ = view.addAction(tr("显示结果面板"));
+    show_history_->setObjectName(QStringLiteral("showResultPanel"));
+    show_history_->setCheckable(true);
+    show_history_->setChecked(true);
+    connect(show_history_, &QAction::toggled, result_history_dock_, &QWidget::setVisible);
+    action(view, tr("恢复默认布局"), "resetWorkspaceLayout", [this] { restore_default_layout(); });
     auto* appearance_menu = view.addMenu(tr("外观"));
     auto* choices = new QActionGroup(appearance_menu);
     auto& appearance = WorkspaceAppearance::instance();
@@ -312,7 +345,7 @@ void EditorWindow::create_actions()
     auto* toolbar = addToolBar(tr("工作区工具栏"));
     toolbar->setObjectName(QStringLiteral("workspaceToolbar"));
     toolbar->setMovable(false);
-    toolbar->setIconSize({18, 18});
+    toolbar->setIconSize({workspace_size::toolbar_icon, workspace_size::toolbar_icon});
     toolbar->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     const auto add_action = [&](QAction* item, WorkspaceIcon icon, const QString& label) {
         item->setIcon(workspace_icon(icon));
@@ -322,12 +355,13 @@ void EditorWindow::create_actions()
     add_action(new_, WorkspaceIcon::New, tr("新建"));
     add_action(open_, WorkspaceIcon::Open, tr("打开"));
     add_action(save_, WorkspaceIcon::Save, tr("保存"));
+    add_action(resources_, WorkspaceIcon::Properties, tr("方案资源"));
     toolbar->addSeparator();
     add_action(undo_, WorkspaceIcon::Undo, tr("撤销"));
     add_action(redo_, WorkspaceIcon::Redo, tr("重做"));
     toolbar->addSeparator();
-    add_action(run_workflow_, WorkspaceIcon::Run, tr("运行当前流程"));
     add_action(solution_actions_.start, WorkspaceIcon::RunSolution, tr("运行整方案"));
+    add_action(solution_actions_.stop, WorkspaceIcon::Stop, tr("取消整方案"));
     workspace_trigger_ = action(graph, tr("启动当前流程触发"), "startWorkspaceTrigger", [this, flow_props] {
         if (arm_trigger_->isEnabled()) { arm_trigger_->trigger(); }
         else {
@@ -335,23 +369,9 @@ void EditorWindow::create_actions()
             show_status(tr("请先在流程属性中配置连续时钟或外部触发源。"));
         }
     });
-    add_action(workspace_trigger_, WorkspaceIcon::Repeat, tr("连续 / 触发"));
-    auto* stop = new QToolButton(toolbar);
-    stop->setText(tr("停止"));
-    stop->setIcon(workspace_icon(WorkspaceIcon::Stop));
-    stop->setIconSize(toolbar->iconSize());
-    stop->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-    stop->setPopupMode(QToolButton::InstantPopup);
-    auto* stop_menu = new QMenu(stop);
-    stop_menu->addAction(cancel_run_);
-    stop_menu->addAction(solution_actions_.stop);
-    stop_menu->addAction(drain_trigger_);
-    stop_menu->addAction(cancel_trigger_);
-    stop->setMenu(stop_menu);
-    toolbar->addWidget(stop);
     toolbar->addSeparator();
     add_action(props, WorkspaceIcon::Properties, tr("模块属性"));
-    properties_dialog_->addActions({undo_, redo_, save_, run_workflow_, debug_node_, cancel_run_});
+    properties_dialog_->addActions({undo_, redo_, save_, run_workflow_, cancel_run_});
     auto* details = run_dock_->toggleViewAction();
     add_action(details, WorkspaceIcon::Details, details->text());
 
@@ -365,8 +385,12 @@ void EditorWindow::create_actions()
     strip->setObjectName(QStringLiteral("workflowBar"));
     strip->setMovable(false);
     strip->setFloatable(false);
-    strip->setIconSize({16, 16});
+    strip->setIconSize({workspace_size::toolbar_icon, workspace_size::toolbar_icon});
     canvas_host_->addToolBar(strip);
+    overview_action_ = strip->addAction(tr("方案总览"));
+    overview_action_->setObjectName(QStringLiteral("showSolutionOverview"));
+    overview_action_->setCheckable(true);
+    connect(overview_action_, &QAction::triggered, this, &EditorWindow::set_overview_visible);
     workflows_ = new WorkflowTabs(strip);
     workflows_->setObjectName(QStringLiteral("workflowSelector"));
     workflows_->setAccessibleName(tr("方案中的流程"));
@@ -376,8 +400,12 @@ void EditorWindow::create_actions()
     workflows_->setUsesScrollButtons(true);
     workflows_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     strip->addWidget(workflows_);
+    connect(workflows_, &QTabBar::tabBarClicked, this, [this](int row) {
+        if (row >= 0) { set_overview_visible(false); }
+    });
     connect(workflows_, &QTabBar::currentChanged, this, [this](int row) {
         if (!scene_ || row < 0) { return; }
+        set_overview_visible(false);
         auto id = IdFactory::parse<WorkflowId>(workflows_->tabData(row).toString().toStdString());
         if (const auto* target = std::get_if<WorkflowId>(&id)) { scene_->select_workflow(*target); }
     });
@@ -393,9 +421,39 @@ void EditorWindow::create_actions()
     manage->setPopupMode(QToolButton::InstantPopup);
     auto* management = new QMenu(manage);
     management->addAction(flow_props);
+    management->addAction(arrange_);
     management->addAction(remove_workflow_);
     manage->setMenu(management);
     strip->addWidget(manage);
+
+    canvas_host_->addToolBarBreak();
+    auto* commands = new QToolBar(tr("当前流程操作"), canvas_host_);
+    commands->setObjectName(QStringLiteral("workflowRunBar"));
+    commands->setMovable(false);
+    commands->setFloatable(false);
+    commands->setIconSize(toolbar->iconSize());
+    commands->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    canvas_host_->addToolBar(commands);
+    run_workflow_->setIcon(workspace_icon(WorkspaceIcon::Run));
+    run_workflow_->setIconText(tr("运行流程"));
+    commands->addAction(run_workflow_);
+    cancel_workflow_->setIcon(workspace_icon(WorkspaceIcon::Stop));
+    cancel_workflow_->setIconText(tr("取消流程"));
+    commands->addAction(cancel_workflow_);
+    commands->addSeparator();
+    workspace_trigger_->setIcon(workspace_icon(WorkspaceIcon::Repeat));
+    workspace_trigger_->setIconText(tr("启动触发"));
+    commands->addAction(workspace_trigger_);
+    auto* stop_trigger = new QToolButton(commands);
+    stop_trigger->setObjectName(QStringLiteral("stopWorkflowTrigger"));
+    drain_trigger_->setIconText(tr("停止触发"));
+    stop_trigger->setDefaultAction(drain_trigger_);
+    stop_trigger->setPopupMode(QToolButton::MenuButtonPopup);
+    auto* strategies = new QMenu(stop_trigger);
+    strategies->addAction(drain_trigger_);
+    strategies->addAction(cancel_trigger_);
+    stop_trigger->setMenu(strategies);
+    commands->addWidget(stop_trigger);
     up_->setIcon(workspace_icon(WorkspaceIcon::Parent));
     strip->addAction(up_);
     scope_path_ = new QLabel(strip);
@@ -420,6 +478,10 @@ void EditorWindow::create_log_bar()
     last_event_->setFont(workspace_font(WorkspaceText::Secondary));
     last_event_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     statusBar()->addWidget(last_event_, 1);
+    solution_run_status_ = new QLabel(statusBar());
+    solution_run_status_->setObjectName(QStringLiteral("solutionRunStatus"));
+    solution_run_status_->setAccessibleName(tr("方案运行状态"));
+    statusBar()->addPermanentWidget(solution_run_status_);
     auto* logs = new QToolButton(statusBar());
     logs->setObjectName(QStringLiteral("openWorkspaceLog"));
     logs->setText(tr("日志"));
@@ -443,6 +505,8 @@ void EditorWindow::record_event(const QString& message)
 void EditorWindow::create_docks()
 {
     auto* columns = new QSplitter(Qt::Horizontal, this);
+    workspace_splitter_ = columns;
+    columns->setHandleWidth(workspace_size::splitter);
     columns->setObjectName(QStringLiteral("workspaceSplitter"));
     columns->setChildrenCollapsible(false);
     setCentralWidget(columns);
@@ -450,26 +514,26 @@ void EditorWindow::create_docks()
     auto* toolbox = new QWidget(columns);
     toolbox->setObjectName(QStringLiteral("nodeToolbox"));
     toolbox->setFixedWidth(WorkspaceToolbox::rail_width);
-    auto* toolbox_layout = new QVBoxLayout(toolbox);
-    toolbox_layout->setContentsMargins(0, 0, 0, 0);
-    tools_ = new WorkspaceToolbox(registry_, toolbox);
-    toolbox_layout->addWidget(tools_);
-    connect(tools_, &WorkspaceToolbox::drawerChanged, this, [toolbox, columns, expanded_width = 294](bool open) mutable {
+    tools_ = new WorkspaceToolbox(registry_, this);
+    tools_->attach_to_slot(*toolbox);
+    connect(tools_, &WorkspaceToolbox::drawerChanged, this, [this, toolbox, columns](bool open) {
         auto sizes = columns->sizes();
         if (sizes.size() != 3) { return; }
         if (open) {
             toolbox->setMaximumWidth(QWIDGETSIZE_MAX);
             toolbox->setMinimumWidth(240);
         } else {
-            expanded_width = std::max(toolbox->minimumWidth(), sizes.front());
             toolbox->setFixedWidth(WorkspaceToolbox::rail_width);
         }
-        const int left = open ? expanded_width : WorkspaceToolbox::rail_width;
+        const int left = open ? tools_->drawer_width() : WorkspaceToolbox::rail_width;
         sizes[1] = std::max(0, sizes[1] + sizes[0] - left);
         sizes[0] = left;
         columns->setSizes(sizes);
     });
     connect(tools_, &WorkspaceToolbox::selectionChanged, this, &EditorWindow::refresh_actions);
+    connect(columns, &QSplitter::splitterMoved, tools_, [this, columns] {
+        if (tools_->docked()) { tools_->set_drawer_width(columns->sizes().front()); }
+    });
 
     // Diagnostics dock beneath the canvas, leaving the image and history visible.
     auto* editor = new QWidget(columns);
@@ -480,6 +544,25 @@ void EditorWindow::create_docks()
     editor_layout->setSpacing(0);
     canvas_host_ = new QMainWindow(editor);
     canvas_host_->setWindowFlags(Qt::Widget);
+    work_pages_ = new QStackedWidget(canvas_host_);
+    canvas_host_->setCentralWidget(work_pages_);
+    overview_ = new QTreeWidget(work_pages_);
+    overview_->setObjectName(QStringLiteral("solutionOverview"));
+    overview_->setAccessibleName(tr("方案总览"));
+    overview_->setHeaderLabels({tr("流程与关系"), tr("定义 / 本轮状态")});
+    overview_->setAlternatingRowColors(true);
+    overview_->setUniformRowHeights(true);
+    work_pages_->addWidget(overview_);
+    connect(overview_, &QTreeWidget::itemActivated, this, [this](QTreeWidgetItem* item) {
+        const auto id = IdFactory::parse<WorkflowId>(item->data(0, Qt::UserRole).toString().toStdString());
+        const auto* target = std::get_if<WorkflowId>(&id);
+        const auto row = item->data(1, Qt::UserRole);
+        if (!target) { return; }
+        const auto child = row.isValid() ? std::optional{run_controller_->solution_report()->runs.at(row.toULongLong())}
+                                         : std::nullopt;
+        set_overview_visible(false);
+        if (scene_->select_workflow(*target) && child) { module_history_->browse_run(*child); }
+    });
     editor_layout->addWidget(canvas_host_, 1);
     auto* stats_bar = new QWidget(editor);
     auto* stats_layout = new QHBoxLayout(stats_bar);
@@ -497,24 +580,27 @@ void EditorWindow::create_docks()
     editor_layout->addWidget(stats_bar);
 
     auto* results = new QSplitter(Qt::Vertical, columns);
+    results_splitter_ = results;
+    results->setHandleWidth(workspace_size::splitter);
     results->setObjectName(QStringLiteral("resultsSplitter"));
     results->setChildrenCollapsible(false);
     images_dock_ = new QDockWidget(tr("输出图"), results);
     images_dock_->setObjectName(QStringLiteral("imagesDock"));
     images_dock_->setFeatures(QDockWidget::NoDockWidgetFeatures);
-    images_dock_->setTitleBarWidget(panel_header(new QLabel(images_dock_->windowTitle(), images_dock_)));
     images_ = new ImagePanel(images_dock_);
     images_->setObjectName(QStringLiteral("imagePanel"));
-    images_dock_->setWidget(images_);
     auto* history = new QDockWidget(tr("模块历史结果"), results);
+    result_history_dock_ = history;
     history->setObjectName(QStringLiteral("moduleHistoryDock"));
     history->setFeatures(QDockWidget::NoDockWidgetFeatures);
-    history->setTitleBarWidget(panel_header(new QLabel(history->windowTitle(), history)));
     module_history_ = new ModuleHistoryPanel(history);
-    history->setWidget(module_history_);
+    results_ = new WorkspaceResults(*images_dock_, *history, *images_, *module_history_);
+    images_dock_->setTitleBarWidget(panel_header(new QLabel(tr("输出"), images_dock_), results_->image_tabs()));
+    history->setTitleBarWidget(panel_header(new QLabel(tr("结果"), history), results_->result_tabs()));
+    connect(results_, &WorkspaceResults::view_changed, this, &EditorWindow::refresh_workspace_statistics);
     results->addWidget(images_dock_);
     results->addWidget(history);
-    results->setSizes({435, 290});
+    results->setSizes({510, 215});
     columns->addWidget(toolbox);
     columns->addWidget(editor);
     columns->addWidget(results);
@@ -549,6 +635,14 @@ void EditorWindow::create_docks()
     });
     connect(diagnostics_, &QListWidget::currentItemChanged, this, [this] { if (scene_) { refresh_actions(); } });
     create_run_dock();
+    connect(run_controller_, &RunController::changed, this, [this, last = std::optional<std::uint64_t>{}, waiting = false]() mutable {
+        const auto& report = run_controller_->solution_report();
+        const auto sequence = report ? std::optional{report->sequence} : std::nullopt;
+        const bool pending = !report && run_controller_->solution_activity() != SolutionActivity::Idle;
+        if ((sequence != last || pending != waiting) && overview_action_ && overview_action_->isChecked()) { refresh_overview(); }
+        last = sequence;
+        waiting = pending;
+    });
 }
 
 void EditorWindow::replace_canvas(Solution replacement, bool editable)
@@ -568,6 +662,7 @@ void EditorWindow::replace_canvas(Solution replacement, bool editable)
         if (registered != view->clearSelectionAction()) { view->removeAction(registered); }
     }
     view->setObjectName(QStringLiteral("workflowCanvas"));
+    if (auto* dialog = findChild<QDialog*>(QStringLiteral("solutionResourcesDialog"))) { dialog->close(); }
     properties_dialog_->hide();
     if (scene_) {
         disconnect(scene_.get(), nullptr, this, nullptr);
@@ -581,7 +676,10 @@ void EditorWindow::replace_canvas(Solution replacement, bool editable)
     scene_ = std::move(scene);
     view_ = view.release();
     inspector_ = inspector.release();
-    canvas_host_->setCentralWidget(view_);
+    work_pages_->addWidget(view_);
+    work_pages_->setCurrentWidget(view_);
+    overview_action_->setChecked(false);
+    canvas_host_->findChild<QToolBar*>(QStringLiteral("workflowRunBar"))->show();
     static_cast<QVBoxLayout*>(properties_dialog_->layout())->insertWidget(0, inspector_, 1);
     inspector_->setEnabled(editable);
     event_history_->clear();
@@ -590,6 +688,7 @@ void EditorWindow::replace_canvas(Solution replacement, bool editable)
     statusBar()->clearMessage();
     showing_run_image_ = false;
     *workspace_image_selection_ = {};
+    results_->reset_document();
     images_->set_sources({}, -1);
     images_->set_manual_view(false);
     images_->clear_frame();
@@ -635,7 +734,12 @@ void EditorWindow::replace_canvas(Solution replacement, bool editable)
         refresh_actions();
         refresh_workspace_selection();
     });
-    connect(&scene_->undoStack(), &QUndoStack::indexChanged, this, [this] { queue_diagnostics(); refresh_actions(); });
+    connect(&scene_->undoStack(), &QUndoStack::indexChanged, this, [this] {
+        ++workspace_image_selection_->edit_generation;
+        refresh_workspace_statistics();
+        queue_diagnostics();
+        refresh_actions();
+    });
     connect(&scene_->undoStack(), &QUndoStack::cleanChanged, this, [this] { refresh_actions(); });
     issues_.clear();
     refresh_canvas();
@@ -644,6 +748,7 @@ void EditorWindow::replace_canvas(Solution replacement, bool editable)
 
 void EditorWindow::refresh_canvas()
 {
+    if (overview_action_->isChecked()) { refresh_overview(); }
     const QSignalBlocker blocker(workflows_);
     while (workflows_->count() > static_cast<int>(draft().workflows.size())) { workflows_->removeTab(workflows_->count() - 1); }
     int selected = -1;
@@ -771,9 +876,67 @@ void EditorWindow::choose_control_connection()
 
 void EditorWindow::show_properties()
 {
+    const auto selected = scene_->selected_nodes();
+    const auto flow = model_->workflow_id();
+    const auto target = flow && selected.size() == 1 ? std::optional{NodeTarget{*flow, selected.front()}} : std::nullopt;
+    inspector_->pin(target);
     properties_dialog_->show();
+    refresh_properties_status();
     properties_dialog_->raise();
     properties_dialog_->activateWindow();
+}
+
+void EditorWindow::refresh_properties_status()
+{
+    if (!properties_dialog_->isVisible()) { return; }
+    const auto target = inspector_->pinned_node();
+    const auto flow_id = target ? std::optional{target->workflow} : model_->workflow_id();
+    const auto* flow = flow_id ? find_workflow(draft(), *flow_id) : nullptr;
+    const auto* node = flow && target ? find_node(*flow, target->node) : nullptr;
+    const auto flow_name = flow ? QString::fromStdString(flow->name) : tr("流程");
+    QString title = tr("流程属性 · %1").arg(flow_name);
+    if (target) {
+        title = node ? tr("模块属性 · %1 / %2").arg(flow_name, QString::fromStdString(node->name))
+                     : tr("模块属性 · 模块已删除");
+        if (node) {
+            const auto parent = std::ranges::find(flow->containment, node->id, &Containment::child);
+            if (parent != flow->containment.end()) {
+                if (const auto* group = find_node(*flow, parent->parent)) {
+                    title = tr("模块属性 · %1 / %2 / %3").arg(flow_name, QString::fromStdString(group->name),
+                        QString::fromStdString(node->name));
+                }
+            }
+            if (const auto* config = std::get_if<ToolConfiguration>(&node->configuration)) {
+                if (const auto* tool = registry_.find_descriptor(config->type)) {
+                    title += QStringLiteral(" · ") + QString::fromStdString(tool->display_name);
+                }
+            }
+        }
+    }
+    properties_dialog_->setWindowTitle(title);
+    const auto* group = node ? std::get_if<GroupConfiguration>(&node->configuration) : nullptr;
+    configured_debug_->setVisible(node && !(group && group->loop));
+    configured_debug_->setEnabled(node && writable() && !busy_ && !close_confirmed_ && run_controller_->can_submit(*flow));
+    configured_status_->setVisible(node);
+    if (!node) { return; }
+    for (const auto& run : std::views::reverse(run_controller_->runs())) {
+        const auto* debugged = std::get_if<NodeTarget>(&run.request().target());
+        if (!debugged || *debugged != *target) { continue; }
+        const auto result = run.inspect();
+        if (const auto* progress = std::get_if<RunProgress>(&result)) {
+            auto text = tr("模块调试 · 第 %1 轮 · %2 · 配置快照 %3").arg(run.identity().run.value())
+                .arg(execution_status_text(progress->status)).arg(run.identity().snapshot.snapshot.value());
+            if (progress->elapsed) { text += tr(" · %1 ms").arg(std::chrono::duration<double, std::milli>(*progress->elapsed).count(), 0, 'f', 1); }
+            const auto& display = *workspace_image_selection_;
+            const auto capture = display.capture_generations.find(run.identity().snapshot);
+            if (capture == display.capture_generations.end() || capture->second != display.edit_generation) {
+                text += tr(" · 结果来自此前配置");
+            }
+            configured_status_->setText(text);
+            return;
+        }
+    }
+    configured_status_->setText(tr("暂无本模块的独立调试记录"));
 }
 
 void EditorWindow::switch_canvas_view()
@@ -814,8 +977,11 @@ void EditorWindow::refresh_actions()
     if (!scene_) { return; }
     const bool available = !busy_ && !close_confirmed_;
     const bool editable = available && writable();
-    const bool active = model_->workflow_id().has_value();
-    const auto selected = scene_->selected_nodes();
+    const bool on_canvas = !overview_action_->isChecked();
+    const bool active = on_canvas && model_->workflow_id().has_value();
+    const auto editable_node_count = editable && active ? model_->allNodeIds().size() : 0;
+    arrange_->setEnabled(editable_node_count > 0);
+    const auto selected = on_canvas ? scene_->selected_nodes() : std::vector<NodeId>{};
     const bool has_nodes = !selected.empty();
     const auto* flow = active ? find_workflow(draft(), *model_->workflow_id()) : nullptr;
     const auto* selected_node = flow && selected.size() == 1 ? find_node(*flow, selected.front()) : nullptr;
@@ -836,11 +1002,27 @@ void EditorWindow::refresh_actions()
     import_subgraph_->setEnabled(editable);
     resource_copy_->setEnabled(editable && source_.has_value() && has_resource);
     resource_root_->setEnabled(available);
+    resources_->setEnabled(available);
     const bool can_submit = editable && flow && run_controller_->can_submit(*flow);
     run_workflow_->setEnabled(can_submit);
+    run_workflow_->setToolTip(can_submit ? tr("单次运行当前流程（F5）") : tr("需要可运行的当前流程和可用的运行会话"));
+    const auto targets = flow ? run_controller_->cancellable_workflow_runs(flow->id) : std::vector<RunHandle>{};
+    cancel_workflow_->setEnabled(!close_confirmed_ && !targets.empty());
+    cancel_workflow_->setToolTip(targets.empty() ? tr("当前流程没有可取消的独立运行")
+        : targets.size() == 1 ? tr("取消当前流程的第 %1 轮").arg(targets.front().identity().run.value()) : tr("选择要取消的流程轮次"));
     solution_actions_.start->setEnabled(editable && draft().graph && run_controller_->can_start());
     solution_actions_.start->setToolTip(draft().graph ? tr("从方案入口执行已编排的流程") : tr("当前方案未配置流程间编排"));
     solution_actions_.stop->setEnabled(run_controller_->can_cancel_solution());
+    solution_actions_.stop->setToolTip(solution_actions_.stop->isEnabled() ? tr("取消当前整方案运行") : tr("当前没有可取消的整方案运行"));
+    QString solution_state;
+    const auto activity = run_controller_->solution_activity();
+    if (activity == SolutionActivity::Running) { solution_state = tr("方案运行中"); }
+    else if (activity == SolutionActivity::CancelRequested) { solution_state = tr("方案已请求取消"); }
+    else if (const auto& report = run_controller_->solution_report()) {
+        solution_state = tr("方案第 %1 轮 · %2").arg(report->sequence).arg(execution_status_text(report->status));
+        if (activity == SolutionActivity::CleaningUp) { solution_state += tr(" · 正在清理"); }
+    }
+    solution_run_status_->setText(solution_state);
     solution_actions_.report->setEnabled(run_controller_->solution_report().has_value());
     run_group_->setEnabled(can_submit && group && !group->loop);
     debug_node_->setEnabled(can_submit && selected_node && !(group && group->loop));
@@ -882,9 +1064,9 @@ void EditorWindow::refresh_actions()
     add_tool_->setEnabled(editable && active && !tools_->selected_type().isEmpty());
     add_group_->setEnabled(editable && active);
     add_loop_->setEnabled(editable && active);
-    connect_steps_->setEnabled(editable && active && model_->allNodeIds().size() >= 2);
+    connect_steps_->setEnabled(editable_node_count >= 2);
     remove_nodes_->setEnabled(editable && has_nodes && !scene_->selected_control());
-    remove_link_->setEnabled(editable && scene_->selected_control().has_value());
+    remove_link_->setEnabled(editable && on_canvas && scene_->selected_control().has_value());
     remove_invalid_link_->setEnabled(editable && displayed_validation_revision_ == validation_revision_
         && issue >= 0 && static_cast<std::size_t>(issue) < issues_.size()
         && issues_[static_cast<std::size_t>(issue)].location.control_link.has_value());
@@ -900,6 +1082,7 @@ void EditorWindow::refresh_actions()
     solution_name_->setText(solution_name_->fontMetrics().elidedText(tr("方案 · %1").arg(name), Qt::ElideMiddle, 280));
     solution_name_->setToolTip(name);
     setWindowModified(!history.isClean());
+    refresh_properties_status();
 }
 
 void EditorWindow::add_coordinate_frame()
@@ -998,8 +1181,66 @@ void EditorWindow::closeEvent(QCloseEvent* event)
         refresh_actions();
         return;
     }
+    save_workspace_layout();
     properties_dialog_->hide();
     event->accept();
+}
+
+void EditorWindow::restore_default_layout()
+{
+    const QSize available = screen()->availableGeometry().size();
+    setWindowState(windowState() & ~Qt::WindowMaximized & ~Qt::WindowFullScreen);
+    resize(QSize(1440, 800).boundedTo(available));
+    restoreState(default_window_state_, 1);
+    canvas_host_->restoreState(default_canvas_state_, 1);
+    tools_->set_drawer_width(294);
+    tools_->set_pinned(false);
+    show_history_->setChecked(true);
+    workspace_splitter_->setSizes({WorkspaceToolbox::rail_width, 700, 650});
+    results_splitter_->setSizes({510, 215});
+    properties_dialog_->resize(QSize(680, 540).boundedTo(available));
+    if (layout_settings_) { layout_settings_->remove(QStringLiteral("workspace/layout")); }
+}
+
+void EditorWindow::restore_workspace_layout()
+{
+    if (!layout_settings_) { return; }
+    auto& settings = *layout_settings_;
+    settings.beginGroup(QStringLiteral("workspace/layout"));
+    if (settings.value("version").toInt() != 1) {
+        settings.endGroup();
+        return;
+    }
+    tools_->set_drawer_width(settings.value("drawerWidth", 294).toInt());
+    tools_->set_pinned(settings.value("pinned").toBool());
+    const bool restored = restoreGeometry(settings.value("geometry").toByteArray())
+        && restoreState(settings.value("window").toByteArray(), 1)
+        && canvas_host_->restoreState(settings.value("canvasWindow").toByteArray(), 1)
+        && workspace_splitter_->restoreState(settings.value("columns").toByteArray())
+        && results_splitter_->restoreState(settings.value("results").toByteArray());
+    show_history_->setChecked(settings.value("showResults", true).toBool());
+    properties_dialog_->resize(settings.value("propertiesSize", QSize(680, 540)).toSize()
+        .boundedTo(screen()->availableGeometry().size()));
+    settings.endGroup();
+    if (!restored) { restore_default_layout(); }
+}
+
+void EditorWindow::save_workspace_layout()
+{
+    if (!layout_settings_) { return; }
+    auto& settings = *layout_settings_;
+    settings.beginGroup(QStringLiteral("workspace/layout"));
+    settings.setValue("version", 1);
+    settings.setValue("geometry", saveGeometry());
+    settings.setValue("window", saveState(1));
+    settings.setValue("canvasWindow", canvas_host_->saveState(1));
+    settings.setValue("columns", workspace_splitter_->saveState());
+    settings.setValue("results", results_splitter_->saveState());
+    settings.setValue("showResults", show_history_->isChecked());
+    settings.setValue("pinned", tools_->docked());
+    settings.setValue("drawerWidth", tools_->docked() ? workspace_splitter_->sizes().front() : tools_->drawer_width());
+    settings.setValue("propertiesSize", properties_dialog_->size());
+    settings.endGroup();
 }
 
 void EditorWindow::queue_diagnostics()
@@ -1075,6 +1316,7 @@ void EditorWindow::locate_diagnostic(QListWidgetItem* item)
         : (index >= 0 && static_cast<std::size_t>(index) < issues_.size() ? &issues_[static_cast<std::size_t>(index)] : nullptr);
     if (!diagnostic) { return; }
     const auto location = diagnostic->location;
+    if (location.workflow && overview_action_->isChecked()) { set_overview_visible(false); }
     if (location.workflow && !scene_->select_workflow(*location.workflow)) { return; }
     if (location.node) {
         if (!scene_->reveal_node(*location.node)) { return; }

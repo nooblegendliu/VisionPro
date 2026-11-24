@@ -417,7 +417,6 @@ json compare_workflow(EditorWindow& window, const json& fixture, const fs::path&
 
 void apply_semantic_edits(EditorWindow& window, const json& workflows)
 {
-    action(window, "showProperties").trigger();
     const auto& single = named(workflows, "case", "single");
     const auto& five = named(workflows, "case", "five");
     const auto& inherited = named(workflows, "case", "inherited_roi");
@@ -428,6 +427,7 @@ void apply_semantic_edits(EditorWindow& window, const json& workflows)
         const auto* selected = flow ? find_node(*flow, node) : nullptr;
         require(selected && scene(window).select_workflow(workflow) && scene(window).reveal_node(node),
             "Could not reveal the editable fixture node " + node.to_string());
+        action(window, "showProperties").trigger();
         const auto name = QString::fromStdString(selected->name);
         require(QTest::qWaitFor([&] {
             return std::ranges::any_of(window.findChildren<QPushButton*>(QStringLiteral("renameNode")),
@@ -1086,7 +1086,7 @@ struct LoopbackPeer {
         if (record_tcp) { arguments << QStringLiteral("--record-tcp"); }
         if (plc) {
             arguments << QStringLiteral("--fault") << QStringLiteral("unknown-exception")
-                      << QStringLiteral("--fault") << QStringLiteral("lost-ack");
+                      << QStringLiteral("--fault") << QStringLiteral("lost-ack") << QStringLiteral("--counts-on-stdin");
         }
         process.start(QStringLiteral(VISIONPRO_TEST_PYTHON), arguments);
         require(process.waitForStarted(5000), "Could not launch the loopback peer: " + process.errorString().toStdString());
@@ -1094,6 +1094,12 @@ struct LoopbackPeer {
         bool valid{};
         port = process.readLine().trimmed().toInt(&valid);
         require(valid && port > 0 && port <= 65535, "Invalid loopback peer port.");
+    }
+    json counts()
+    {
+        process.write("\n");
+        require(process.canReadLine() || process.waitForReadyRead(5000), "The Modbus peer did not return its counters.");
+        return json::parse(process.readLine().toStdString());
     }
     ~LoopbackPeer() { process.kill(); process.waitForFinished(3000); }
 };
@@ -1222,8 +1228,21 @@ void AcceptanceParityTests::reproduces_saved_communication()
         auto* details = window.findChild<QPlainTextEdit*>(QStringLiteral("runDetails"));
         QVERIFY(details);
         if (plc) {
+            const auto initial_counts = peer.counts();
+            QVERIFY(initial_counts == json::array({0, 0}));
+            action(window, "solutionResources").trigger();
+            auto* resources = window.findChild<QDialog*>(QStringLiteral("solutionResourcesDialog"));
+            QVERIFY(resources && resources->isVisible());
+            auto* catalog_tree = resources->findChild<QTreeWidget*>(QStringLiteral("solutionResourceTree"));
+            auto* endpoint = catalog_tree->findItems(title, Qt::MatchExactly | Qt::MatchRecursive).value(0);
+            QVERIFY(endpoint);
+            catalog_tree->setCurrentItem(endpoint);
+            resources->findChild<QPushButton*>(QStringLiteral("refreshResources"))->click();
+            resources->close();
+            QVERIFY(peer.counts() == initial_counts);
             const auto failed = complete_editor_run(window, "runWorkflow");
             QVERIFY(failed.at("status") == "Failed");
+            QVERIFY(peer.counts() == json::array({1, 1}));
             select_result(window, sender);
             QTRY_VERIFY(details->toPlainText().contains(QStringLiteral("modbus.exception"))
                 && details->toPlainText().contains(QStringLiteral("code 66 (unmapped)")));
@@ -1435,6 +1454,29 @@ void AcceptanceParityTests::reproduces_saved_workpiece_inspection()
                 && queue.messages.front().correlation.key() == "part-001", "Expected exactly one message for this workpiece.");
         };
         compare(50, false, "NG B=10,20,30,40,50");
+
+        auto& controller = *window.findChild<RunController*>();
+        const auto& definition = document.solution().queues.front();
+        const auto shared = take(controller.shared_preview()).value();
+        const auto before = take(shared.data->preview(definition.id));
+        action(window, "solutionResources").trigger();
+        auto* resources = window.findChild<QDialog*>(QStringLiteral("solutionResourcesDialog"));
+        QVERIFY(resources && resources->isVisible());
+        auto* tree = resources->findChild<QTreeWidget*>(QStringLiteral("solutionResourceTree"));
+        auto find_queue = [&] {
+            return tree->findItems(QString::fromStdString(definition.name), Qt::MatchExactly | Qt::MatchRecursive).value(0);
+        };
+        QVERIFY(find_queue() && find_queue()->text(3) != QStringLiteral("—"));
+        tree->setCurrentItem(find_queue());
+        auto* refresh = resources->findChild<QPushButton*>(QStringLiteral("refreshResources"));
+        refresh->click();
+        QTRY_COMPARE(find_queue()->text(2), QStringLiteral("待取 1 条"));
+        const auto after = take(shared.data->preview(definition.id));
+        QCOMPARE(after.enqueued, before.enqueued);
+        QCOMPARE(after.received, before.received);
+        QCOMPARE(after.messages.size(), before.messages.size());
+        QCOMPARE(after.messages.front().id, before.messages.front().id);
+        resources->close();
 
         QVERIFY(scene(window).reveal_node(uuid<NodeId>(inspection_id(6924))));
         drive_dialog(window, "editRegion", QStringLiteral("roi"), {[](QDialog& dialog) -> QPushButton* {

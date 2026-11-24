@@ -10,7 +10,7 @@ enum class AppearanceMode { System, Light, Dark };
 struct WorkspaceColors {
     QColor window, surface, text, secondary, button, border, highlight, highlightedText, accent;
     QColor canvas, grid, node, nodeText, nodeBorder, nodePortFilled, selection, connection, connectionSelected;
-    QColor positive, negative;
+    QColor positive, negative, disabled, warning, error;
 };
 
 // Shared by all windows. Only the user's choice is persisted.

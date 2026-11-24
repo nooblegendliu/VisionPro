@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QtNodes/GraphicsView>
+#include <QPointer>
 #include <QWidget>
 
 #include <visionpro/core/tool_registry.hpp>
@@ -26,13 +27,20 @@ public:
     static constexpr int rail_width = 76;
     QString selected_type() const;
     void filter(const QString& query);
+    void attach_to_slot(QWidget& slot);
+    bool pinned() const;
+    bool docked() const { return pinned() && !drawer_->isHidden(); }
+    void set_pinned(bool pinned);
+    void set_developer_tools(bool visible);
+    int drawer_width() const { return drawer_width_; }
+    void set_drawer_width(int width);
     bool accepts_drag(const QObject* source, const QMimeData* payload) const;
 
 signals:
     void selectionChanged();
     void toolActivated();
     void toolDropped(const QObject* source, QPoint global_position);
-    void drawerChanged(bool expanded);
+    void drawerChanged(bool docked);
 
 private:
     bool eventFilter(QObject* watched, QEvent* event) override;
@@ -43,10 +51,15 @@ private:
         std::vector<QToolButton*> tiles;
     };
     void update_sections();
+    void position_drawer();
     std::vector<Section> sections_;
     QButtonGroup* selection_;
     QWidget* drawer_;
     QToolButton* search_button_;
+    QToolButton* pin_{};
+    QPointer<QWidget> slot_;
+    int drawer_width_{294};
+    bool developer_tools_{};
     QLineEdit* search_;
     QLabel* empty_;
     std::optional<std::size_t> category_;

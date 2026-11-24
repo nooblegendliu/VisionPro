@@ -90,8 +90,8 @@ void ControlGraphModel::update_paint_style()
     style.FilledConnectionPointColor = colors.nodePortFilled;
     style.ShadowEnabled = false;
     style.Opacity = 1.0f;
-    style.PenWidth = 2.0f;
-    style.HoveredPenWidth = 2.5f;
+    style.PenWidth = 1.0f;
+    style.HoveredPenWidth = 2.0f;
     paint_style_ = style.toJson().toVariantMap();
 }
 
@@ -337,14 +337,19 @@ Qt::Orientation ControlGraphModel::layout_orientation() const
     // to choose the side carrying the control ports when entering this scope.
     int vertical = 0;
     int horizontal = 0;
+    bool all_down = true;
+    bool same_column = false;
     for (const auto& edge : flow->control_links) {
         const auto source = canvas_id(edge.source);
         const auto target = canvas_id(edge.target);
         if (!visible(source) || !visible(target)) { continue; }
         const auto distance = position(target) - position(source);
+        all_down &= distance.y() > 0;
+        same_column |= distance.x() == 0;
         if (std::abs(distance.y()) > std::abs(distance.x())) { ++vertical; }
         else if (!distance.isNull()) { ++horizontal; }
     }
+    if (all_down && same_column) { return Qt::Vertical; }
     return horizontal > vertical ? Qt::Horizontal : Qt::Vertical;
 }
 
@@ -352,6 +357,11 @@ QVariant ControlGraphModel::nodeData(NodeId node, NodeRole role) const
 {
     if (!nodeExists(node)) { return {}; }
     switch (role) {
+    case NodeRole::Type: {
+        const auto& config = active_workflow()->nodes[nodes_.at(node).source_index].configuration;
+        if (const auto* tool = std::get_if<ToolConfiguration>(&config)) { return QString::fromUtf8(tool->type.text()); }
+        return std::get<GroupConfiguration>(config).loop ? QStringLiteral("@loop") : QStringLiteral("@group");
+    }
     case NodeRole::Caption: {
         const auto& value = active_workflow()->nodes[nodes_.at(node).source_index];
         auto name = QString::fromStdString(value.name);
@@ -502,7 +512,8 @@ core::Result<bool> ControlGraphModel::remove_control(QUndoStack& history, Connec
     return true;
 }
 
-bool ControlGraphModel::move_nodes(QUndoStack& history, std::span<const CanvasMove> moves)
+bool ControlGraphModel::move_nodes(QUndoStack& history, std::span<const CanvasMove> moves,
+    std::function<void()> after_arrange)
 {
     if (!workflow_id_) { return false; }
     auto next = draft_.layouts;
@@ -528,13 +539,15 @@ bool ControlGraphModel::move_nodes(QUndoStack& history, std::span<const CanvasMo
         changed.push_back(id);
     }
     if (changed.empty()) { return false; }
-    history.push(new CanvasEdit(QStringLiteral("Move nodes"),
-        [this, layouts = std::move(next), nodes = std::move(changed)]() mutable {
+    const auto label = after_arrange ? tr("整理当前层级") : tr("移动模块");
+    history.push(new CanvasEdit(label,
+        [this, layouts = std::move(next), nodes = std::move(changed), after_arrange = std::move(after_arrange)]() mutable {
             draft_.layouts.swap(layouts);
             for (const auto& id : nodes) {
                 const auto node = canvas_id(id);
                 if (visible(node)) { Q_EMIT nodePositionUpdated(node); }
             }
+            if (after_arrange) { after_arrange(); }
         }));
     return true;
 }

@@ -20,6 +20,7 @@ struct ToolboxEntry {
 };
 
 QString toolbox_category_name(ToolboxCategory category);
+QString display_field(const QString& declared);
 ToolboxEntry toolbox_entry(std::string_view type, const QString& original);
 
 } // namespace visionpro::ui

@@ -124,8 +124,8 @@ void ImageViewTests::owns_and_displays_strided_cropped_bgr()
     move_pointer(view.viewport(), position);
     QCOMPARE(pixel_changed.size(), qsizetype{1});
     const auto description = pixel_changed.takeFirst().front().toString();
-    QVERIFY(description.contains(QStringLiteral("Pixel (1, 1)")));
-    QVERIFY(description.contains(QStringLiteral("Root (2, 2)")));
+    QVERIFY(description.contains(QStringLiteral("像素 (1, 1)")));
+    QVERIFY(description.contains(QStringLiteral("根坐标 (2, 2)")));
     QVERIFY(description.contains(QStringLiteral("B 22, G 82, R 142")));
     QEvent leave(QEvent::Leave);
     QCoreApplication::sendEvent(view.viewport(), &leave);
@@ -292,9 +292,10 @@ void ImageViewTests::keyboard_pixel_inspection_and_compatible_frames()
     QSignalSpy pixels(&view, &ui::ImageView::pixel_changed);
     move_pointer(view.viewport(), view.mapFromScene(QPointF(24, 18)));
     const auto mouse = pixels.last().front().toString();
-    QVERIFY(mouse.contains("Pixel (24, 18)") && mouse.contains("Root (29, 25)") && mouse.contains("Gray 40"));
+    QVERIFY(mouse.contains(QStringLiteral("像素 (24, 18)")) && mouse.contains(QStringLiteral("根坐标 (29, 25)"))
+        && mouse.contains(QStringLiteral("灰度 40")));
     QTest::keyClick(&view, Qt::Key_Right);
-    QVERIFY(pixels.last().front().toString().contains("Pixel (25, 18)"));
+    QVERIFY(pixels.last().front().toString().contains(QStringLiteral("像素 (25, 18)")));
     QTest::keyClick(&view, Qt::Key_Left);
     QCOMPARE(pixels.last().front().toString(), mouse);
 
@@ -315,7 +316,7 @@ void ImageViewTests::keyboard_pixel_inspection_and_compatible_frames()
     take(view.set_image(take(image.copy_with_pixels({60, 45, 60, mono8}, changed)), {}, true));
     QCOMPARE(view.transform(), zoom);
     QCOMPARE(view.mapToScene(viewport_center), center);
-    QVERIFY(pixels.last().front().toString().contains("Gray 72"));
+    QVERIFY(pixels.last().front().toString().contains(QStringLiteral("灰度 72")));
 
     view.clear_image(true);
     QVERIFY(!view.pixel_at(viewport_center));

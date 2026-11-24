@@ -38,7 +38,7 @@ public:
     QSize sizeHint(const QStyleOptionViewItem& option, const QModelIndex& index) const override
     {
         auto size = QStyledItemDelegate::sizeHint(option, index);
-        size.setHeight(std::max({size.height(), 28, option.fontMetrics.height() + 8}));
+        size.setHeight(std::max({size.height(), workspace_size::row_height, option.fontMetrics.height() + workspace_size::gap}));
         return size;
     }
 
@@ -201,9 +201,13 @@ void ModuleHistoryPanel::set_selection(const Workflow* workflow, const Node* nod
     const bool range_judge = node && is_range_judge(*node);
     if (workflow_ == flow_id && node_ == node_id && node_name_ == node_name
         && range_judge_ == range_judge) { return; }
-    if (workflow_ != flow_id) { pinned_run_.reset(); }
-    if (workflow_ != flow_id || node_ != node_id) {
+    if (workflow_ != flow_id) {
+        pinned_run_.reset();
         pinned_row_.reset();
+    } else if (node_ != node_id && pinned_row_) {
+        pinned_row_->invocation.reset(); // Keep the iteration while resolving the new module's call.
+    }
+    if (workflow_ != flow_id || node_ != node_id) {
         summaries_.clear();
     }
     workflow_ = flow_id;
@@ -217,6 +221,15 @@ void ModuleHistoryPanel::update_runs(std::span<const RunHandle> runs)
 {
     retained_.assign(runs.begin(), runs.end());
     refresh();
+}
+
+void ModuleHistoryPanel::browse_run(const RunHandle& run)
+{
+    if (workflow_ != run.identity().workflow) { return; }
+    pinned_run_ = run;
+    pinned_row_.reset();
+    refresh();
+    emit browse_requested();
 }
 
 ModuleHistoryPanel::RunSummary ModuleHistoryPanel::summarize(const RunHandle& run) const
@@ -301,7 +314,8 @@ ModuleHistoryPanel::RunSummary ModuleHistoryPanel::summarize(const RunHandle& ru
                     row.cells[Elapsed] = elapsed_text(published.elapsed);
                     row.algorithm_time = algorithm_time(published);
                 } else if (const auto* diagnostic = std::get_if<Diagnostic>(&lookup)) {
-                    row.cells[Summary] = run_diagnostic_text(*diagnostic);
+                    row.cells[Summary] = diagnostic->code == ErrorCode::ResultRetired
+                        ? tr("结果已淘汰 · %1").arg(run_diagnostic_text(*diagnostic)) : run_diagnostic_text(*diagnostic);
                 }
             }
         }
@@ -385,6 +399,12 @@ void ModuleHistoryPanel::refresh()
                 details_ += u'\n' + summary.diagnostic;
             }
         }
+        const bool ambiguous = selected && pinned_row_ && !pinned_row_->invocation
+            && std::ranges::count(summary.rows, pinned_row_->scope, &Row::scope) > 1;
+        if (selected && node_ && pinned_row_ && summary.diagnostic.isEmpty()) {
+            message_ = ambiguous ? tr("此作用域有多次调用，请在历史结果中选择")
+                                 : tr("此模块在锁定的作用域内没有调用");
+        }
         for (const auto& row : summary.rows) {
             const int index = static_cast<int>(addresses_.size());
             auto* item = index < table_->topLevelItemCount() ? table_->topLevelItem(index) : new QTreeWidgetItem(table_);
@@ -402,11 +422,12 @@ void ModuleHistoryPanel::refresh()
             show_summary |= row.cells[Summary] != dash();
             show_elapsed |= row.cells[Elapsed] != dash();
             addresses_.push_back({id, row.scope, row.invocation});
-            if (selected && selected_index < 0 && (!pinned_row_ || (pinned_row_->scope == row.scope
+            if (selected && !ambiguous && selected_index < 0 && (!pinned_row_ || (pinned_row_->scope == row.scope
                 && (!pinned_row_->invocation || pinned_row_->invocation == row.invocation)))) {
                 selected_index = index;
                 if (row.published) { selected_call_ = row.invocation; }
-                message_ = row.published ? QString{} : QStringLiteral("模块%1，当前没有已发布输出").arg(row.cells[Execution]);
+                message_ = row.published ? QString{} : row.cells[Summary] != dash() ? row.cells[Summary]
+                    : QStringLiteral("模块%1，当前没有已发布输出").arg(row.cells[Execution]);
                 details_ += QStringLiteral("\n%1 · 模块耗时 %2 · 算法耗时 %3")
                     .arg(summary.node_name, row.cells[Elapsed], row.algorithm_time);
             }
@@ -436,6 +457,23 @@ void ModuleHistoryPanel::refresh()
     round_->setVisible(!round_caption.isEmpty());
     if (previous_run != identity(selected_run_) || previous_call != selected_call_
         || previous_stats != statistics_ || previous_details != details_ || previous_message != message_) { emit selection_changed(); }
+}
+
+std::optional<ExecutionScopeId> ModuleHistoryPanel::selected_scope() const
+{
+    if (selected_call_) { return selected_call_->scope; }
+    return pinned_row_ ? pinned_row_->scope : std::nullopt;
+}
+
+QString ModuleHistoryPanel::current_result() const
+{
+    const auto* row = table_->currentItem();
+    if (!row || !selected_call_) { return message_; }
+    const auto verdict = row->text(Verdict);
+    QStringList lines{QStringLiteral("%1 · %2").arg(module_->text(), row->text(Round)),
+        tr("执行 %1　判定 %2").arg(row->text(Execution), verdict == dash() ? tr("不适用") : verdict)};
+    if (row->text(Measured) != dash()) { lines << tr("实测 %1　允许范围 %2").arg(row->text(Measured), row->text(Range)); }
+    return lines.join(u'\n');
 }
 
 } // namespace visionpro::ui

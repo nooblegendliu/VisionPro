@@ -2,6 +2,8 @@
 
 ## 1. 当前阶段
 
+桌面工作台的两组固定样例、原生 Windows 布局检查及 Release 负载比较见[工作台验收记录](ui-workbench-acceptance.md)。改动运行入口或结果浏览时，请同时运行 `visionpro_workspace_tests`、`visionpro_editor_run_tests` 和 `visionpro_run_lifecycle_tests`。
+
 方案级编排的磁盘样例在 `samples/f3-solution-graph`。将下列命令的索引依次设为 0、1、2，可分别复现 6、9 和上游越界。最后一种以非零状态退出，JSON 中只有 A 的运行记录。单流程调试仍用 `run --workflow`。
 
 ```powershell

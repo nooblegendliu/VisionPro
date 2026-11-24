@@ -18,8 +18,11 @@
 #include <QComboBox>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QPushButton>
 #include <QDockWidget>
 #include <QFileDialog>
+#include <QDir>
+#include <QFontInfo>
 #include <QGraphicsPixmapItem>
 #include <QGridLayout>
 #include <QJsonArray>
@@ -34,8 +37,10 @@
 #include <QProcess>
 #include <QProcessEnvironment>
 #include <QScrollArea>
+#include <QScreen>
 #include <QSet>
 #include <QSettings>
+#include <QSplitter>
 #include <QStyleHints>
 #include <QTabBar>
 #include <QTemporaryDir>
@@ -252,6 +257,8 @@ private slots:
     void initTestCase();
     void appearance_preferences();
     void toolbox_category_grid_and_search();
+    void remembers_and_resets_workspace_layout();
+    void workspace_visual_states();
     void toolbar_icons_keep_transparent_margins();
     void five_lane_selection_and_history();
     void panels_float_and_redock();
@@ -259,6 +266,8 @@ private slots:
     void format_image_sources_data();
     void format_image_sources();
     void recovers_image_view_after_failed_measurement();
+    void flow_image_remembers_skipped_source();
+    void pages_large_output_collection();
     void loop_invocation_history();
 
 private:
@@ -347,6 +356,32 @@ void WorkspaceTests::properties_dialog_reuses_selection_and_clears_on_replacemen
     properties = visible_properties(window);
     QTRY_COMPARE(name_field(properties, "renameNode"), node_name(judge_id));
     QTest::mouseClick(canvas->viewport(), Qt::LeftButton, {}, node_position(*canvas, measure_id));
+    QApplication::processEvents();
+    QCOMPARE(name_field(properties, "renameNode"), node_name(judge_id));
+    set_upper_limit(*properties);
+    auto& scene = dynamic_cast<ControlScene&>(*canvas->scene());
+    QVERIFY(scene.undoStack().canUndo());
+    scene.undoStack().undo();
+    properties->activateWindow();
+    QTRY_VERIFY(properties->isActiveWindow());
+    auto* debug = control<QAbstractButton>(*properties, "debugConfiguredNode");
+    debug->setFocus();
+    QTimer input;
+    connect(&input, &QTimer::timeout, &window, [&] {
+        auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+        if (!dialog) { return; }
+        input.stop();
+        auto* value = dialog->findChild<QLineEdit*>(QStringLiteral("runInputValue.value"));
+        if (!value) { dialog->reject(); return; }
+        value->setText(QStringLiteral("50"));
+        dialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Ok)->click();
+    });
+    input.start(15);
+    QTest::keyClick(debug, Qt::Key_F5, Qt::ControlModifier);
+    auto* controller = window.findChild<RunController*>();
+    QTRY_VERIFY_WITH_TIMEOUT(controller->can_start() && !controller->runs().empty(), 10000);
+    const auto* target = std::get_if<NodeTarget>(&controller->runs().back().request().target());
+    QVERIFY(target && target->workflow == inspection_id && target->node == judge_id);
     QTest::mouseDClick(canvas->viewport(), Qt::LeftButton, {}, node_position(*canvas, measure_id));
     QTRY_COMPARE(name_field(properties, "renameNode"), node_name(measure_id));
     QCOMPARE(visible_properties(window), properties.data());
@@ -504,13 +539,12 @@ void WorkspaceTests::toolbox_category_grid_and_search()
 
     QList<QToolButton*> headers;
     for (auto* button : toolbox->findChildren<QToolButton*>()) {
-        if (button->property("toolCategory").isValid()) { headers.append(button); }
+        if (button->property("toolCategory").isValid() && button->isVisible()) { headers.append(button); }
     }
     std::ranges::sort(headers, {}, [toolbox](QWidget* button) { return button->mapTo(toolbox, QPoint{}).y(); });
     const QStringList expected{QStringLiteral("图像采集"), QStringLiteral("定位"), QStringLiteral("测量"),
-        QStringLiteral("识别"), QStringLiteral("缺陷检测"), QStringLiteral("边缘学习"), QStringLiteral("深度学习"),
         QStringLiteral("标定"), QStringLiteral("运算"), QStringLiteral("图像处理"), QStringLiteral("颜色处理"),
-        QStringLiteral("拆分组合"), QStringLiteral("图形生成"), QStringLiteral("逻辑工具"), QStringLiteral("通信")};
+        QStringLiteral("拆分组合"), QStringLiteral("逻辑工具"), QStringLiteral("通信")};
     QStringList titles;
     QList<QImage> glyphs;
     for (auto* header : headers) {
@@ -523,7 +557,7 @@ void WorkspaceTests::toolbox_category_grid_and_search()
     }
     QCOMPARE(titles, expected);
     auto* acquisition = headers.at(expected.indexOf(QStringLiteral("图像采集")));
-    auto* recognition = headers.at(expected.indexOf(QStringLiteral("识别")));
+    auto* location = headers.at(expected.indexOf(QStringLiteral("定位")));
     auto* logic = headers.at(expected.indexOf(QStringLiteral("逻辑工具")));
     window.activateWindow();
     search_button->setFocus();
@@ -552,10 +586,13 @@ void WorkspaceTests::toolbox_category_grid_and_search()
     }
     appearance.setMode(previous_mode);
     QVERIFY(!acquisition->isChecked() && drawer->isHidden());
+    auto* canvas = control<QGraphicsView>(window, "workflowCanvas");
+    const auto closed_canvas = workspace_rect(*canvas, window);
     acquisition->click();
-    QVERIFY(!recognition->isChecked() && acquisition->isChecked() && drawer->isVisible());
-    recognition->click();
-    QVERIFY(recognition->isChecked() && !acquisition->isChecked());
+    QCOMPARE(workspace_rect(*canvas, window), closed_canvas);
+    QVERIFY(!location->isChecked() && acquisition->isChecked() && drawer->isVisible());
+    location->click();
+    QVERIFY(location->isChecked() && !acquisition->isChecked());
 
     QList<QAbstractButton*> tiles;
     QSet<QString> offered;
@@ -572,7 +609,7 @@ void WorkspaceTests::toolbox_category_grid_and_search()
     QCOMPARE(offered, registered);
 
     search->setText(QStringLiteral("识别"));
-    QVERIFY(recognition->isVisible() && recognition->isChecked());
+    QVERIFY(location->isVisible() && location->isChecked());
     QVERIFY(acquisition->isVisible());
     QVERIFY(std::ranges::none_of(tiles, [](const auto* tile) { return tile->isVisible(); }));
     search->setText(QStringLiteral("逻辑工具"));
@@ -591,15 +628,118 @@ void WorkspaceTests::toolbox_category_grid_and_search()
     QTRY_VERIFY(grid->itemAtPosition(0, 0) && grid->itemAtPosition(0, 0)->widget());
     QCOMPARE(grid->itemAtPosition(0, 0)->widget()->property("toolType").toString(), QStringLiteral("@loop"));
     search->clear();
-    QVERIFY(!acquisition->isChecked() && recognition->isChecked() && !logic->isChecked());
+    QVERIFY(!acquisition->isChecked() && location->isChecked() && !logic->isChecked());
     QVERIFY(std::ranges::all_of(headers, [](const auto* header) { return header->isVisible(); }));
-    recognition->click();
-    QVERIFY(!recognition->isChecked() && drawer->isHidden());
+    location->click();
+    QVERIFY(!location->isChecked() && drawer->isHidden());
     QCOMPARE(toolbox->width(), rail->width());
     search_button->click();
     QVERIFY(search->hasFocus() && drawer->isVisible());
     QTest::keyClick(search, Qt::Key_Escape);
     QVERIFY(drawer->isHidden() && search_button->hasFocus());
+}
+
+void WorkspaceTests::workspace_visual_states()
+{
+    const auto registry = take(app::make_tool_registry());
+    const auto sample = take(infrastructure::load_solution(fs::path(QString::fromUtf8(VISIONPRO_S69_DIRECTORY).toStdU16String()), registry));
+    EditorWindow window(sample.solution(), registry);
+    window.resize(1440, 800);
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    const QString output = qEnvironmentVariable("VISIONPRO_UI_STATE_SCREENSHOTS");
+    const auto capture = [&](const QString& state) {
+        if (output.isEmpty()) { return; }
+        const auto file = QDir(output).filePath(QStringLiteral("ui4-%1-%2.png").arg(QGuiApplication::platformName(), state));
+        const auto image = window.grab();
+        QVERIFY2(image.save(file), qPrintable(file));
+        qInfo() << state << "platform" << QGuiApplication::platformName() << "window" << window.size()
+                << "image" << image.size() << "DPR" << image.devicePixelRatio()
+                << "screen" << window.screen()->geometry() << "logical DPI" << window.screen()->logicalDotsPerInch()
+                << "font" << QFontInfo(window.font()).family();
+    };
+    const auto* drawer = control<QWidget>(window, "toolDrawer");
+    const auto* canvas = control<QGraphicsView>(window, "workflowCanvas");
+    QVERIFY(drawer->isHidden() && canvas->isVisible());
+    auto& scene = dynamic_cast<ControlScene&>(*canvas->scene());
+    const auto& graph = static_cast<const ControlGraphModel&>(scene.graphModel());
+    QRectF previous;
+    for (int lane = 0; lane < 5; ++lane) {
+        const auto node = graph.canvas_id(fixture_id<NodeId>(std::to_string(6920 + lane)));
+        auto* card = scene.nodeGraphicsObject(node);
+        QVERIFY(card);
+        const QRectF body(card->pos(), scene.nodeGeometry().size(node));
+        if (lane > 0) { QVERIFY(body.left() - previous.right() >= 4); }
+        previous = body;
+    }
+    capture(QStringLiteral("default"));
+    const auto initial = workspace_rect(*canvas, window);
+    auto* search = control<QToolButton>(window, "searchToolbox");
+    search->click();
+    QTRY_VERIFY(drawer->isVisible());
+    QCOMPARE(workspace_rect(*canvas, window), initial);
+    capture(QStringLiteral("drawer"));
+    search->click();
+    auto* diagnostics = control<QDockWidget>(window, "diagnosticsDock");
+    control<QToolButton>(window, "openDiagnostics")->click();
+    QTRY_VERIFY(diagnostics->isVisible());
+    capture(QStringLiteral("diagnostics"));
+    diagnostics->close();
+    window.resize(1920, 1080);
+    QTRY_COMPARE(window.size(), QSize(1920, 1080));
+    capture(QStringLiteral("fullhd"));
+}
+
+void WorkspaceTests::remembers_and_resets_workspace_layout()
+{
+    QTemporaryDir temp;
+    QSettings settings(temp.filePath(QStringLiteral("layout.ini")), QSettings::IniFormat);
+    const auto registry = take(app::make_tool_registry());
+    const auto sample = take(infrastructure::load_solution(fs::path(QString::fromUtf8(VISIONPRO_S69_DIRECTORY).toStdU16String()), registry));
+    int pinned_width = 0;
+    QSize stored_size;
+    {
+        EditorWindow first(sample.solution(), registry, nullptr, &settings);
+        stored_size = QSize(1280, 720).boundedTo(first.screen()->availableGeometry().size() - QSize(16, 48));
+        first.resize(stored_size);
+        first.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&first));
+        auto* splitter = control<QSplitter>(first, "workspaceSplitter");
+        const int rail_width = splitter->sizes().front();
+        control<QToolButton>(first, "searchToolbox")->click();
+        QCOMPARE(splitter->sizes().front(), rail_width);
+        control<QToolButton>(first, "pinToolDrawer")->click();
+        QVERIFY(splitter->sizes().front() > rail_width);
+        splitter->setSizes({320, 470, 480});
+        pinned_width = splitter->sizes().front();
+        control<QAction>(first, "showResultPanel")->setChecked(false);
+        QVERIFY(first.close());
+    }
+    QCOMPARE(settings.value("workspace/layout/version").toInt(), 1);
+    {
+        EditorWindow reopened(sample.solution(), registry, nullptr, &settings);
+        reopened.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&reopened));
+        QCOMPARE(reopened.size(), stored_size);
+        auto* splitter = control<QSplitter>(reopened, "workspaceSplitter");
+        QCOMPARE(splitter->sizes().front(), pinned_width);
+        QVERIFY(control<QToolButton>(reopened, "pinToolDrawer")->isChecked());
+        QVERIFY(control<QDockWidget>(reopened, "moduleHistoryDock")->isHidden());
+        control<QAction>(reopened, "resetWorkspaceLayout")->trigger();
+        QVERIFY(!control<QToolButton>(reopened, "pinToolDrawer")->isChecked());
+        QVERIFY(splitter->sizes().front() < pinned_width);
+        QVERIFY(control<QDockWidget>(reopened, "moduleHistoryDock")->isVisible());
+        QVERIFY(!control<QAction>(reopened, "undoDraft")->isEnabled());
+        QVERIFY(reopened.close());
+    }
+    for (const int version : {1, 99}) {
+        settings.setValue("workspace/layout/version", version);
+        settings.setValue("workspace/layout/pinned", true);
+        settings.setValue("workspace/layout/columns", QByteArray("corrupt"));
+        EditorWindow recovered(sample.solution(), registry, nullptr, &settings);
+        QVERIFY(!control<QToolButton>(recovered, "pinToolDrawer")->isChecked());
+        QVERIFY(control<QAction>(recovered, "showResultPanel")->isChecked());
+    }
 }
 
 void WorkspaceTests::five_lane_selection_and_history()
@@ -619,7 +759,7 @@ void WorkspaceTests::five_lane_selection_and_history()
     auto* canvas = control<QGraphicsView>(window, "workflowCanvas");
     auto* stats = control<QLabel>(window, "workspaceStats");
     auto* image = control<ImagePanel>(window, "imagePanel");
-    auto* source = control<QComboBox>(window, "workspaceImageSource");
+    auto* source = control<QComboBox>(*image, "workspaceImageSource");
     auto* table = control<QTreeWidget>(window, "moduleHistoryTable");
     auto* follow = control<QCheckBox>(window, "followLatest");
     auto* selector = control<QTabBar>(window, "workflowSelector");
@@ -628,8 +768,17 @@ void WorkspaceTests::five_lane_selection_and_history()
     auto* tools = control<QWidget>(window, "nodeToolbox");
     auto* run = control<QAction>(window, "runWorkflow");
     auto* run_solution = control<QAction>(window, "runSolution");
-    QVERIFY(flow_bar->isAncestorOf(selector) && selector->count() == static_cast<int>(window.draft().workflows.size()));
-    QVERIFY(toolbar->widgetForAction(run)->isVisible() && toolbar->widgetForAction(run_solution)->isVisible());
+    QVERIFY(flow_bar->isAncestorOf(selector));
+    for (const auto& flow : window.draft().workflows) {
+        int matching_tabs = 0;
+        for (int row = 0; row < selector->count(); ++row) {
+            if (selector->tabData(row).toString() == QString::fromStdString(flow.id.to_string())) { ++matching_tabs; }
+        }
+        QCOMPARE(matching_tabs, 1);
+    }
+    auto* run_button = control<QToolBar>(window, "workflowRunBar")->widgetForAction(run);
+    QVERIFY(run_button && run_button->isVisible() && !toolbar->widgetForAction(run));
+    QVERIFY(toolbar->widgetForAction(run_solution) && toolbar->widgetForAction(run_solution)->isVisible());
     QVERIFY(!window.draft().graph && !run_solution->isEnabled());
     auto* history = window.findChild<ModuleHistoryPanel*>();
     auto* controller = window.findChild<RunController*>();
@@ -687,9 +836,10 @@ void WorkspaceTests::five_lane_selection_and_history()
     QCOMPARE(table->headerItem()->text(5), QStringLiteral("允许范围"));
     QVERIFY(!table->isColumnHidden(4) && !table->isColumnHidden(5) && table->isColumnHidden(3));
     QVERIFY(run->isEnabled());
-    run->trigger();
+    QTest::mouseClick(run_button, Qt::LeftButton);
     QTRY_VERIFY_WITH_TIMEOUT(controller->can_start() && controller->runs().size() == 1, 10000);
     const auto first = controller->runs().front();
+    QCOMPARE(first.identity().workflow, inspection_id);
     QTRY_VERIFY(history->selected_invocation() && history->selected_invocation()->node == judge_id);
     QTRY_VERIFY(image->frame() && table->topLevelItemCount() == 1);
     QVERIFY(!visible_properties(window));
@@ -697,6 +847,13 @@ void WorkspaceTests::five_lane_selection_and_history()
     QCOMPARE(table->topLevelItem(0)->text(1), QStringLiteral("成功"));
     QCOMPARE(table->topLevelItem(0)->text(4), QStringLiteral("50"));
     QCOMPARE(table->topLevelItem(0)->text(5), QStringLiteral("[10, 40]"));
+    auto* result_tabs = control<QTabBar>(window, "workspaceResultTabs");
+    auto* current_result = control<QLabel>(window, "currentDetectionResult");
+    auto* origin = control<QLabel>(window, "resultContext");
+    result_tabs->setCurrentIndex(0);
+    QVERIFY(current_result->isVisible() && current_result->text().contains(QStringLiteral("判定 NG")));
+    QVERIFY(!origin->text().contains(QStringLiteral("此前配置")));
+    result_tabs->setCurrentIndex(1);
     QVERIFY(table->topLevelItem(0)->textAlignment(4) & Qt::AlignRight);
     QVERIFY(table->visualItemRect(table->topLevelItem(0)).height() >= std::max(28, table->fontMetrics().height() + 8));
     const auto name = QString::fromStdString(find_node(*find_workflow(window.draft(), inspection_id), measure_id)->name);
@@ -722,6 +879,7 @@ void WorkspaceTests::five_lane_selection_and_history()
     QVERIFY(properties->close());
     QTRY_VERIFY(!visible_properties(window));
     QVERIFY(!table->visibleRegion().isEmpty() && table->topLevelItemCount() == 1);
+    QTRY_VERIFY(origin->text().contains(QStringLiteral("此前配置")));
     QCOMPARE(table->topLevelItem(0)->text(5), QStringLiteral("[10, 40]"));
     compare_view_with_run(*image, first);
     diagnostics->close();
@@ -729,7 +887,10 @@ void WorkspaceTests::five_lane_selection_and_history()
     QTRY_VERIFY_WITH_TIMEOUT(!window.file_busy(), 10000);
     QTest::mouseClick(canvas->viewport(), Qt::LeftButton, Qt::NoModifier, node_position(*canvas, judge_id));
     QVERIFY(run->isEnabled());
-    run->trigger();
+    window.activateWindow();
+    canvas->setFocus();
+    QTRY_VERIFY(canvas->hasFocus());
+    QTest::keyClick(canvas, Qt::Key_F5);
     QTRY_VERIFY_WITH_TIMEOUT(controller->can_start() && controller->runs().size() == 2, 10000);
     const auto latest = controller->runs().back();
     QTest::mouseClick(control<QToolButton>(window, "openWorkspaceLog"), Qt::LeftButton);
@@ -772,6 +933,14 @@ void WorkspaceTests::five_lane_selection_and_history()
     follow->click();
     QTRY_VERIFY(history->selected_run() && history->selected_run()->identity() == latest.identity());
     QTRY_VERIFY(stats->text().contains(round_text(latest)));
+    result_tabs->setCurrentIndex(0);
+    QVERIFY(current_result->text().contains(QStringLiteral("判定 OK")));
+    const auto badge = scene.node_badge(graph.canvas_id(judge_id));
+    QCOMPARE(badge.status, ExecutionStatus::Succeeded);
+    QCOMPARE(badge.judgement, Judgement::OK);
+    QVERIFY(badge.text.contains(QStringLiteral("成功")) && badge.text.contains(QStringLiteral("OK")));
+    QVERIFY(!origin->text().contains(QStringLiteral("此前配置")));
+    result_tabs->setCurrentIndex(1);
     QCOMPARE(round_label->text(), QStringLiteral("最新 · ") + round_text(latest));
     QVERIFY(stats->text().contains(QStringLiteral("5 OK / 0 NG")));
     compare_view_with_run(*image, latest);
@@ -920,9 +1089,9 @@ void WorkspaceTests::format_image_sources()
     window.open_document(package);
     QTRY_VERIFY_WITH_TIMEOUT(!window.file_busy(), 10000);
     auto* canvas = control<QGraphicsView>(window, "workflowCanvas");
-    auto* source = control<QComboBox>(window, "workspaceImageSource");
-    auto* thumbnails = control<QListView>(window, "workspaceImageThumbnails");
     auto* panel = control<ImagePanel>(window, "imagePanel");
+    auto* source = control<QComboBox>(*panel, "workspaceImageSource");
+    auto* thumbnails = control<QListView>(*panel, "workspaceImageThumbnails");
     auto* provenance = control<QLabel>(*panel, "imageProvenance");
     auto* history = window.findChild<ModuleHistoryPanel*>();
     auto* controller = window.findChild<RunController*>();
@@ -1061,6 +1230,16 @@ void WorkspaceTests::recovers_image_view_after_failed_measurement()
     QTRY_VERIFY(history->selected_invocation() && history->selected_invocation()->node == measure_id);
     const auto failed = take(controller->runs().back().lookup(*history->selected_invocation()));
     QVERIFY(failed && failed->data().status == ExecutionStatus::Failed);
+    auto* tabs = control<QTabBar>(window, "workspaceOutputTabs");
+    tabs->setCurrentIndex(2);
+    auto* outputs = control<QTreeWidget>(window, "moduleOutputTree");
+    QCOMPARE(outputs->topLevelItemCount(), 5);
+    for (int row = 0; row < outputs->topLevelItemCount(); ++row) {
+        const auto status = outputs->topLevelItem(row)->text(2);
+        QVERIFY2(status.contains(QStringLiteral("失败")) || status.contains(QStringLiteral("未产出"))
+            || status.contains(QStringLiteral("无效")), qPrintable(status));
+    }
+    tabs->setCurrentIndex(0);
     QTRY_VERIFY(!panel->frame());
     QVERIFY(pixel->text().isEmpty() && overlay_members(*view).isEmpty());
     for (const auto* item : view->scene()->items()) {
@@ -1075,12 +1254,167 @@ void WorkspaceTests::recovers_image_view_after_failed_measurement()
     QVERIFY(QLineF(center(), detail_center).length() < 0.2);
 }
 
-void WorkspaceTests::loop_invocation_history()
+void WorkspaceTests::pages_large_output_collection()
 {
-    const auto package = fs::path(QString::fromUtf8(VISIONPRO_S69_DIRECTORY).toStdU16String()).parent_path() / "s6-loop";
+    const auto node = fixture_id<NodeId>("6170");
+    std::vector<ConfigValue> values;
+    for (int i = 0; i < 150; ++i) { values.push_back(ConfigValue::integer(i)); }
+    auto list = take(ConfigValue::list(DataType::integer(), values));
+    Node formatter{node, "长列表", ToolConfiguration{take(SchemaIdFactory::parse<ToolTypeId>("visionpro.format.int64_list")), 1},
+        {{take(SchemaIdFactory::parse<InputId>("list")), {std::move(list)}}}, {}};
+    Workflow flow{inspection_id, "列表输出", {take(SchemaIdFactory::parse<SchemaId>("test.lists")), 1, {}, {}, {}},
+        {std::move(formatter)}, {}, {}, {node}, {}};
+    Solution draft{fixture_id<SolutionId>("6171"), "列表", 1, 1, {std::move(flow)}};
+    const auto registry = take(app::make_tool_registry());
+    EditorWindow window(draft, registry);
+    window.show();
+    auto* canvas = control<QGraphicsView>(window, "workflowCanvas");
+    QVERIFY(dynamic_cast<ControlScene&>(*canvas->scene()).reveal_node(node));
+    auto* controller = window.findChild<RunController*>();
+    control<QAction>(window, "runWorkflow")->trigger();
+    QTRY_VERIFY_WITH_TIMEOUT(controller->can_start() && controller->runs().size() == 1, 10000);
+    control<QTabBar>(window, "workspaceOutputTabs")->setCurrentIndex(2);
+    auto* outputs = control<QTreeWidget>(window, "moduleOutputTree");
+    QTRY_COMPARE(outputs->topLevelItemCount(), 3);
+    auto* collection = outputs->topLevelItem(2);
+    QCOMPARE(collection->data(0, Qt::UserRole).toString(), QStringLiteral("used_values"));
+    QCOMPARE(collection->childCount(), 0);
+    collection->setExpanded(true);
+    QCOMPARE(collection->childCount(), 65);
+    const auto more = [&](int index) {
+        auto* item = collection->child(index);
+        QVERIFY(item->text(0).contains(QStringLiteral("显示更多")));
+        outputs->setCurrentItem(item);
+        QTest::keyClick(outputs, Qt::Key_Return);
+    };
+    more(64);
+    QCOMPARE(collection->childCount(), 129);
+    more(128);
+    QCOMPARE(collection->childCount(), 150);
+    QCOMPARE(collection->child(149)->text(2), QStringLiteral("149"));
+}
+
+void WorkspaceTests::flow_image_remembers_skipped_source()
+{
+    QTemporaryDir scratch;
+    QVERIFY(scratch.isValid());
+    const auto package = fs::path(scratch.path().toStdU16String()) / "inspection";
+    fs::copy(fs::path(QString::fromUtf8(VISIONPRO_S69_DIRECTORY).toStdU16String()), package, fs::copy_options::recursive);
     const auto registry = take(app::make_tool_registry());
     const auto document = take(infrastructure::load_solution(package, registry));
-    EditorWindow window(document.solution(), registry);
+    auto draft = document.solution();
+    auto& flow = draft.workflows.front();
+    auto branch_measure = *find_node(flow, measure_id);
+    branch_measure.id = fixture_id<NodeId>("6981");
+    branch_measure.name = "NG 复核";
+    flow.nodes.push_back(branch_measure);
+    flow.control_links.push_back({fixture_id<ControlLinkId>("6982"), fixture_id<NodeId>("6944"), {}, branch_measure.id});
+    take(infrastructure::save_solution(document, draft));
+    EditorWindow window(draft, registry);
+    window.show();
+    window.open_document(package);
+    QTRY_VERIFY_WITH_TIMEOUT(!window.file_busy(), 10000);
+    auto* canvas = control<QGraphicsView>(window, "workflowCanvas");
+    auto& scene = dynamic_cast<ControlScene&>(*canvas->scene());
+    auto* history = window.findChild<ModuleHistoryPanel*>();
+    auto* controller = window.findChild<RunController*>();
+    auto* tabs = control<QTabBar>(window, "workspaceOutputTabs");
+    auto* channels = control<QComboBox>(window, "flowImageChannel");
+    auto* run = control<QAction>(window, "runWorkflow");
+    QVERIFY(scene.reveal_node(measure_id));
+    run->trigger();
+    QTRY_VERIFY_WITH_TIMEOUT(controller->can_start() && controller->runs().size() == 1, 10000);
+    const auto first = controller->runs().front();
+    tabs->setCurrentIndex(2);
+    auto* outputs = control<QTreeWidget>(window, "moduleOutputTree");
+    QTRY_COMPARE(outputs->topLevelItemCount(), 5);
+    QCOMPARE(outputs->topLevelItem(0)->data(0, Qt::UserRole).toString(), QStringLiteral("blue"));
+    QCOMPARE(outputs->topLevelItem(0)->text(2), QStringLiteral("50"));
+    QVERIFY(outputs->topLevelItem(0)->text(0) != outputs->topLevelItem(0)->data(0, Qt::UserRole).toString());
+    tabs->setCurrentIndex(1);
+    auto* flow_image = control<ImagePanel>(window, "flowImagePanel");
+    auto* provenance = control<QLabel>(*flow_image, "imageProvenance");
+    QCOMPARE(channels->currentIndex(), 0);
+    const int channel = channels->findText(QStringLiteral("NG 复核 / "), Qt::MatchStartsWith);
+    QVERIFY(channel > 0);
+    channels->setCurrentIndex(channel);
+    QTRY_VERIFY(flow_image->frame());
+    const auto original_frame = *flow_image->frame();
+    const auto original_label = channels->currentText();
+    QVERIFY(original_frame.format().order == ChannelOrder::Mono);
+    QVERIFY(scene.reveal_node(judge_id));
+    QVERIFY(flow_image->frame() && *flow_image->frame() == original_frame);
+    tabs->setCurrentIndex(0);
+    tabs->setCurrentIndex(1);
+    QVERIFY(flow_image->frame() && *flow_image->frame() == original_frame);
+    auto* flows = control<QTabBar>(window, "workflowSelector");
+    flows->setCurrentIndex(1);
+    QCOMPARE(channels->currentIndex(), 0);
+    QVERIFY(!flow_image->frame());
+    channels->setCurrentIndex(1);
+    flows->setCurrentIndex(0);
+    QCOMPARE(channels->currentText(), original_label);
+    QTRY_VERIFY(flow_image->frame() && *flow_image->frame() == original_frame);
+    QVERIFY(scene.reveal_node(judge_id));
+    auto accepted = window.draft();
+    auto& nodes = accepted.workflows.front().nodes;
+    auto& judge = *std::ranges::find(nodes, judge_id, &Node::id);
+    auto& maximum = *std::ranges::find(judge.bindings,
+        BindingTarget{take(SchemaIdFactory::parse<ParameterId>("maximum"))}, &Binding::target);
+    maximum.sources[0] = take(ConfigValue::real(50));
+    controller->start(std::move(accepted), {document, package, {}},
+        {WorkflowTarget{flow.id}, {}, first.request().trigger()}, {});
+    QTRY_VERIFY_WITH_TIMEOUT(controller->can_start() && controller->runs().size() == 2, 10000);
+    QTRY_VERIFY(!flow_image->frame());
+    QCOMPARE(channels->currentText(), original_label);
+    QVERIFY(provenance->text().contains(QStringLiteral("跳过")));
+    QVERIFY(control<ImagePanel>(window, "imagePanel")->frame());
+    history->browse_run(first);
+    QTRY_VERIFY(flow_image->frame() && *flow_image->frame() == original_frame);
+    window.open_document(package);
+    QTRY_VERIFY_WITH_TIMEOUT(!window.file_busy(), 10000);
+    tabs->setCurrentIndex(1);
+    QCOMPARE(channels->currentIndex(), 0);
+    QVERIFY(!flow_image->frame());
+}
+
+void WorkspaceTests::loop_invocation_history()
+{
+    const auto original = fs::path(QString::fromUtf8(VISIONPRO_S69_DIRECTORY).toStdU16String()).parent_path() / "s6-loop";
+    QTemporaryDir scratch;
+    QVERIFY(scratch.isValid());
+    const auto package = fs::path(scratch.path().toStdU16String()) / "loop";
+    fs::copy(original, package, fs::copy_options::recursive);
+    const auto registry = take(app::make_tool_registry());
+    const auto document = take(infrastructure::load_solution(package, registry));
+    const auto loop = fixture_id<NodeId>("6104");
+    const auto child = fixture_id<NodeId>("6105");
+    const auto peer = fixture_id<NodeId>("6198");
+    const auto gate = fixture_id<NodeId>("6196");
+    const auto conditional = fixture_id<NodeId>("6197");
+    auto draft = document.solution();
+    auto& flow = draft.workflows.front();
+    auto second = *find_node(flow, child);
+    second.id = peer;
+    second.name = "复核组件";
+    flow.nodes.push_back(std::move(second));
+    flow.containment.push_back({loop, peer});
+    flow.control_links.push_back({fixture_id<ControlLinkId>("6199"), child, {}, peer});
+    const auto index = take(SchemaIdFactory::parse<InputId>("index"));
+    flow.nodes.push_back({gate, "按迭代选择", ToolConfiguration{take(SchemaIdFactory::parse<ToolTypeId>("visionpro.sim.select")), 1},
+        {{take(SchemaIdFactory::parse<InputId>("mask")), {ScopedInputReference{flow.id, loop, index, {}}}}}, {}});
+    auto conditional_peer = *find_node(flow, child);
+    conditional_peer.id = conditional;
+    conditional_peer.name = "仅第二次执行";
+    flow.nodes.push_back(std::move(conditional_peer));
+    flow.containment.push_back({loop, gate});
+    flow.containment.push_back({loop, conditional});
+    flow.control_links.push_back({fixture_id<ControlLinkId>("6194"), peer, {}, gate});
+    flow.control_links.push_back({fixture_id<ControlLinkId>("6195"), gate, take(SchemaIdFactory::parse<ControlOutputId>("left")), conditional});
+    const auto placement = *find_placement(draft, flow.id, child);
+    draft.layouts.front().nodes.push_back({peer, placement.x + 280, placement.y});
+    take(infrastructure::save_solution(document, draft));
+    EditorWindow window(draft, registry);
     window.show();
     window.open_document(package);
     QTRY_VERIFY_WITH_TIMEOUT(!window.file_busy(), 10000);
@@ -1095,9 +1429,7 @@ void WorkspaceTests::loop_invocation_history()
     const auto run = controller->runs().front();
     const auto progress = take(run.inspect());
     QCOMPARE(progress.iterations.size(), std::size_t{2});
-    const auto loop = fixture_id<NodeId>("6104");
-    const auto child = fixture_id<NodeId>("6105");
-    const auto& scene = dynamic_cast<const ControlScene&>(*canvas->scene());
+    auto& scene = dynamic_cast<ControlScene&>(*canvas->scene());
     const auto& graph = static_cast<const ControlGraphModel&>(scene.graphModel());
     QTest::mouseDClick(canvas->viewport(), Qt::LeftButton, Qt::NoModifier, node_position(*canvas, loop));
     QTRY_VERIFY(graph.scope() == loop);
@@ -1130,7 +1462,48 @@ void WorkspaceTests::loop_invocation_history()
     QVERIFY(first && history->selected_invocation() && first->invocation != history->selected_invocation()->invocation);
     select_iteration(0, 6);
     QVERIFY(history->selected_invocation() == first);
-    qInfo() << "One loop run: selected iterations 0, 1, 0 and matched their distinct invocation scopes and Blob areas 6, 9, 6.";
+    QVERIFY(scene.reveal_node(peer));
+    QTRY_VERIFY(history->selected_invocation() && history->selected_invocation()->node == peer);
+    QVERIFY(history->selected_run()->identity() == run.identity() && history->selected_invocation()->scope == first->scope);
+    auto* tabs = control<QTabBar>(window, "workspaceOutputTabs");
+    tabs->setCurrentIndex(2);
+    auto* outputs = control<QTreeWidget>(window, "moduleOutputTree");
+    QTRY_VERIFY(outputs->topLevelItemCount() == 1);
+    auto* blob = outputs->topLevelItem(0);
+    QCOMPARE(blob->data(0, Qt::UserRole).toString(), QStringLiteral("item"));
+    QCOMPARE(blob->childCount(), 0);
+    blob->setExpanded(true);
+    bool found_area = false;
+    for (int row = 0; row < blob->childCount(); ++row) {
+        if (blob->child(row)->data(0, Qt::UserRole).toString() == QStringLiteral("area_pixels")) {
+            found_area = true;
+            QCOMPARE(blob->child(row)->text(2), QStringLiteral("6"));
+        }
+    }
+    QVERIFY(found_area);
+    control<QTabBar>(window, "workspaceResultTabs")->setCurrentIndex(0);
+    QVERIFY(control<QLabel>(window, "currentDetectionResult")->text().contains(QStringLiteral("迭代 0")));
+    QVERIFY(scene.remove_selected_nodes());
+    QVERIFY(scene.selected_nodes().empty());
+    QVERIFY(!find_node(window.draft().workflows.front(), peer));
+    QVERIFY(history->selected_invocation() && history->selected_invocation()->node == peer);
+    QVERIFY(control<QLabel>(window, "resultContext")->text().contains(QStringLiteral("此前配置")));
+    QCOMPARE(outputs->topLevelItemCount(), 1);
+    scene.undoStack().undo();
+    QVERIFY(find_node(window.draft().workflows.front(), peer));
+    QVERIFY(scene.reveal_node(conditional));
+    QTRY_VERIFY(!history->selected_invocation());
+    QVERIFY(history->selected_run()->identity() == run.identity() && history->selected_scope() == first->scope);
+    QVERIFY(history->selection_message().contains(QStringLiteral("跳过")));
+    QCOMPARE(outputs->topLevelItemCount(), 1);
+    QVERIFY(outputs->topLevelItem(0)->text(2).contains(QStringLiteral("跳过")));
+    QVERIFY(!control<ImagePanel>(window, "imagePanel")->frame());
+    control<QTabBar>(window, "workspaceResultTabs")->setCurrentIndex(1);
+    QVERIFY(scene.reveal_node(child));
+    select_iteration(1, 9);
+    QVERIFY(scene.reveal_node(conditional));
+    QTRY_VERIFY(history->selected_invocation() && history->selected_invocation()->node == conditional);
+    QVERIFY(history->selected_invocation()->scope != first->scope);
 }
 
 } // namespace

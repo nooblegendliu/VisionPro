@@ -22,9 +22,12 @@ public:
     void clear();
     void set_selection(const workflow::Workflow* workflow, const workflow::Node* node);
     void update_runs(std::span<const workflow::RunHandle> runs);
+    void browse_run(const workflow::RunHandle& run);
 
     [[nodiscard]] std::optional<workflow::RunHandle> selected_run() const { return selected_run_; }
     [[nodiscard]] std::optional<core::InvocationKey> selected_invocation() const { return selected_call_; }
+    [[nodiscard]] std::optional<core::ExecutionScopeId> selected_scope() const;
+    [[nodiscard]] QString current_result() const;
     [[nodiscard]] const QString& statistics_text() const { return statistics_; }
     [[nodiscard]] const QString& statistics_details() const { return details_; }
     [[nodiscard]] const QString& selection_message() const { return message_; }

@@ -22,6 +22,11 @@ class QListWidget;
 class QListWidgetItem;
 class QMenu;
 class QPlainTextEdit;
+class QSplitter;
+class QSettings;
+class QPushButton;
+class QStackedWidget;
+class QTreeWidget;
 class QTabBar;
 class QTimer;
 class QToolButton;
@@ -36,12 +41,14 @@ class ModuleHistoryPanel;
 class RunController;
 class RunPanel;
 class WorkspaceToolbox;
+class WorkspaceResults;
 class WorkflowCanvas;
 struct WorkspaceImageSelection;
 
 class EditorWindow final : public QMainWindow {
 public:
-    EditorWindow(workflow::Solution draft, core::ToolRegistry registry, QWidget* parent = nullptr);
+    EditorWindow(workflow::Solution draft, core::ToolRegistry registry, QWidget* parent = nullptr,
+        QSettings* layout_settings = nullptr);
     ~EditorWindow() override;
 
     const workflow::Solution& draft() const noexcept;
@@ -66,6 +73,9 @@ private:
         const QKeySequence& shortcut = {});
     void create_actions();
     void create_docks();
+    void restore_default_layout();
+    void restore_workspace_layout();
+    void save_workspace_layout();
     void create_log_bar();
     void record_event(const QString& message);
     void create_run_actions();
@@ -73,12 +83,17 @@ private:
     void add_workspace_tool(const QString& type, QPointF position);
     void choose_control_connection();
     void show_properties();
+    void show_solution_resources();
+    void set_overview_visible(bool visible);
+    void refresh_overview();
+    void refresh_properties_status();
     void refresh_workspace_selection();
     void refresh_workspace_results();
     void refresh_workspace_statistics();
     void present_workspace_image();
     std::optional<workflow::RunHandle> workspace_cancel_target() const;
-    void start_run(std::optional<workflow::DebugStatePolicy> debug = {});
+    void start_run(std::optional<workflow::DebugStatePolicy> debug = {},
+        std::optional<workflow::NodeTarget> configured = {});
     void show_selected_run_image();
     void show_shared_preview();
     void choose_run_limits();
@@ -141,15 +156,30 @@ private:
     QTabBar* workflows_{};
     QLabel* solution_name_{};
     QLabel* last_event_{};
+    QLabel* solution_run_status_{};
     QPlainTextEdit* event_history_{};
     SolutionRunActions solution_actions_{};
     WorkspaceToolbox* tools_{};
+    QSettings* layout_settings_{};
+    QSplitter* workspace_splitter_{};
+    QSplitter* results_splitter_{};
+    QDockWidget* result_history_dock_{};
+    QAction* show_history_{};
+    QAction* arrange_{};
+    QByteArray default_window_state_;
+    QByteArray default_canvas_state_;
     QMainWindow* canvas_host_{};
     QLabel* workspace_stats_{};
     QToolButton* diagnostics_button_{};
     ModuleHistoryPanel* module_history_{};
+    WorkspaceResults* results_{};
     std::unique_ptr<WorkspaceImageSelection> workspace_image_selection_;
     QDialog* properties_dialog_{};
+    QPushButton* configured_debug_{};
+    QLabel* configured_status_{};
+    QAction* overview_action_{};
+    QStackedWidget* work_pages_{};
+    QTreeWidget* overview_{};
     QDockWidget* images_dock_{};
     RunController* run_controller_{};
     RunPanel* run_panel_{};
@@ -174,6 +204,7 @@ private:
     QAction* export_group_{};
     QAction* import_subgraph_{};
     QAction* resource_copy_{};
+    QAction* resources_{};
     QAction* resource_root_{};
     QAction* preview_image_{};
     QAction* preview_resource_{};
@@ -182,6 +213,7 @@ private:
     QAction* run_group_{};
     QAction* debug_node_{};
     QAction* cancel_run_{};
+    QAction* cancel_workflow_{};
     QAction* arm_trigger_{};
     QAction* workspace_trigger_{};
     QAction* send_frame_{};

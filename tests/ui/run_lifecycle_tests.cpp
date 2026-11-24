@@ -1,6 +1,7 @@
 #include "control_scene.hpp"
 #include "editor_window.hpp"
 #include "image_panel.hpp"
+#include "module_history_panel.hpp"
 #include "run_controller.hpp"
 #include "run_panel.hpp"
 
@@ -8,17 +9,23 @@
 #include <visionpro/core/schema_id_factory.hpp>
 
 #include <QAction>
+#include <QApplication>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QTabBar>
 #include <QCryptographicHash>
 #include <QDockWidget>
 #include <QFile>
 #include <QGraphicsView>
+#include <QInputDialog>
 #include <QLabel>
 #include <QListWidget>
+#include <QMessageBox>
 #include <QPointer>
 #include <QPushButton>
 #include <QTemporaryDir>
+#include <QTimer>
+#include <QToolBar>
 #include <QTreeWidget>
 #include <QtTest>
 
@@ -240,7 +247,7 @@ bool write_byte(const QString& path, char value)
 }
 
 template<class Widget>
-Widget& control(EditorWindow& window, const char* object_name)
+Widget& control(QWidget& window, const char* object_name)
 {
     if (auto* child = window.findChild<Widget*>(QString::fromLatin1(object_name))) { return *child; }
     throw std::runtime_error(object_name);
@@ -259,8 +266,11 @@ private slots:
     void admits_multiple_runs_and_cancels_only_the_selected_identity();
     void workspace_cancel_shortcut_keeps_its_flow_data();
     void workspace_cancel_shortcut_keeps_its_flow();
+    void local_cancel_uses_explicit_active_round();
+    void solution_cancel_waits_for_child_exit();
     void replace_and_close_with_pending_physical_exit();
     void edits_preserve_running_capture_and_displayed_image();
+    void invalid_output_diagnostic();
     void late_completion_after_window_destruction();
     void trigger_busy_diagnostic_and_cancel_wait_for_cleanup();
 };
@@ -284,6 +294,8 @@ void RunLifecycleTests::trigger_busy_diagnostic_and_cancel_wait_for_cleanup()
     controller.send_frame(flow.id, 11);
     QTRY_VERIFY(send.isEnabled() && controller.runs().size() == 1 && driver->call(0));
     const auto run = controller.runs().front();
+    QVERIFY(!control<QAction>(window, "cancelWorkflowRun").isEnabled());
+    QVERIFY(!control<QAction>(window, "cancelSolutionRun").isEnabled());
     controller.send_frame(flow.id, 12);
     auto& issues = control<QListWidget>(window, "editorDiagnostics");
     const auto active = QStringLiteral("active run %1").arg(run.identity().run.value());
@@ -372,6 +384,95 @@ void RunLifecycleTests::admits_multiple_runs_and_cancels_only_the_selected_ident
     QTRY_VERIFY(controller.can_start() && controller.runs().empty());
     QVERIFY(take(second.inspect()).status == ExecutionStatus::Succeeded && take(queued.inspect()).status == ExecutionStatus::Succeeded);
     QCOMPARE(driver->cancellations.load(), 1u);
+}
+
+void RunLifecycleTests::local_cancel_uses_explicit_active_round()
+{
+    auto draft = solution_for('1');
+    draft.workflows.front().admission = {2, 0, AdmissionOverflow::Reject};
+    auto driver = std::make_shared<Driver>();
+    EditorWindow window(std::move(draft), registry_for(driver));
+    const DrainOnExit drain{*driver};
+    window.show();
+    auto& controller = control<RunController>(window, "runController");
+    auto& start = control<QAction>(window, "runWorkflow");
+    auto& cancel = control<QAction>(window, "cancelWorkflowRun");
+    auto* local_button = control<QToolBar>(window, "workflowRunBar").widgetForAction(&cancel);
+    QVERIFY(local_button);
+    start.trigger();
+    QTRY_VERIFY(driver->call(0) && start.isEnabled() && controller.runs().size() == 1);
+    const auto first = controller.runs().front();
+    control<QCheckBox>(window, "followLatest").setChecked(false);
+    start.trigger();
+    QTRY_VERIFY(driver->call(1) && controller.runs().size() == 2);
+    const auto second = controller.runs().back();
+    QVERIFY(!control<QAction>(window, "cancelSolutionRun").isEnabled());
+    bool chose_second = false;
+    QTimer::singleShot(0, &window, [&] {
+        if (auto* dialog = qobject_cast<QInputDialog*>(QApplication::activeModalWidget())) {
+            auto* list = dialog->findChild<QComboBox*>();
+            const int row = list ? list->findText(QStringLiteral("第 %1 轮").arg(second.identity().run.value())) : -1;
+            if (row < 0) { dialog->reject(); return; }
+            list->setCurrentIndex(row);
+            chose_second = true;
+            dialog->accept();
+        }
+    });
+    QTest::mouseClick(local_button, Qt::LeftButton);
+    QVERIFY(chose_second);
+    QTRY_COMPARE(take(second.inspect()).status, ExecutionStatus::Cancelled);
+    QCOMPARE(take(first.inspect()).status, ExecutionStatus::Running);
+    auto* history = window.findChild<ModuleHistoryPanel*>();
+    QVERIFY(history && history->selected_run() && history->selected_run()->identity() == first.identity());
+    QTest::mouseClick(local_button, Qt::LeftButton);
+    QTRY_COMPARE(take(first.inspect()).status, ExecutionStatus::Cancelled);
+    QVERIFY(!cancel.isEnabled());
+}
+
+void RunLifecycleTests::solution_cancel_waits_for_child_exit()
+{
+    auto draft = solution_for('1');
+    draft.format_version = solution_graph_manifest_version;
+    draft.graph = SolutionGraph{{draft.workflows.front().id}, {}, {}};
+    auto driver = std::make_shared<Driver>();
+    EditorWindow window(std::move(draft), registry_for(driver));
+    const DrainOnExit drain{*driver};
+    window.show();
+    auto& controller = control<RunController>(window, "runController");
+    auto& start = control<QAction>(window, "runSolution");
+    auto& stop = control<QAction>(window, "cancelSolutionRun");
+    auto& status = control<QLabel>(window, "solutionRunStatus");
+    auto& toolbar = control<QToolBar>(window, "workspaceToolbar");
+    auto* start_button = toolbar.widgetForAction(&start);
+    auto* stop_button = toolbar.widgetForAction(&stop);
+    QVERIFY(start_button && stop_button);
+
+    control<QAction>(window, "runWorkflow").trigger();
+    QTRY_VERIFY(driver->call(0) && !controller.runs().empty());
+    const auto old = controller.runs().front();
+    const auto completed = *driver->call(0);
+    take(completed.completion.complete(succeeded(completed)));
+    take(completed.completion.mark_exited());
+    QTRY_VERIFY(start.isEnabled());
+    control<QCheckBox>(window, "followLatest").setChecked(false);
+    auto* history = window.findChild<ModuleHistoryPanel*>();
+    QVERIFY(history && history->selected_run() && history->selected_run()->identity() == old.identity());
+
+    QTest::mouseClick(start_button, Qt::LeftButton);
+    QTRY_VERIFY(driver->call(1) && stop.isEnabled());
+    QTest::mouseClick(stop_button, Qt::LeftButton);
+    QCOMPARE(status.text(), QStringLiteral("方案已请求取消"));
+    QVERIFY(!stop.isEnabled() && !start.isEnabled());
+    QTRY_VERIFY(controller.solution_report() && controller.solution_report()->status == ExecutionStatus::Cancelled);
+    QCOMPARE(controller.solution_report()->runs.size(), 1u);
+    const auto child = controller.solution_report()->runs.front();
+    QVERIFY(child.identity() != old.identity() && !take(child.inspect()).quiescent);
+    QVERIFY(status.text().contains(QStringLiteral("已取消")) && status.text().contains(QStringLiteral("正在清理")));
+    QVERIFY(!start.isEnabled() && !control<QAction>(window, "cancelWorkflowRun").isEnabled());
+    release(*driver->call(1));
+    QTRY_VERIFY(start.isEnabled() && take(child.inspect()).quiescent);
+    QVERIFY(!status.text().contains(QStringLiteral("正在清理")) && status.text().contains(QStringLiteral("已取消")));
+    QVERIFY(history->selected_run() && history->selected_run()->identity() == old.identity());
 }
 
 void RunLifecycleTests::workspace_cancel_shortcut_keeps_its_flow_data()
@@ -618,7 +719,7 @@ void RunLifecycleTests::edits_preserve_running_capture_and_displayed_image()
     auto& nodes = control<QTreeWidget>(window, "runNodes");
     auto& open_image = control<QPushButton>(window, "showRunImage");
     auto& images = control<ImagePanel>(window, "imagePanel");
-    auto& provenance = control<QLabel>(window, "imageProvenance");
+    auto& provenance = control<QLabel>(images, "imageProvenance");
     controller.set_limits(1, controller.observation_capacity());
     window.show();
     window.open_document(directory);
@@ -684,7 +785,7 @@ void RunLifecycleTests::edits_preserve_running_capture_and_displayed_image()
     QTRY_VERIFY(panel.selected_run() && panel.selected_run()->identity() == second.identity());
     QVERIFY(images.frame() && std::ranges::equal(images.frame()->copy_pixels(), first_pixels));
     QCOMPARE(provenance.text(), first_label);
-    auto& view = control<ImageView>(window, "imageView");
+    auto& view = control<ImageView>(images, "imageView");
     const auto pixel = view.pixel_at(view.mapFromScene(QPointF{1, 0}));
     QVERIFY(pixel && pixel->samples[0] == 17);
 
@@ -694,6 +795,42 @@ void RunLifecycleTests::edits_preserve_running_capture_and_displayed_image()
     const std::array second_pixels{std::byte{11}, std::byte{31}, std::byte{31}, std::byte{11}};
     QVERIFY(images.frame() && std::ranges::equal(images.frame()->copy_pixels(), second_pixels));
     QVERIFY(provenance.text() != first_label);
+}
+
+void RunLifecycleTests::invalid_output_diagnostic()
+{
+    auto driver = std::make_shared<Driver>();
+    auto draft = solution_for('1');
+    const auto node = draft.workflows.front().nodes.front().id;
+    EditorWindow window(std::move(draft), registry_for(driver));
+    const DrainOnExit drain{*driver};
+    window.show();
+    auto& canvas = control<QGraphicsView>(window, "workflowCanvas");
+    QVERIFY(dynamic_cast<ControlScene&>(*canvas.scene()).reveal_node(node));
+    control<QAction>(window, "runWorkflow").trigger();
+    QTRY_VERIFY(driver->call(0));
+    const auto call = *driver->call(0);
+    const auto output = key<OutputId>("measurement");
+    Diagnostic failure{ErrorCode::InvalidValue, Severity::Error, {}, "Rejected fixture measurement."};
+    failure.location.node = node;
+    failure.location.output = output;
+    take(call.completion.complete({call.identity, ToolCompletionStatus::Failed, ToolJudgement::NotEvaluated,
+        {{output, InvalidOutput{failure}}}, {failure}}));
+    take(call.completion.mark_exited());
+    auto& tabs = control<QTabBar>(window, "workspaceOutputTabs");
+    tabs.setCurrentIndex(2);
+    auto& outputs = control<QTreeWidget>(window, "moduleOutputTree");
+    QTRY_VERIFY(outputs.topLevelItemCount() == 1 && outputs.topLevelItem(0)->text(2).contains(QStringLiteral("无效")));
+    auto* row = outputs.topLevelItem(0);
+    QCOMPARE(row->data(0, Qt::UserRole).toString(), QStringLiteral("measurement"));
+    QVERIFY(row->text(2).contains(QString::fromStdString(failure.message)));
+    outputs.setCurrentItem(row);
+    QTest::keyClick(&outputs, Qt::Key_Return);
+    auto* details = window.findChild<QMessageBox*>();
+    QTRY_VERIFY(details && details->isVisible());
+    QVERIFY(details->text().contains(QStringLiteral("measurement")) && details->text().contains(QString::fromStdString(failure.message)));
+    QVERIFY(details->close());
+    QCOMPARE(outputs.currentItem(), row);
 }
 
 void RunLifecycleTests::late_completion_after_window_destruction()

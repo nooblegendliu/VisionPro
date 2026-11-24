@@ -91,6 +91,13 @@ bool RunController::can_send_frame(WorkflowId id) const
         && !found->second.dispatching && !found->second.stopping;
 }
 
+QString RunController::trigger_status(WorkflowId id) const
+{
+    const auto found = triggers_.find(id);
+    if (found == triggers_.end()) { return tr("未启动"); }
+    return found->second.stopping ? tr("正在停止") : tr("已启动");
+}
+
 QString RunController::camera_status(WorkflowId id) const
 {
     const auto status = camera_status_.find(id);
@@ -106,9 +113,10 @@ void RunController::arm_trigger(Solution draft, RunDocument document, WorkflowId
     else { camera_status_.erase(id); }
     preparing_ = true;
     emit changed();
+    const auto edit_generation = document.edit_generation;
     on_worker(this, [session = session_, draft = std::move(draft), document = std::move(document), id] {
         return arm(session, draft, document, id);
-    }, [this, configuration, id](Result<TriggerSource> result) {
+    }, [this, configuration, id, edit_generation](Result<TriggerSource> result) {
         preparing_ = false;
         if (const auto* failure = std::get_if<Diagnostic>(&result)) {
             if (retiring_) { close_session(); return; }
@@ -120,6 +128,9 @@ void RunController::arm_trigger(Solution draft, RunDocument document, WorkflowId
             source.control = std::move(opened.control);
             source.camera = std::move(opened.camera);
             if (retiring_) { disarm_triggers(); close_session(); return; }
+            if (const auto snapshot = session_->inspect().active) {
+                emit snapshot_published(snapshot->identity(), edit_generation);
+            }
             if (configuration.mode == TriggerMode::Continuous) {
                 source.timer = std::make_unique<QChronoTimer>(std::chrono::milliseconds{configuration.interval_ms});
                 source.timer->setTimerType(Qt::PreciseTimer);
@@ -170,7 +181,7 @@ void RunController::dispatch_trigger(WorkflowId id, std::optional<std::int64_t> 
             // this entry. Its callback cannot change the new source's status.
             const auto* receipt = std::get_if<std::optional<TriggerReceipt>>(&result);
             if (receipt && *receipt && std::holds_alternative<RunHandle>((*receipt)->submission)) {
-                record_submission((*receipt)->submission);
+                record_submission((*receipt)->submission, RunOrigin::Trigger);
                 emit changed();
             }
             return;
@@ -198,7 +209,7 @@ void RunController::dispatch_trigger(WorkflowId id, std::optional<std::int64_t> 
             if (const auto& key = receipt->correlation) {
                 description += QStringLiteral(" · %1 / %2").arg(QString::fromUtf8(key->domain().text()), QString::fromUtf8(key->key()));
             }
-            record_submission(receipt->submission, (description + QStringLiteral(" · ")).toStdString());
+            record_submission(receipt->submission, RunOrigin::Trigger, (description + QStringLiteral(" · ")).toStdString());
             if (handle) {
                 emit trigger_notice(description + (handle->admission() == RunAdmission::Queued
                     ? QStringLiteral(" · Queued") : QStringLiteral(" · Accepted")));
@@ -234,7 +245,8 @@ void RunController::stop_trigger(WorkflowId id, TriggerStopMode mode)
         auto stopped = control->stop(mode, Clock::time_point::max());
         if (const auto* failure = std::get_if<Diagnostic>(&closed)) { return *failure; }
         return stopped;
-    }, [this, control, id](Result<RunWaitOutcome> result) {
+    }, [this, control, id, generation = document_generation_](Result<RunWaitOutcome> result) {
+        if (generation != document_generation_) { return; }
         const auto it = triggers_.find(id);
         if (it == triggers_.end() || it->second.control != control) { return; }
         if (it->second.camera) {

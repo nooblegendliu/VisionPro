@@ -356,6 +356,7 @@ void ImageView::fit_image()
     fitInView(image_bounds(), Qt::KeepAspectRatio);
     fitted_scale_ = transform().m11();
     fit_on_resize_ = true;
+    emit zoom_changed(fitted_scale_ * viewport()->devicePixelRatioF());
 }
 
 void ImageView::zoom_at(double target_scale, const QPoint& position)
@@ -368,6 +369,7 @@ void ImageView::zoom_at(double target_scale, const QPoint& position)
     scale(factor, factor);
     centerOn(mapToScene(viewport()->rect().center()) + anchor - mapToScene(position));
     fit_on_resize_ = false;
+    emit zoom_changed(transform().m11() * viewport()->devicePixelRatioF());
 }
 
 void ImageView::zoom_by(double factor)
@@ -603,15 +605,15 @@ void ImageView::describe_pixel(const std::optional<ImagePixel>& pixel)
         emit pixel_changed({});
         return;
     }
-    auto description = tr("Pixel (%1, %2)")
+    auto description = tr("像素 (%1, %2)")
         .arg(static_cast<qulonglong>(pixel->x)).arg(static_cast<qulonglong>(pixel->y));
     if (image_->coordinate_frame() != image_->root_frame()) {
-        description += tr(" · Root (%1, %2)")
+        description += tr(" · 根坐标 (%1, %2)")
             .arg(static_cast<qulonglong>(pixel->root_x)).arg(static_cast<qulonglong>(pixel->root_y));
     }
     const auto& value = pixel->samples;
     description += pixel->order == ChannelOrder::Mono
-        ? (labels_.isNull() ? tr(" · Gray %1") : tr(" · Class ID %1")).arg(static_cast<int>(value[0]))
+        ? (labels_.isNull() ? tr(" · 灰度 %1") : tr(" · 类别 ID %1")).arg(static_cast<int>(value[0]))
         : tr(" · B %1, G %2, R %3").arg(static_cast<int>(value[0])).arg(static_cast<int>(value[1])).arg(static_cast<int>(value[2]));
     emit pixel_changed(description);
 }

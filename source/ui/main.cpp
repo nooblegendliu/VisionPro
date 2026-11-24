@@ -9,6 +9,7 @@
 #include <QCommandLineParser>
 #include <QFileInfo>
 #include <QMessageBox>
+#include <QSettings>
 
 #include <stdexcept>
 
@@ -27,8 +28,10 @@ int main(int argc, char** argv)
         if (const auto* failure = std::get_if<visionpro::core::Diagnostic>(&registered)) {
             throw std::runtime_error(failure->message);
         }
+        QSettings preferences(QSettings::defaultFormat(), QSettings::UserScope,
+            QStringLiteral("VisionPro"), QStringLiteral("VisionPro"));
         visionpro::ui::EditorWindow window(visionpro::ui::canvas_example(),
-            std::get<visionpro::core::ToolRegistry>(std::move(registered)));
+            std::get<visionpro::core::ToolRegistry>(std::move(registered)), nullptr, &preferences);
         window.show();
         const auto paths = parser.positionalArguments();
         if (paths.size() > 1) { throw std::invalid_argument("Specify a single solution directory or solution.json."); }

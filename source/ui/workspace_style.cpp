@@ -25,6 +25,10 @@ QFont workspace_font(WorkspaceText role)
     case WorkspaceText::NodeTitle: font.setWeight(QFont::DemiBold); break;
     case WorkspaceText::Category: font.setWeight(QFont::Medium); break;
     case WorkspaceText::Secondary: font.setPointSizeF(body - 1); break;
+    case WorkspaceText::Technical:
+        font = QFontDatabase::systemFont(QFontDatabase::FixedFont);
+        font.setPointSizeF(body - 1);
+        break;
     case WorkspaceText::Body: break;
     }
     return font;

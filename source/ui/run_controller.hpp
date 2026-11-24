@@ -18,6 +18,7 @@ struct RunDocument {
     std::optional<infrastructure::SolutionDocument> source;
     std::optional<std::filesystem::path> directory;
     std::vector<infrastructure::NamedResourceRoot> roots;
+    std::uint64_t edit_generation{};
 };
 
 struct SessionSharedPreview {
@@ -30,6 +31,8 @@ struct SolutionEntryInputs {
     core::WorkflowId workflow;
     EnteredRunInputs entered;
 };
+
+enum class SolutionActivity { Idle, Running, CancelRequested, CleaningUp };
 
 class RunController final : public QObject {
     Q_OBJECT
@@ -44,6 +47,8 @@ public:
     void start_solution(workflow::Solution draft, RunDocument document, std::vector<SolutionEntryInputs> inputs);
     void cancel_solution();
     bool can_cancel_solution() const noexcept { return solution_stop_ && !solution_stop_->stop_requested(); }
+    SolutionActivity solution_activity() const noexcept;
+    std::vector<workflow::RunHandle> cancellable_workflow_runs(core::WorkflowId workflow) const;
     const std::optional<workflow::SolutionRunReport>& solution_report() const noexcept { return solution_report_; }
     void arm_trigger(workflow::Solution draft, RunDocument document, core::WorkflowId workflow);
     void send_frame(core::WorkflowId workflow, std::int64_t frame);
@@ -51,6 +56,7 @@ public:
     bool can_arm_trigger(const workflow::Workflow& flow) const;
     bool can_send_frame(core::WorkflowId workflow) const;
     bool can_stop_trigger(core::WorkflowId workflow) const;
+    QString trigger_status(core::WorkflowId workflow) const;
     QString camera_status(core::WorkflowId workflow) const;
     core::Result<std::optional<SessionSharedPreview>> shared_preview() const;
     bool can_reset_state(const workflow::NodeTarget& target) const;
@@ -69,6 +75,7 @@ public:
     std::size_t observation_capacity() const noexcept { return observation_capacity_; }
 
 signals:
+    void snapshot_published(const visionpro::workflow::SnapshotIdentity& snapshot, std::uint64_t edit_generation);
     void changed();
     void operation_failed(const visionpro::core::Diagnostic& diagnostic);
     void trigger_notice(const QString& message);
@@ -82,7 +89,8 @@ private:
     void trim_history();
     bool workflow_active(core::WorkflowId workflow) const noexcept;
     bool ensure_session();
-    void record_submission(const workflow::RunSubmission& submission, std::string description = {});
+    enum class RunOrigin { Manual, Trigger, Solution };
+    void record_submission(const workflow::RunSubmission& submission, RunOrigin origin, std::string description = {});
     void dispatch_trigger(core::WorkflowId workflow, std::optional<std::int64_t> frame);
     void disarm_triggers();
 
@@ -103,9 +111,13 @@ private:
     std::optional<workflow::RunObservation> observation_;
     struct ActiveRun {
         workflow::RunHandle handle;
+        RunOrigin origin;
         workflow::ExecutionStatus status{workflow::ExecutionStatus::Pending};
         bool cancelling{};
         bool inspection_failed{};
+        bool cancellable() const noexcept {
+            return !cancelling && (status == workflow::ExecutionStatus::Pending || status == workflow::ExecutionStatus::Running);
+        }
     };
     std::map<workflow::RunIdentity, ActiveRun> active_; // Retained until physical quiescence, independently of the panel.
     std::vector<workflow::RunHandle> runs_;

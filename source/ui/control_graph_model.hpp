@@ -37,6 +37,7 @@ public:
     std::optional<core::NodeId> scope() const noexcept { return scope_; }
     QString scope_path() const;
     Qt::Orientation layout_orientation() const;
+    std::size_t display_number(QtNodes::NodeId node) const { return nodes_.at(node).source_index + 1; }
     void set_saved_revision(std::uint64_t revision) noexcept { draft_.revision = revision; }
 
     std::unordered_set<QtNodes::NodeId> allNodeIds() const override;
@@ -91,7 +92,8 @@ private:
         const QString& label);
     core::Result<bool> connect_control(QUndoStack& history, QtNodes::ConnectionId connection);
     core::Result<bool> remove_control(QUndoStack& history, QtNodes::ConnectionId connection);
-    bool move_nodes(QUndoStack& history, std::span<const CanvasMove> moves);
+    bool move_nodes(QUndoStack& history, std::span<const CanvasMove> moves,
+        std::function<void()> after_arrange = {});
 
     workflow::Solution draft_;
     const core::ToolRegistry& registry_;

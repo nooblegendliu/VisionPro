@@ -152,6 +152,8 @@ private Q_SLOTS:
     void navigates_with_overview();
     void overview_tracks_graph_edits_and_scope();
     void measures_chinese_titles_and_branch_labels();
+    void arranges_current_scope_as_one_edit();
+    void preserves_layout_when_order_is_cyclic();
     void reveals_unused_branch_when_wiring();
     void replays_edits_across_group_scopes();
     void protects_existing_links_with_shared_endpoints();
@@ -350,7 +352,8 @@ void CanvasTests::measures_chinese_titles_and_branch_labels()
         const auto title_box = geometry.captionRect(node);
         QVERIFY(card.contains(title_box));
         QVERIFY(title.contains(QStringLiteral("已禁用")));
-        QVERIFY(title_box.height() > title_font.height());
+        QCOMPARE(title_box.height(), qreal(title_font.height()));
+        QVERIFY(title_font.elidedText(title, Qt::ElideRight, int(title_box.width())) != title);
         const auto label = graph.portData(node, QtNodes::PortType::Out, 1, QtNodes::PortRole::Caption).toString();
         QCOMPARE(label, QStringLiteral("允许范围内"));
         const auto label_box = QRectF(branch_font.tightBoundingRect(label))
@@ -360,6 +363,54 @@ void CanvasTests::measures_chinese_titles_and_branch_labels()
         QCOMPARE(geometry.checkPortHit(node, QtNodes::PortType::Out,
             geometry.portPosition(node, QtNodes::PortType::Out, 1)), QtNodes::PortIndex{1});
     }
+}
+
+void CanvasTests::arranges_current_scope_as_one_edit()
+{
+    const Fixture fixture;
+    ui::ControlGraphModel graph(fixture.solution(), fixture.workflow_id, fixture.registry);
+    ui::ControlScene scene(graph);
+    const auto point = [&](core::NodeId id) {
+        const auto* p = placement(graph, id);
+        return QPointF(p->x, p->y);
+    };
+    const auto nested = point(fixture.nested);
+    const auto first = point(fixture.first);
+    QVERIFY(scene.arrange_scope());
+    QCOMPARE(scene.undoStack().count(), 1);
+    QCOMPARE(point(fixture.first).y(), point(fixture.second).y());
+    QVERIFY(point(fixture.first).x() != point(fixture.second).x());
+    QVERIFY(point(fixture.route).y() < point(fixture.first).y());
+    QVERIFY(point(fixture.first).y() < point(fixture.join).y());
+    QCOMPARE(point(fixture.nested), nested);
+    QVERIFY(!placement(graph, fixture.inside));
+    QVERIFY(!scene.arrange_scope());
+    scene.undoStack().undo();
+    QCOMPARE(point(fixture.first), first);
+    scene.undoStack().redo();
+    const auto outer = point(fixture.first);
+    QVERIFY(scene.open_group(graph.canvas_id(fixture.group)));
+    QVERIFY(scene.arrange_scope());
+    QCOMPARE(scene.undoStack().count(), 2);
+    QCOMPARE(point(fixture.first), outer);
+    QVERIFY(point(fixture.nested).y() > 0);
+    scene.undoStack().undo();
+    QCOMPARE(point(fixture.nested), nested);
+    QVERIFY(!placement(graph, fixture.inside));
+}
+
+void CanvasTests::preserves_layout_when_order_is_cyclic()
+{
+    const Fixture fixture;
+    auto solution = fixture.solution();
+    solution.workflows.front().control_links.push_back({uuid<core::ControlLinkId>('b'), fixture.finish, {}, fixture.route});
+    ui::ControlGraphModel graph(std::move(solution), fixture.workflow_id, fixture.registry);
+    ui::ControlScene scene(graph);
+    QSignalSpy notice(&scene, &ui::ControlScene::edit_notice);
+    QVERIFY(!scene.arrange_scope());
+    QCOMPARE(notice.count(), 1);
+    QCOMPARE(scene.undoStack().count(), 0);
+    QCOMPARE(placement(graph, fixture.finish)->x, 650.);
 }
 
 void CanvasTests::projects_control_graph()

@@ -1,4 +1,6 @@
 #include "editor_inspector.hpp"
+#include "data_type_text.hpp"
+#include "toolbox_catalog.hpp"
 #include "binary_editor.hpp"
 #include "endpoint_editor.hpp"
 #include "camera_editor.hpp"
@@ -39,6 +41,9 @@
 #include <QSpinBox>
 #include <QStringList>
 #include <QTimer>
+#include <QTabBar>
+#include <QStackedWidget>
+#include <QUndoStack>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -190,31 +195,6 @@ std::vector<NodeId>* entries_at(Workflow& flow, const std::optional<NodeId>& gro
     auto* node = mutable_node(flow, *group);
     auto* configuration = node ? std::get_if<GroupConfiguration>(&node->configuration) : nullptr;
     return configuration ? &configuration->entries : nullptr;
-}
-
-QString type_text(const DataType& type)
-{
-    switch (type.kind()) {
-    case TypeKind::Bool: return QStringLiteral("Bool");
-    case TypeKind::Int64: return QStringLiteral("Int64");
-    case TypeKind::Float64: return QStringLiteral("Float64");
-    case TypeKind::String: return QStringLiteral("String");
-    case TypeKind::Binary: return QStringLiteral("Binary");
-    case TypeKind::Enum:
-    case TypeKind::Record: return type.schema_id() ? id_text(*type.schema_id()) : QStringLiteral("Schema");
-    case TypeKind::List: return QStringLiteral("List<%1>").arg(type_text(*type.element_type()));
-    case TypeKind::Optional: return QStringLiteral("Optional<%1>").arg(type_text(*type.element_type()));
-    case TypeKind::Image: return QStringLiteral("Image");
-    case TypeKind::Point2D: return QStringLiteral("Point2D");
-    case TypeKind::Line2D: return QStringLiteral("Line2D");
-    case TypeKind::Circle2D: return QStringLiteral("Circle2D");
-    case TypeKind::Pose2D: return QStringLiteral("Pose2D");
-    case TypeKind::Transform2D: return QStringLiteral("Transform2D");
-    case TypeKind::Region2D: return QStringLiteral("Region2D");
-    case TypeKind::RasterMask: return QStringLiteral("RasterMask");
-    case TypeKind::ResourceReference: return QStringLiteral("Resource reference");
-    }
-    return {};
 }
 
 QString constant_text(const ConfigValue& value)
@@ -1033,6 +1013,7 @@ struct InspectorContext {
     const std::optional<ImageHandle>& preview_image;
     const EditorInspector::HashFile& hash_file;
     const bool& refresh_pending;
+    const std::optional<NodeTarget>& pin;
 
     template<class Change>
     bool edit_flow(const WorkflowId& id, const QString& label, const Change& change) const
@@ -1322,7 +1303,8 @@ void edit_execution_policy(const InspectorContext& context, WorkflowId flow, Nod
     }
 }
 
-void node_properties(QVBoxLayout& panel, const InspectorContext& context, const Workflow& flow, const Node& node)
+void node_properties(QVBoxLayout& panel, const InspectorContext& context, const Workflow& flow, const Node& node,
+    QVBoxLayout* settings = nullptr)
 {
     auto* group = section(panel, QObject::tr("模块"));
     auto* form = new QFormLayout(group);
@@ -1344,6 +1326,10 @@ void node_properties(QVBoxLayout& panel, const InspectorContext& context, const 
     });
     field->setToolTip(name);
     form->addRow(QObject::tr("名称"), field);
+    if (settings) {
+        group = section(*settings, QObject::tr("运行设置"));
+        form = new QFormLayout(group);
+    }
     if (const auto* config = std::get_if<ToolConfiguration>(&node.configuration)) {
         const auto* tool = context.registry.find_descriptor(config->type);
         if (tool && tool->config_version == config->config_version) {
@@ -1594,8 +1580,9 @@ QWidget* constant_field(QWidget* owner, const InspectorContext& context, const W
     if (std::holds_alternative<Diagnostic>(validate_binding(target, BindingSourceKind::Constant, type, conversion))) { return nullptr; }
     const auto expected = initial ? std::optional{*initial} : std::nullopt;
     const auto commit = [context, flow, node, target, expected, bound = binding != nullptr, conversion](const ConfigValue& value) -> QString {
-        if ((expected && *expected == value) || context.refresh_pending || context.model.workflow_id() != flow
-            || context.scene.selected_nodes() != std::vector<NodeId>{node}) { return {}; }
+        if ((expected && *expected == value) || context.refresh_pending) { return {}; }
+        if (context.pin ? *context.pin != NodeTarget{flow, node}
+                        : (context.model.workflow_id() != flow || context.scene.selected_nodes() != std::vector<NodeId>{node})) { return {}; }
         const auto* workflow = find_workflow(context.model.draft(), flow);
         const auto* current = workflow ? find_node(*workflow, node) : nullptr;
         if (!current) { return QObject::tr("节点已变更。"); }
@@ -1641,13 +1628,14 @@ void binding_row(QFormLayout& form, QWidget* owner, const InspectorContext& cont
     } else {
         summary = target.default_value ? QObject::tr("默认值：%1").arg(constant_text(*target.default_value)) : QObject::tr("未绑定");
     }
-    const auto name = qtext(target.display_name);
+    const auto name = std::holds_alternative<ToolConfiguration>(node.configuration)
+        ? display_field(qtext(target.display_name)) : qtext(target.display_name);
     auto* edit = action(owner, button_text(summary), "editBinding", [context, id = flow.id, node_id = node.id, target] {
         open_binding(context, id, node_id, target);
     });
     edit->setProperty("bindingTarget", id_text(target.id));
     edit->setProperty("bindingIsParameter", std::is_same_v<Target, ParameterDescriptor>);
-    edit->setToolTip(QStringLiteral("%1 • %2\n%3").arg(name, type_text(target.type), summary));
+    edit->setToolTip(QStringLiteral("%1 [%2] • %3\n%4").arg(name, id_text(target.id), type_text(target.type), summary));
     const bool constant_roi = target.binding.cardinality == BindingCardinality::SingleSource
         && (target.type.kind() == TypeKind::Region2D
             || (target.type.kind() == TypeKind::Optional && target.type.element_type()->kind() == TypeKind::Region2D))
@@ -1927,7 +1915,9 @@ void tool_settings(QVBoxLayout& panel, const InspectorContext& context, const Wo
             const auto* placement = find_placement(context.model.draft(), flow_id, id);
             const auto palette = placement ? placement->class_palette : ClassPalette{};
             auto edited = edit_class_color(context.owner, palette);
-            if (edited && *edited != palette) { context.scene.set_class_palette(id, std::move(*edited)); }
+            if (edited && *edited != palette && context.scene.reveal_node(id)) {
+                context.scene.set_class_palette(id, std::move(*edited));
+            }
         }));
     }
     if (!tool->inputs.empty()) {
@@ -2447,17 +2437,39 @@ EditorInspector::EditorInspector(ControlGraphModel& model, ControlScene& scene, 
 {
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
+    tabs_ = new QTabBar(this);
+    tabs_->setObjectName(QStringLiteral("moduleConfigTabs"));
+    tabs_->setAccessibleName(tr("模块配置页"));
+    tabs_->setExpanding(false);
+    tabs_->addTab(tr("基本参数"));
+    tabs_->addTab(tr("运行设置"));
+    tabs_->addTab(tr("输出说明"));
+    layout->addWidget(tabs_);
     scroll_->setWidgetResizable(true);
     scroll_->setFrameShape(QFrame::NoFrame);
     layout->addWidget(scroll_);
-    connect(&scene_, &QGraphicsScene::selectionChanged, this, [this] { queue_refresh(); });
-    connect(&model_, &QtNodes::AbstractGraphModel::modelReset, this, [this] { queue_refresh(); });
+    connect(&scene_, &QGraphicsScene::selectionChanged, this, [this] { if (!pinned_) { queue_refresh(); } });
+    connect(&model_, &QtNodes::AbstractGraphModel::modelReset, this, [this] { if (!pinned_) { queue_refresh(); } });
+    connect(&scene_.undoStack(), &QUndoStack::indexChanged, this, [this] { if (pinned_) { queue_refresh(); } });
     refresh();
 }
 
 void EditorInspector::set_preview_image(std::optional<ImageHandle> image)
 {
     preview_image_ = std::move(image);
+}
+
+void EditorInspector::edit_workflow_trigger(QWidget* owner, WorkflowId flow)
+{
+    edit_trigger({model_, scene_, registry_, owner, preview_image_, hash_file_, refresh_pending_, pinned_}, flow);
+}
+
+void EditorInspector::pin(std::optional<NodeTarget> target)
+{
+    if (target == pinned_ && !refresh_pending_) { return; }
+    if (target != pinned_) { tabs_->setCurrentIndex(0); }
+    pinned_ = target;
+    refresh();
 }
 
 void EditorInspector::queue_refresh()
@@ -2475,7 +2487,8 @@ void EditorInspector::refresh()
     refresh_pending_ = true;
     const auto refreshed = qScopeGuard([this] { refresh_pending_ = false; });
     const auto selected = scene_.selected_nodes();
-    const auto node_id = selected.size() == 1 ? std::optional{selected.front()} : std::nullopt;
+    const auto node_id = pinned_ ? std::optional{pinned_->node}
+        : selected.size() == 1 ? std::optional{selected.front()} : std::nullopt;
     const bool same_node = node_id && displayed_node_ == node_id;
     const int scroll_position = scroll_->verticalScrollBar()->value();
     QString focused_binding;
@@ -2492,30 +2505,65 @@ void EditorInspector::refresh()
     displayed_node_ = node_id;
     auto content = std::make_unique<QWidget>();
     auto* layout = new QVBoxLayout(content.get());
-    const InspectorContext context{model_, scene_, registry_, this, preview_image_, hash_file_, refresh_pending_};
-    const auto flow_id = model_.workflow_id();
+    const InspectorContext context{model_, scene_, registry_, this, preview_image_, hash_file_, refresh_pending_, pinned_};
+    const auto flow_id = pinned_ ? std::optional{pinned_->workflow} : model_.workflow_id();
     const auto* flow = flow_id ? find_workflow(model_.draft(), *flow_id) : nullptr;
+    tabs_->setVisible(pinned_ && flow && find_node(*flow, pinned_->node));
     if (flow) {
         const auto* node = node_id ? find_node(*flow, *node_id) : nullptr;
         if (node) {
-            node_properties(*layout, context, *flow, *node);
+            QVBoxLayout* basic = layout;
+            QVBoxLayout* settings = nullptr;
+            if (pinned_) {
+                auto* pages = new QStackedWidget(content.get());
+                layout->addWidget(pages);
+                const auto add_page = [pages] {
+                    auto* page = new QWidget(pages);
+                    auto* fields = new QVBoxLayout(page);
+                    fields->setContentsMargins(0, 0, 0, 0);
+                    fields->setAlignment(Qt::AlignTop);
+                    pages->addWidget(page);
+                    return fields;
+                };
+                basic = add_page();
+                settings = add_page();
+                const auto* tool = metadata(registry_, *node);
+                const auto* group = std::get_if<GroupConfiguration>(&node->configuration);
+                const auto* outputs = tool ? &tool->outputs : group ? &group->interface.outputs : nullptr;
+                const bool has_outputs = outputs && !outputs->empty();
+                tabs_->setTabVisible(2, has_outputs);
+                if (has_outputs) {
+                    auto* list = section(*add_page(), tr("声明输出"));
+                    auto* form = new QFormLayout(list);
+                    for (const auto& out : *outputs) {
+                        auto* type = new QLabel(type_text(out.type), list);
+                        type->setToolTip(qtext(out.id.text()));
+                        form->addRow(tool ? display_field(qtext(out.display_name)) : qtext(out.display_name), type);
+                    }
+                }
+                pages->setCurrentIndex(tabs_->currentIndex());
+                connect(tabs_, &QTabBar::currentChanged, pages, &QStackedWidget::setCurrentIndex);
+            }
+            node_properties(*basic, context, *flow, *node, settings);
             if (const auto* configuration = std::get_if<GroupConfiguration>(&node->configuration)) {
                 if (!configuration->interface.inputs.empty()) {
-                    auto* group = section(*layout, tr("输入"));
+                    auto* group = section(*basic, tr("输入"));
                     auto* form = new QFormLayout(group);
                     for (const auto& target : configuration->interface.inputs) {
                         if (configuration->loop && target.id.text() == "index") { continue; }
                         binding_row(*form, group, context, *flow, *node, target);
                     }
                 }
-                boundary_controls(*layout, context, *flow, node->id);
-            } else { tool_settings(*layout, context, *flow, *node); }
+                boundary_controls(*basic, context, *flow, node->id);
+            } else { tool_settings(*basic, context, *flow, *node); }
+        } else if (pinned_) {
+            layout->addWidget(new QLabel(tr("此模块已从草稿中删除。"), content.get()));
         } else {
             workflow_properties(*layout, context, *flow);
             boundary_controls(*layout, context, *flow, model_.scope());
         }
     } else {
-        layout->addWidget(new QLabel(QStringLiteral("Add or select a workflow."), content.get()));
+        layout->addWidget(new QLabel(pinned_ ? tr("此模块所属流程已从草稿中删除。") : tr("请添加或选择流程。"), content.get()));
     }
     layout->addStretch();
     if (auto* previous = scroll_->takeWidget()) {
@@ -2539,6 +2587,7 @@ bool EditorInspector::focus_diagnostic_field(const DiagnosticLocation& location)
 {
     // Revealing a node queues a rebuild. Focus the new form before returning to the event loop.
     if (refresh_pending_) { refresh(); }
+    tabs_->setCurrentIndex(0);
     auto* content = scroll_->widget();
     if (!content || (!location.input && !location.parameter)) { return false; }
     const bool parameter = location.parameter.has_value();

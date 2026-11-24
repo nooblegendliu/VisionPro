@@ -2,6 +2,7 @@
 #include "workspace_appearance.hpp"
 
 #include <QCoreApplication>
+#include <QHash>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPixmap>
@@ -11,6 +12,26 @@
 #include <array>
 
 namespace visionpro::ui {
+
+QString display_field(const QString& declared)
+{
+    static const QHash<QString, QString> names{
+        {"image", "图像"}, {"selected item", "所选元素"}, {"item", "元素"}, {"binary", "二值图"},
+        {"blue", "蓝色通道均值"}, {"green", "绿色通道均值"}, {"red", "红色通道均值"},
+        {"effective_roi", "有效区域"}, {"roi_mask", "区域掩膜"}, {"matched", "匹配成功"}, {"score", "匹配分数"},
+        {"position", "位置"}, {"transform", "坐标变换"}, {"value", "数值"}, {"minimum", "最小值"}, {"maximum", "最大值"}, {"threshold", "阈值"}, {"passed", "通过"},
+        {"count", "数量"}, {"components", "连通域"}, {"area_pixels", "像素面积"}, {"centroid", "质心"},
+        {"total_area_pixels", "总像素面积"}, {"largest_area_pixels", "最大像素面积"},
+        {"point", "点"}, {"distance_mm", "距离"}, {"rms_error_mm", "均方根误差"}, {"source", "来源"},
+        {"text", "文本"}, {"used_values", "使用的数值"}, {"used_indices", "使用的索引"},
+        {"record", "记录"}, {"entries", "条目"}, {"revision", "版本"}, {"messages", "消息"},
+        {"sequence", "序号"}, {"message_id", "消息标识"}, {"status", "状态"}, {"statistics", "统计"},
+        {"frame number", "帧号"}, {"payload", "载荷"}, {"register value", "寄存器值"},
+        {"write confirmed", "写入确认"}, {"utf-8 bytes", "UTF-8 字节"}
+    };
+    return names.value(declared.toLower(), declared);
+}
+
 namespace {
 
 using Category = ToolboxCategory;

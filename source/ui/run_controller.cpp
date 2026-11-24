@@ -157,8 +157,31 @@ bool RunController::can_submit(const Workflow& flow) const noexcept
 bool RunController::can_cancel(const RunHandle& run) const noexcept
 {
     const auto found = active_.find(run.identity());
-    return found != active_.end() && !found->second.cancelling
-        && (found->second.status == ExecutionStatus::Pending || found->second.status == ExecutionStatus::Running);
+    return found != active_.end() && found->second.cancellable();
+}
+
+std::vector<RunHandle> RunController::cancellable_workflow_runs(WorkflowId workflow) const
+{
+    std::vector<RunHandle> targets;
+    for (const auto& [identity, run] : active_) {
+        if (identity.workflow == workflow && run.origin == RunOrigin::Manual && run.cancellable()
+            && std::holds_alternative<WorkflowTarget>(run.handle.request().target())) {
+            targets.push_back(run.handle);
+        }
+    }
+    return targets;
+}
+
+SolutionActivity RunController::solution_activity() const noexcept
+{
+    if (retiring_) { return SolutionActivity::Idle; }
+    if (solution_stop_) {
+        return solution_stop_->stop_requested() ? SolutionActivity::CancelRequested : SolutionActivity::Running;
+    }
+    const bool cleaning = std::ranges::any_of(active_, [](const auto& entry) {
+        return entry.second.origin == RunOrigin::Solution;
+    });
+    return cleaning ? SolutionActivity::CleaningUp : SolutionActivity::Idle;
 }
 
 bool RunController::ensure_session()
@@ -186,6 +209,7 @@ void RunController::start(Solution draft, RunDocument document, RunArguments arg
     auto outcome = std::make_shared<std::optional<Admission>>();
     const auto subscribe_capacity = observing_ && !observation_ ? observation_capacity_ : 0;
     const auto generation = observation_generation_;
+    const auto edit_generation = document.edit_generation;
     auto* worker = QThread::create([outcome, session = session_, draft = std::move(draft), document = std::move(document),
         arguments = std::move(arguments), images = std::move(images), subscribe_capacity]() mutable {
         try {
@@ -196,7 +220,7 @@ void RunController::start(Solution draft, RunDocument document, RunArguments arg
             outcome->emplace(Admission{RunRejected{issue(ErrorCode::ExecutionBoundaryFailure, "Could not prepare the run.")}});
         }
     });
-    connect(worker, &QThread::finished, this, [this, outcome, generation] {
+    connect(worker, &QThread::finished, this, [this, outcome, generation, edit_generation] {
         preparing_ = false;
         auto& admitted = outcome->value();
         if (retiring_) {
@@ -209,7 +233,10 @@ void RunController::start(Solution draft, RunDocument document, RunArguments arg
         } else {
             subscribe();
         }
-        record_submission(admitted.submission);
+        if (const auto* run = std::get_if<RunHandle>(&admitted.submission)) {
+            emit snapshot_published(run->identity().snapshot, edit_generation);
+        }
+        record_submission(admitted.submission, RunOrigin::Manual);
         emit changed();
     });
     connect(worker, &QThread::finished, worker, &QObject::deleteLater);
@@ -224,12 +251,13 @@ void RunController::start_solution(Solution draft, RunDocument document, std::ve
     solution_report_.reset();
     solution_stop_.emplace();
     auto outcome = std::make_shared<std::optional<Result<SolutionRunReport>>>();
+    const auto edit_generation = document.edit_generation;
     auto* worker = QThread::create([outcome, session = session_, draft = std::move(draft), document = std::move(document),
             inputs = std::move(inputs), stop = solution_stop_->get_token()]() mutable {
         try { *outcome = execute_solution(*session, draft, document, inputs, stop); }
         catch (...) { *outcome = issue(ErrorCode::ExecutionBoundaryFailure, "Unable to execute the solution round."); }
     });
-    connect(worker, &QThread::finished, this, [this, outcome] {
+    connect(worker, &QThread::finished, this, [this, outcome, edit_generation] {
         preparing_ = false;
         solution_stop_.reset();
         if (retiring_) { close_session(); return; }
@@ -237,12 +265,15 @@ void RunController::start_solution(Solution draft, RunDocument document, std::ve
             emit operation_failed(*failure);
         } else {
             solution_report_ = std::get<SolutionRunReport>(std::move(outcome->value()));
-            for (const auto& child : solution_report_->runs) { record_submission(child); }
+            emit snapshot_published(solution_report_->snapshot, edit_generation);
+            for (const auto& child : solution_report_->runs) { record_submission(child, RunOrigin::Solution); }
             for (const auto& diagnostic : solution_report_->diagnostics) { emit operation_failed(diagnostic); }
             if (solution_report_->diagnostics.empty()) {
-                emit trigger_notice(tr("整方案第 %1 轮已结束，可在运行菜单查看方案结果。").arg(solution_report_->sequence));
+                emit trigger_notice(tr("已收到整方案第 %1 轮报告。").arg(solution_report_->sequence));
             }
             subscribe();
+            refresh_progress();
+            return;
         }
         emit changed();
     });
@@ -258,10 +289,10 @@ void RunController::cancel_solution()
     if (solution_stop_ && solution_stop_->request_stop()) { emit changed(); }
 }
 
-void RunController::record_submission(const RunSubmission& submission, std::string description)
+void RunController::record_submission(const RunSubmission& submission, RunOrigin origin, std::string description)
 {
     if (const auto* handle = std::get_if<RunHandle>(&submission)) {
-        active_.emplace(handle->identity(), ActiveRun{*handle});
+        active_.emplace(handle->identity(), ActiveRun{*handle, origin});
         runs_.push_back(*handle);
         refresh_.start();
     } else if (const auto* rejected = std::get_if<RunRejected>(&submission)) {
@@ -383,7 +414,7 @@ void RunController::close_session()
     });
     connect(worker, &QThread::finished, this, [this, failure] {
         retiring_ = false;
-        if (*failure) { emit operation_failed(**failure); }
+        if (*failure) { emit trigger_notice(tr("前一运行会话清理失败 · %1").arg(QString::fromStdString((*failure)->message))); }
         emit changed();
     });
     connect(worker, &QThread::finished, worker, &QObject::deleteLater);

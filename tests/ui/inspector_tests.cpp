@@ -35,6 +35,7 @@
 #include <QSignalSpy>
 #include <QSpinBox>
 #include <QStatusBar>
+#include <QTabBar>
 #include <QTemporaryDir>
 #include <QTest>
 #include <QTimer>
@@ -525,6 +526,9 @@ void InspectorTests::edits_connects_and_reopens_error_policy()
     auto& canvas = scene(window);
     QVERIFY(canvas.reveal_node(source));
     auto& inspector = properties(window);
+    auto* tabs = inspector.findChild<QTabBar*>(QStringLiteral("moduleConfigTabs"));
+    QVERIFY(tabs && tabs->isVisible());
+    tabs->setCurrentIndex(1);
     QPushButton* edit{};
     QTRY_VERIFY((edit = inspector.findChild<QPushButton*>(QStringLiteral("editNodeExecutionPolicy"))) && edit->isVisible());
     const auto changed = exercise_dialog(inspector, *edit, {[](QDialog& dialog) -> QPushButton* {
@@ -797,6 +801,7 @@ void InspectorTests::edits_and_reloads_dynamic_indices_and_format_options()
         }, finish});
     QVERIFY2(reordered.isEmpty(), qPrintable(reordered));
     QVERIFY(scene(window).reveal_node(consumer));
+    properties(window);
     QTRY_VERIFY(binding_button(inspector, QStringLiteral("left")));
     const auto dynamic = exercise_dialog(inspector, *binding_button(inspector, QStringLiteral("left")), {
         set, [](QDialog& dialog) -> QPushButton* {
