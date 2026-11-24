@@ -72,6 +72,7 @@ signals:
     void changed();
     void operation_failed(const visionpro::core::Diagnostic& diagnostic);
     void trigger_notice(const QString& message);
+    void run_finished(const visionpro::workflow::RunHandle& run, visionpro::workflow::ExecutionStatus status);
 
 private:
     void refresh_progress();

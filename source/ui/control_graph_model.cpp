@@ -228,6 +228,13 @@ bool ControlGraphModel::nodeExists(NodeId node) const
     return nodes_.contains(node);
 }
 
+std::span<const core::ControlOutputDescriptor> ControlGraphModel::named_control_outlets(NodeId id) const
+{
+    const auto found = nodes_.find(id);
+    if (found == nodes_.end()) { return {}; }
+    return found->second.outlets;
+}
+
 bool ControlGraphModel::visible(NodeId node) const
 {
     const auto projected = nodes_.find(node);

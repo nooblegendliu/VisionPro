@@ -445,13 +445,18 @@ void RunController::trim_history()
 void RunController::refresh_progress()
 {
     std::vector<Diagnostic> failures;
+    std::vector<std::pair<RunHandle, ExecutionStatus>> finished;
     for (auto it = active_.begin(); it != active_.end();) {
         auto& tracked = it->second;
         auto inspected = tracked.handle.inspect();
         if (const auto* progress = std::get_if<RunProgress>(&inspected)) {
             tracked.inspection_failed = false;
             tracked.status = progress->status;
-            if (progress->quiescent) { it = active_.erase(it); continue; }
+            if (progress->quiescent) {
+                finished.emplace_back(tracked.handle, tracked.status);
+                it = active_.erase(it);
+                continue;
+            }
         } else if (!std::exchange(tracked.inspection_failed, true)) {
             failures.push_back(std::get<Diagnostic>(std::move(inspected)));
         }
@@ -470,6 +475,7 @@ void RunController::refresh_progress()
             if (next.closed || !next.event) { break; }
         }
     }
+    for (const auto& [handle, status] : finished) { emit run_finished(handle, status); }
     for (const auto& failure : failures) { emit operation_failed(failure); }
     emit changed();
 }

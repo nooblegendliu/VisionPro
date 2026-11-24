@@ -149,6 +149,8 @@ private Q_SLOTS:
     void initTestCase();
     void projects_control_graph();
     void repaints_existing_nodes_and_connections();
+    void navigates_with_overview();
+    void overview_tracks_graph_edits_and_scope();
     void measures_chinese_titles_and_branch_labels();
     void reveals_unused_branch_when_wiring();
     void replays_edits_across_group_scopes();
@@ -177,6 +179,8 @@ void CanvasTests::repaints_existing_nodes_and_connections()
     QCoreApplication::processEvents();
     view.restore_view(1.2, scene.itemsBoundingRect().center());
     const auto center = view.view_center();
+    auto* overview = view.findChild<QWidget*>(QStringLiteral("canvasOverview"));
+    QVERIFY(overview && overview->isVisible());
     const auto group = graph.canvas_id(fixture.group);
     const QtNodes::ConnectionId id{group, 1, graph.canvas_id(fixture.finish), 0};
     auto* card = scene.nodeGraphicsObject(group);
@@ -211,6 +215,7 @@ void CanvasTests::repaints_existing_nodes_and_connections()
         const auto background = view.viewport()->grab(QRect(3, 3, 72, 72)).toImage();
         QVERIFY(contains_color(background, colors.grid));
         QVERIFY(contains_color(background, colors.canvas));
+        QVERIFY(contains_color(overview->grab().toImage(), colors.surface));
         QCOMPARE(scene.nodeGraphicsObject(group), card);
         QCOMPARE(scene.connectionGraphicsObject(id), wire);
         QVERIFY(card->isSelected() && wire->isSelected());
@@ -220,6 +225,107 @@ void CanvasTests::repaints_existing_nodes_and_connections()
         QCOMPARE(scene.undoStack().index(), 1);
     }
     appearance.setMode(ui::AppearanceMode::System);
+}
+
+void CanvasTests::navigates_with_overview()
+{
+    const Fixture fixture;
+    ui::ControlGraphModel graph(fixture.solution(), fixture.workflow_id, fixture.registry);
+    ui::ControlScene scene(graph);
+    ui::WorkspaceToolbox toolbox(fixture.registry);
+    ui::WorkflowCanvas view(&scene, &toolbox, [](const QString&, QPointF) {});
+    view.resize(440, 300);
+    view.show();
+    view.restore_view(1.0, {80, 100});
+    auto* map = view.findChild<QWidget*>(QStringLiteral("canvasOverview"));
+    auto* zoom = view.findChild<QWidget*>(QStringLiteral("canvasZoomIn"));
+    QVERIFY(map && zoom);
+    QTRY_VERIFY(map->isVisible());
+    QVERIFY(map->geometry().bottom() < zoom->parentWidget()->geometry().top());
+    QCOMPARE(map->geometry().right(), zoom->parentWidget()->geometry().right());
+    auto* selected = scene.nodeGraphicsObject(graph.canvas_id(fixture.route));
+    selected->setSelected(true);
+    const auto start = view.view_center();
+    const auto initial = map->grab().toImage();
+    QTest::mouseClick(map, Qt::LeftButton, Qt::NoModifier, {map->width() - 14, map->height() / 2});
+    const auto after_click = view.view_center();
+    QVERIFY(after_click.x() > start.x() + 300);
+    QVERIFY(map->grab().toImage() != initial);
+
+    const QPoint from(map->width() - 26, map->height() / 2);
+    const QPoint to = from - QPoint(45, 0);
+    QTest::mousePress(map, Qt::LeftButton, Qt::NoModifier, from);
+    QTest::mouseMove(map, to);
+    QTest::mouseRelease(map, Qt::LeftButton, Qt::NoModifier, to);
+    QVERIFY(view.view_center().x() < after_click.x() - 200);
+    QVERIFY(selected->isSelected());
+    QCOMPARE(scene.undoStack().count(), 0);
+    QCOMPARE(view.getScale(), 1.0);
+
+    const auto before_zoom = map->grab().toImage();
+    view.restore_view(1.6, view.view_center());
+    QVERIFY(map->grab().toImage() != before_zoom);
+    const auto after_zoom = map->grab().toImage();
+    view.centerOn(-200, 100);
+    QVERIFY(map->grab().toImage() != after_zoom);
+    view.resize(620, 410);
+    QTRY_COMPARE(map->geometry().right(), view.viewport()->geometry().right() - 8);
+}
+
+void CanvasTests::overview_tracks_graph_edits_and_scope()
+{
+    const Fixture fixture;
+    ui::ControlGraphModel graph(fixture.solution(), fixture.workflow_id, fixture.registry);
+    ui::ControlScene scene(graph);
+    ui::WorkspaceToolbox toolbox(fixture.registry);
+    ui::WorkflowCanvas view(&scene, &toolbox, [](const QString&, QPointF) {});
+    view.resize(500, 350);
+    view.show();
+    view.restore_view(1.0, {250, 120});
+    auto* map = view.findChild<QWidget*>(QStringLiteral("canvasOverview"));
+    QVERIFY(map && map->isVisible());
+    const auto center = view.view_center();
+    const auto diagram = map->grab().toImage();
+    const auto changed_pixels = [&] {
+        const auto image = map->grab().toImage();
+        int changed = 0;
+        for (int y = 0; y < diagram.height(); ++y) {
+            for (int x = 0; x < diagram.width(); ++x) {
+                const auto original = diagram.pixel(x, y);
+                const auto current = image.pixel(x, y);
+                // Recreated edges can blend in a different order at antialiased intersections.
+                if (std::max({std::abs(qRed(current) - qRed(original)), std::abs(qGreen(current) - qGreen(original)),
+                    std::abs(qBlue(current) - qBlue(original))}) > 3) { ++changed; }
+            }
+        }
+        return changed;
+    };
+    const auto orientation = scene.orientation();
+    scene.setOrientation(orientation == Qt::Horizontal ? Qt::Vertical : Qt::Horizontal);
+    QTRY_VERIFY(changed_pixels() > 5);
+    scene.setOrientation(orientation);
+    QTRY_COMPARE(changed_pixels(), 0);
+    const auto group = graph.canvas_id(fixture.group);
+    QVERIFY(scene.remove_control({group, 1, graph.canvas_id(fixture.finish), 0}));
+    QTRY_VERIFY(changed_pixels() > 5);
+    scene.undoStack().undo();
+    QTRY_COMPARE(changed_pixels(), 0);
+
+    QVERIFY(scene.move_nodes(std::array{ui::CanvasMove{group, {1450, 700}}}));
+    QTRY_VERIFY(changed_pixels() > 5);
+    scene.undoStack().undo();
+    QTRY_COMPARE(changed_pixels(), 0);
+    QVERIFY(scene.open_group(group));
+    QTRY_VERIFY(changed_pixels() > 5);
+    QVERIFY(scene.parent_scope());
+    QTRY_COMPARE(changed_pixels(), 0);
+    QVERIFY(scene.add_workflow("Empty"));
+    QTRY_VERIFY(!map->isVisible());
+    QVERIFY(scene.select_workflow(fixture.workflow_id));
+    QTRY_VERIFY(map->isVisible());
+    QCOMPARE(changed_pixels(), 0);
+    QCOMPARE(view.view_center(), center);
+    QCOMPARE(view.getScale(), 1.0);
 }
 
 void CanvasTests::measures_chinese_titles_and_branch_labels()

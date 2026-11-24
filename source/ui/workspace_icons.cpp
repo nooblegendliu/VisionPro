@@ -1,10 +1,12 @@
 #include "workspace_icons.hpp"
+#include "toolbox_catalog.hpp"
 
 #include <QApplication>
 #include <QIconEngine>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPalette>
+#include <variant>
 
 namespace visionpro::ui {
 namespace {
@@ -12,7 +14,8 @@ namespace {
 // The toolbar and menus request the same icon at different sizes and pixel densities.
 class WorkspaceIconEngine final : public QIconEngine {
 public:
-    explicit WorkspaceIconEngine(WorkspaceIcon glyph) : glyph_(glyph) {}
+    using Glyph = std::variant<WorkspaceIcon, ToolboxCategory>;
+    explicit WorkspaceIconEngine(Glyph glyph) : glyph_(glyph) {}
     QIconEngine* clone() const override { return new WorkspaceIconEngine(glyph_); }
 
     QPixmap pixmap(const QSize& size, QIcon::Mode mode, QIcon::State state) override
@@ -42,14 +45,65 @@ public:
         painter->scale(side / 20.0, side / 20.0);
         painter->setBrush(Qt::NoBrush);
         painter->setPen(QPen(ink, 1.6, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-        draw_glyph(*painter);
+        if (const auto* category = std::get_if<ToolboxCategory>(&glyph_)) { draw_category(*painter, *category); }
+        else { draw_glyph(*painter, std::get<WorkspaceIcon>(glyph_)); }
         painter->restore();
     }
 
 private:
-    void draw_glyph(QPainter& p) const
+    static void draw_category(QPainter& p, ToolboxCategory category)
     {
-        switch (glyph_) {
+        switch (category) {
+        case ToolboxCategory::Acquisition:
+            p.drawPolygon(QPolygonF{{2, 6}, {6, 6}, {8, 3}, {12, 3}, {14, 6}, {18, 6}, {18, 16}, {2, 16}});
+            p.drawEllipse(QPointF(10, 11), 3, 3); break;
+        case ToolboxCategory::Location:
+            p.drawEllipse(QPointF(10, 10), 6, 6);
+            p.drawLine(10, 1, 10, 7); p.drawLine(10, 13, 10, 19); p.drawLine(1, 10, 7, 10); p.drawLine(13, 10, 19, 10); break;
+        case ToolboxCategory::Measurement:
+            p.translate(10, 10); p.rotate(-35); p.drawRect(QRectF(-8,-3.5,16,7));
+            for (int x : {-5, -2, 1, 4}) { p.drawLine(QPointF(x,-3), QPointF(x,0)); } break;
+        case ToolboxCategory::Recognition:
+            for (int x : {3, 6, 10, 12, 16}) { p.drawLine(x, 4, x, 15); } p.drawLine(3,18,16,18); break;
+        case ToolboxCategory::Defect:
+            p.drawEllipse(QPointF(8,8), 5.5,5.5); p.drawLine(12,12,18,18);
+            p.drawPolyline(QPolygonF{{8,4}, {6,8}, {9,8}, {7,12}}); break;
+        case ToolboxCategory::EdgeLearning:
+            p.drawRoundedRect(QRectF(4,4,12,12), 2,2); p.drawPolyline(QPolygonF{{6,12}, {9,8}, {11,11}, {14,7}});
+            for (int x : {7,13}) { p.drawLine(x,1,x,3); p.drawLine(x,17,x,19); } break;
+        case ToolboxCategory::DeepLearning:
+            for (int y : {4,15}) { p.drawLine(5,y,10,10); p.drawLine(10,10,15,y); p.drawEllipse(QPointF(4,y),2,2); p.drawEllipse(QPointF(16,y),2,2); }
+            p.drawEllipse(QPointF(10,10),2,2); break;
+        case ToolboxCategory::Calibration:
+            p.drawRect(QRectF(3,3,14,14));
+            p.fillRect(QRectF(3,3,7,7),p.pen().color()); p.fillRect(QRectF(10,10,7,7),p.pen().color()); break;
+        case ToolboxCategory::Calculation:
+            p.drawPolyline(QPolygonF{{16,3}, {5,3}, {11,10}, {5,17}, {16,17}}); break;
+        case ToolboxCategory::ImageProcessing:
+            p.drawRoundedRect(QRectF(2,3,16,14),1,1); p.drawPolyline(QPolygonF{{2,14},{7,9},{11,13},{15,8},{18,11}});
+            p.drawEllipse(QPointF(6,7),1,1); break;
+        case ToolboxCategory::Color:
+            p.drawEllipse(QPointF(10,6.5),4.5,4.5); p.drawEllipse(QPointF(6,13),4.5,4.5); p.drawEllipse(QPointF(14,13),4.5,4.5); break;
+        case ToolboxCategory::SplitCombine:
+            p.drawPolyline(QPolygonF{{2,10},{8,10},{13,5},{18,5}}); p.drawPolyline(QPolygonF{{8,10},{13,15},{18,15}});
+            p.drawLine(15,2,18,5); p.drawLine(15,18,18,15); break;
+        case ToolboxCategory::Geometry:
+            p.drawPolygon(QPolygonF{{7,3},{2,15},{12,15}}); p.drawEllipse(QPointF(14,12),4,4); break;
+        case ToolboxCategory::Logic:
+            p.drawPolygon(QPolygonF{{10,2},{15,7},{10,12},{5,7}}); p.drawPolyline(QPolygonF{{5,7},{2,7},{2,17},{6,17}});
+            p.drawPolyline(QPolygonF{{15,7},{18,7},{18,17},{14,17}}); break;
+        case ToolboxCategory::Communication:
+            p.drawLine(2,6,17,6); p.drawPolyline(QPolygonF{{13,2},{17,6},{13,10}});
+            p.drawLine(18,14,3,14); p.drawPolyline(QPolygonF{{7,10},{3,14},{7,18}}); break;
+        case ToolboxCategory::Count: break;
+        }
+    }
+
+    static void draw_glyph(QPainter& p, WorkspaceIcon glyph)
+    {
+        switch (glyph) {
+        case WorkspaceIcon::Search:
+            p.drawEllipse(QPointF(8.5,8.5),5.5,5.5); p.drawLine(13,13,18,18); break;
         case WorkspaceIcon::New:
             p.drawPolygon(QPolygonF{{4, 2}, {11, 2}, {16, 7}, {16, 18}, {4, 18}});
             p.drawPolyline(QPolygonF{{11, 2}, {11, 7}, {16, 7}});
@@ -65,7 +119,7 @@ private:
             break;
         case WorkspaceIcon::Undo:
         case WorkspaceIcon::Redo: {
-            if (glyph_ == WorkspaceIcon::Redo) { p.translate(20, 0); p.scale(-1, 1); }
+            if (glyph == WorkspaceIcon::Redo) { p.translate(20, 0); p.scale(-1, 1); }
             p.drawPolyline(QPolygonF{{7, 4}, {3, 8}, {7, 12}});
             QPainterPath turn({3, 8});
             turn.lineTo(11, 8);
@@ -79,6 +133,11 @@ private:
             break;
         case WorkspaceIcon::Run:
             p.drawPolygon(QPolygonF{{5, 3}, {17, 10}, {5, 17}});
+            break;
+        case WorkspaceIcon::RunSolution:
+            p.drawRoundedRect(QRectF(2, 2, 13, 12), 1, 1);
+            p.drawPolygon(QPolygonF{{6, 5}, {11, 8}, {6, 11}});
+            p.drawPolyline(QPolygonF{{5, 17}, {18, 17}, {18, 5}});
             break;
         case WorkspaceIcon::Repeat:
             p.drawPolyline(QPolygonF{{3, 10}, {3, 6}, {16, 6}});
@@ -100,11 +159,12 @@ private:
             break;
         }
     }
-    WorkspaceIcon glyph_;
+    Glyph glyph_;
 };
 
 } // namespace
 
 QIcon workspace_icon(WorkspaceIcon glyph) { return QIcon(new WorkspaceIconEngine(glyph)); }
+QIcon workspace_category_icon(ToolboxCategory category) { return QIcon(new WorkspaceIconEngine(category)); }
 
 } // namespace visionpro::ui

@@ -23,22 +23,27 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMessageBox>
 #include <QPlainTextEdit>
+#include <QPointer>
 #include <QProcess>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSignalSpy>
+#include <QSpinBox>
 #include <QStatusBar>
 #include <QTemporaryDir>
 #include <QTest>
 #include <QTimer>
+#include <QToolButton>
 #include <QTreeWidget>
 #include <QUndoStack>
 
 #include <algorithm>
+#include <array>
 #include <functional>
 #include <initializer_list>
 #include <limits>
@@ -102,6 +107,14 @@ QPushButton* binding_button(const QWidget& inspector, const QString& target)
     return nullptr;
 }
 
+template<class Widget> Widget* constant_editor(const QWidget& inspector, const QString& target)
+{
+    for (auto* field : inspector.findChildren<Widget*>(QStringLiteral("inlineConstant"))) {
+        if (field->property("bindingTarget").toString() == target && field->isVisible()) { return field; }
+    }
+    return nullptr;
+}
+
 QPushButton* accept_button(QDialog& dialog)
 {
     auto* buttons = dialog.findChild<QDialogButtonBox*>();
@@ -122,7 +135,8 @@ bool select_choice(QComboBox& combo, const QString& label, bool partial = false)
 
 using DialogStep = std::function<QPushButton*(QDialog&)>;
 
-QString exercise_dialog(QWidget& inspector, QPushButton& start, std::initializer_list<DialogStep> steps)
+QString exercise_dialog(QWidget& inspector, QPushButton& start, std::initializer_list<DialogStep> steps,
+    Qt::Key final_key = Qt::Key_unknown)
 {
     if (auto* scroll = inspector.findChild<QScrollArea*>()) { scroll->ensureWidgetVisible(&start); }
     const auto* next = steps.begin();
@@ -144,7 +158,13 @@ QString exercise_dialog(QWidget& inspector, QPushButton& start, std::initializer
         if (!dialog || next == steps.end()) { return; }
         if (auto* button = (*next)(*dialog)) {
             ++next;
-            QTimer::singleShot(0, button, [button] { QTest::mouseClick(button, Qt::LeftButton); });
+            if (next == steps.end() && final_key != Qt::Key_unknown) {
+                QTimer::singleShot(0, dialog, [dialog, final_key] {
+                    QTest::keyClick(dialog->focusWidget() ? dialog->focusWidget() : dialog, final_key);
+                });
+            } else {
+                QTimer::singleShot(0, button, [button] { QTest::mouseClick(button, Qt::LeftButton); });
+            }
         }
     });
     poll.start(10);
@@ -159,6 +179,11 @@ class InspectorTests final : public QObject {
     Q_OBJECT
 
 private Q_SLOTS:
+    void edits_threshold_inline_then_binds_output();
+    void preserves_full_width_values_and_defaults();
+    void locates_diagnostic_field_data();
+    void locates_diagnostic_field();
+    void locates_workflow_input_from_inside_group();
     void commits_binding_and_group_outlet_through_dialogs();
     void edits_loop_settings_and_collects_a_selected_field();
     void edits_and_reloads_dynamic_indices_and_format_options();
@@ -173,11 +198,16 @@ ControlScene& scene(EditorWindow& window)
     return *qobject_cast<ControlScene*>(window.findChild<QGraphicsView*>(QStringLiteral("workflowCanvas"))->scene());
 }
 
-QWidget& properties(EditorWindow& window)
+EditorInspector& properties(EditorWindow& window)
 {
-    auto* dock = window.findChild<QDockWidget*>(QStringLiteral("inspectorDock"));
-    if (dock->isHidden()) { window.findChild<QAction*>(QStringLiteral("showProperties"))->trigger(); }
-    return *dock->widget();
+    window.findChild<QAction*>(QStringLiteral("showProperties"))->trigger();
+    auto* dialog = window.findChild<QDialog*>(QStringLiteral("propertiesDialog"));
+    if (dialog && dialog->isVisible() && !dialog->isModal()) {
+        for (auto* widget : dialog->findChildren<QWidget*>()) {
+            if (auto* inspector = dynamic_cast<EditorInspector*>(widget)) { return *inspector; }
+        }
+    }
+    throw std::runtime_error("The modeless properties dialog must contain the active inspector.");
 }
 
 NodeResult result_for(const RunHandle& run, const NodeId& node)
@@ -186,6 +216,256 @@ NodeResult result_for(const RunHandle& run, const NodeId& node)
     const auto found = std::ranges::find(progress.nodes, node, &RunNodeProgress::node);
     if (found == progress.nodes.end() || !found->invocation) { throw std::runtime_error("Missing invocation"); }
     return take(run.lookup(*found->invocation)).value();
+}
+
+void InspectorTests::locates_diagnostic_field_data()
+{
+    QTest::addColumn<bool>("parameter");
+    QTest::newRow("Enter on missing input") << false;
+    QTest::newRow("double-click on invalid parameter") << true;
+}
+
+void InspectorTests::edits_threshold_inline_then_binds_output()
+{
+    auto tools = take(app::make_tool_registry());
+    const auto type = key<ToolTypeId>("visionpro.image.threshold");
+    if (!tools.find_descriptor(type)) { QSKIP("The threshold tool requires the OpenCV configuration."); }
+    auto draft = canvas_example();
+    auto& flow = draft.workflows.front();
+    const auto producer = node_named(flow, "Reference").id;
+    const auto merge = std::ranges::find(flow.nodes, std::string{"Merge"}, &Node::name);
+    const auto target = key<ParameterId>("threshold");
+    const auto consumer = merge->id;
+    merge->configuration = ToolConfiguration{type, 1};
+    merge->bindings = {{target, {ConfigValue::integer(128)}}};
+    ControlGraphModel model(draft, flow.id, tools);
+    ControlScene canvas(model);
+    EditorInspector inspector(model, canvas, tools);
+    inspector.resize(400, 400);
+    inspector.show();
+    QVERIFY(canvas.reveal_node(consumer));
+    const auto spin = [&] { return constant_editor<QSpinBox>(inspector, QStringLiteral("threshold")); };
+    const auto source = [&]() -> const BindingSource& {
+        const auto* node = find_node(model.draft().workflows.front(), consumer);
+        return std::ranges::find(node->bindings, BindingTarget{target}, &Binding::target)->sources.front();
+    };
+    QTRY_VERIFY(spin() && spin()->value() == 128);
+    QCOMPARE(spin()->minimum(), 0);
+    QCOMPARE(spin()->maximum(), 255);
+    spin()->setFocus();
+    spin()->selectAll();
+    QTest::keyClicks(spin(), "150");
+    QTest::keyClick(spin(), Qt::Key_Return);
+    QCOMPARE(*std::get<ConfigValue>(source()).as_int64(), 150);
+    QCOMPARE(canvas.undoStack().count(), 1);
+    canvas.undoStack().undo();
+    QCOMPARE(*std::get<ConfigValue>(source()).as_int64(), 128);
+    QTRY_COMPARE(spin()->value(), 128);
+    auto* edit = binding_button(inspector, QStringLiteral("threshold"));
+    QVERIFY(edit && edit->text() == QStringLiteral("绑定来源…"));
+    const auto changed = exercise_dialog(inspector, *edit, {
+        [](QDialog& dialog) { return dialog.findChild<QPushButton*>(QStringLiteral("setBindingSource")); },
+        [](QDialog& dialog) -> QPushButton* {
+            auto* choices = dialog.findChild<QComboBox*>(QStringLiteral("choice"));
+            return choices && select_choice(*choices, QStringLiteral("节点输出")) ? accept_button(dialog) : nullptr;
+        },
+        [](QDialog& dialog) -> QPushButton* {
+            auto* choices = dialog.findChild<QComboBox*>(QStringLiteral("bindingSource"));
+            return choices && select_choice(*choices, QStringLiteral("Reference ["), true) ? accept_button(dialog) : nullptr;
+        },
+        accept_button});
+    QVERIFY2(changed.isEmpty(), qPrintable(changed));
+    const auto* output = std::get_if<OutputReference>(&source());
+    QVERIFY(output && output->node == producer && std::get<OutputId>(output->output) == key<OutputId>("value"));
+    QTRY_VERIFY(!spin());
+    auto* locate = inspector.findChild<QPushButton*>(QStringLiteral("locateBindingSource"));
+    QVERIFY(locate);
+    locate->click();
+    QVERIFY(canvas.selected_nodes() == std::vector<NodeId>{producer});
+}
+
+void InspectorTests::preserves_full_width_values_and_defaults()
+{
+    auto entries = tools::simulation_registrations();
+    auto& tool = std::ranges::find_if(entries, [](const auto& item) {
+        return item.descriptor.id.text() == "visionpro.sim.add";
+    })->descriptor;
+    const auto fixed = [&](std::string_view name, const ConfigValue& initial) -> ParameterDescriptor& {
+        ParameterDescriptor parameter{key<ParameterId>(name), std::string(name), initial.type(), false, initial};
+        parameter.binding.time = BindingTime::SnapshotBuild;
+        tool.parameters.push_back(std::move(parameter));
+        return tool.parameters.back();
+    };
+    fixed("gain", take(ConfigValue::real(0.25))).constraints.real_range = RealRange{-1, 1};
+    fixed("label", take(ConfigValue::string("sample"))).constraints.max_length = 12;
+    fixed("enabled", ConfigValue::boolean(true));
+    const auto mode = take(DataType::enumeration(key<SchemaId>("test.mode"), 1,
+        {{key<EnumMemberId>("First"), "First option"}, {key<EnumMemberId>("Last"), "Last option"}}));
+    fixed("mode", take(ConfigValue::enumeration(mode, key<EnumMemberId>("First"))));
+    const auto tools = take(ToolRegistry::create(entries));
+    const auto draft = canvas_example();
+    const auto node_id = node_named(draft.workflows.front(), "Reference").id;
+    ControlGraphModel model(draft, draft.workflows.front().id, tools);
+    ControlScene canvas(model);
+    EditorInspector inspector(model, canvas, tools);
+    inspector.resize(440, 640);
+    inspector.show();
+    QVERIFY(canvas.reveal_node(node_id));
+    const auto write = [&](const QString& name, const char* text) {
+        QLineEdit* field = nullptr;
+        QTRY_VERIFY((field = constant_editor<QLineEdit>(inspector, name)));
+        field->setFocus();
+        field->selectAll();
+        QTest::keyClicks(field, text);
+        QTest::keyClick(field, Qt::Key_Return);
+        QCoreApplication::processEvents();
+    };
+    const auto field_value = [&](const BindingTarget& target) -> const ConfigValue* {
+        const auto& bindings = find_node(model.draft().workflows.front(), node_id)->bindings;
+        const auto found = std::ranges::find(bindings, target, &Binding::target);
+        return found == bindings.end() ? nullptr : std::get_if<ConfigValue>(&found->sources.front());
+    };
+    const auto gain = key<ParameterId>("gain"), label = key<ParameterId>("label");
+    write(QStringLiteral("gain"), "2");
+    QVERIFY(!field_value(gain) && canvas.undoStack().isClean());
+    auto* invalid = constant_editor<QLineEdit>(inspector, QStringLiteral("gain"));
+    auto* feedback = invalid->parentWidget()->findChild<QLabel*>(QStringLiteral("constantError"));
+    QVERIFY(feedback && feedback->isVisible() && !feedback->text().isEmpty());
+    // Moving the node changes the undo stack without rebuilding its binding fields.
+    QVERIFY(canvas.move_nodes(std::array{CanvasMove{model.canvas_id(node_id), QPointF(310, 310)}}));
+    write(QStringLiteral("gain"), "0.12500000000000003");
+    QVERIFY(field_value(gain) && *field_value(gain)->as_float64() == 0.12500000000000003);
+    write(QStringLiteral("left"), "9223372036854775807");
+    QVERIFY(*field_value(key<InputId>("left"))->as_int64() == std::numeric_limits<std::int64_t>::max());
+    write(QStringLiteral("label"), "updated");
+    QVERIFY(field_value(label) && *field_value(label)->as_string() == "updated");
+    for (const auto& name : {QStringLiteral("enabled"), QStringLiteral("mode")}) {
+        auto* combo = constant_editor<QComboBox>(inspector, name);
+        QVERIFY(combo);
+        combo->setFocus();
+        QTest::keyClick(combo, name == QStringLiteral("mode") ? Qt::Key_End : Qt::Key_Home);
+        QCoreApplication::processEvents();
+    }
+    QVERIFY(field_value(key<ParameterId>("enabled")) && !*field_value(key<ParameterId>("enabled"))->as_bool());
+    QVERIFY(field_value(key<ParameterId>("mode")) && *field_value(key<ParameterId>("mode"))->as_enum() == key<EnumMemberId>("Last"));
+    QCOMPARE(canvas.undoStack().count(), 6);
+    // A stale editingFinished from the pre-undo form must not replace the redo entry.
+    auto* pending = constant_editor<QLineEdit>(inspector, QStringLiteral("label"));
+    QVERIFY(pending);
+    pending->selectAll();
+    QTest::keyClicks(pending, "discard");
+    canvas.undoStack().undo();
+    QTest::keyClick(pending, Qt::Key_Return);
+    QVERIFY(canvas.undoStack().canRedo() && *field_value(label)->as_string() == "updated");
+    while (canvas.undoStack().canUndo()) { canvas.undoStack().undo(); }
+    QVERIFY(!field_value(gain) && !field_value(label) && !field_value(key<ParameterId>("enabled"))
+        && !field_value(key<ParameterId>("mode")));
+}
+
+void InspectorTests::locates_diagnostic_field()
+{
+    QFETCH(bool, parameter);
+    auto draft = canvas_example();
+    auto& nodes = draft.workflows.front().nodes;
+    auto child = std::ranges::find(nodes, std::string{"Prepare"}, &Node::name);
+    QVERIFY(child != nodes.end());
+    child->configuration = ToolConfiguration{key<ToolTypeId>("visionpro.calc.int64"), 1};
+    const auto field = parameter ? QStringLiteral("operation") : QStringLiteral("left");
+    if (parameter) {
+        child->bindings.push_back({key<ParameterId>("operation"), {ConfigValue::integer(99)}});
+    } else {
+        std::erase_if(child->bindings, [](const Binding& item) { return item.target == BindingTarget{key<InputId>("left")}; });
+    }
+    const auto node = child->id;
+    EditorWindow window(std::move(draft), take(app::make_tool_registry()));
+    window.show();
+    auto* list = window.findChild<QListWidget*>(QStringLiteral("editorDiagnostics"));
+    auto* opener = window.findChild<QToolButton*>(QStringLiteral("openDiagnostics"));
+    QVERIFY(list && opener);
+    QTRY_COMPARE(list->count(), 1);
+    QVERIFY2(list->item(0)->text().contains(field), qPrintable(list->item(0)->text()));
+    opener->setFocus();
+    QTest::keyClick(opener, Qt::Key_Space);
+    QTRY_VERIFY(list->hasFocus());
+    if (parameter) {
+        const auto point = list->visualItemRect(list->currentItem()).center();
+        QTest::mouseClick(list->viewport(), Qt::LeftButton, Qt::NoModifier, point);
+        QTest::mouseDClick(list->viewport(), Qt::LeftButton, Qt::NoModifier, point);
+    } else {
+        QTest::keyClick(list, Qt::Key_Return);
+    }
+    QPointer<QDialog> properties = window.findChild<QDialog*>(QStringLiteral("propertiesDialog"));
+    QTRY_VERIFY(properties && properties->isVisible() && !properties->isModal());
+    QVERIFY(scene(window).selected_nodes() == std::vector<NodeId>{node});
+    if (!parameter) {
+        auto* input = constant_editor<QLineEdit>(*properties, field);
+        QVERIFY(input);
+        QTRY_VERIFY(input->hasFocus());
+        auto* viewport = properties->findChild<QScrollArea*>()->viewport();
+        QVERIFY(viewport->rect().contains(input->mapTo(viewport, input->rect().center())));
+        QTest::keyClicks(input, "7");
+        bool unexpected_modal = false;
+        QTimer guard;
+        guard.setSingleShot(true);
+        connect(&guard, &QTimer::timeout, [&] {
+            if (auto* modal = qobject_cast<QDialog*>(QApplication::activeModalWidget())) {
+                unexpected_modal = true;
+                modal->reject();
+            }
+        });
+        guard.start(0);
+        QTest::keyClick(input, Qt::Key_Return);
+        guard.stop();
+        QVERIFY(!unexpected_modal);
+        QTRY_COMPARE(list->count(), 0);
+        QVERIFY(properties && properties->isVisible());
+        return;
+    }
+    auto* button = binding_button(*properties, field);
+    QVERIFY(button);
+    QTRY_VERIFY(button->hasFocus());
+    auto* viewport = properties->findChild<QScrollArea*>()->viewport();
+    QVERIFY(viewport->rect().contains(button->mapTo(viewport, button->rect().center())));
+    bool opened = false;
+    QTimer::singleShot(0, button, [&] {
+        if (auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget())) {
+            opened = dialog->findChild<QPushButton*>(QStringLiteral("setBindingSource"));
+            QTest::keyClick(dialog, Qt::Key_Escape);
+        }
+    });
+    QTest::keyClick(button, Qt::Key_Space);
+    QVERIFY(opened);
+    QVERIFY(properties && properties->isVisible());
+    QVERIFY(!QApplication::activeModalWidget());
+}
+
+void InspectorTests::locates_workflow_input_from_inside_group()
+{
+    auto draft = canvas_example();
+    auto& flow = draft.workflows.front();
+    const auto frame = key<InputId>("frame");
+    flow.interface.inputs = {{frame, "Frame", DataType::integer()},
+        {key<InputId>("batch"), "Batch", DataType::integer()}};
+    flow.trigger = WorkflowTrigger{TriggerMode::External, key<SchemaId>("test.external"), frame};
+    const auto child = node_named(flow, "Prepare").id;
+    EditorWindow window(std::move(draft), registry());
+    window.show();
+    QVERIFY(scene(window).reveal_node(child));
+    auto* list = window.findChild<QListWidget*>(QStringLiteral("editorDiagnostics"));
+    auto* opener = window.findChild<QToolButton*>(QStringLiteral("openDiagnostics"));
+    QVERIFY(list && opener);
+    QTRY_COMPARE(list->count(), 1);
+    QVERIFY2(list->item(0)->text().contains(QStringLiteral("batch")), qPrintable(list->item(0)->text()));
+    QTest::keyClick(opener, Qt::Key_Space);
+    QTRY_VERIFY(list->hasFocus());
+    QTest::keyClick(list, Qt::Key_Return);
+    auto* dialog = window.findChild<QDialog*>(QStringLiteral("propertiesDialog"));
+    QTRY_VERIFY(dialog && dialog->isVisible() && !dialog->isModal());
+    auto* ports = dialog->findChild<QListWidget*>(QStringLiteral("publicPorts"));
+    QVERIFY(ports);
+    QTRY_VERIFY(ports->hasFocus());
+    QCOMPARE(ports->currentItem()->data(Qt::UserRole).toString(), QStringLiteral("batch"));
+    QVERIFY(scene(window).selected_nodes().empty());
 }
 
 void InspectorTests::edits_and_reloads_workflow_admission()
@@ -367,7 +647,7 @@ void InspectorTests::edits_shared_targets_and_previews_without_consuming()
     auto& inspector = properties(window);
     const auto reveal = [&](const NodeId& id) {
         const auto ok = scene(window).reveal_node(id);
-        static_cast<EditorInspector&>(inspector).refresh();
+        inspector.refresh();
         return ok;
     };
     const auto choose_target = [](const auto& id) -> DialogStep {
@@ -521,7 +801,7 @@ void InspectorTests::edits_and_reloads_dynamic_indices_and_format_options()
     const auto dynamic = exercise_dialog(inspector, *binding_button(inspector, QStringLiteral("left")), {
         set, [](QDialog& dialog) -> QPushButton* {
             auto* kind = dialog.findChild<QComboBox*>(QStringLiteral("choice"));
-            return kind && select_choice(*kind, QStringLiteral("Node output")) ? accept_button(dialog) : nullptr;
+            return kind && select_choice(*kind, QStringLiteral("节点输出")) ? accept_button(dialog) : nullptr;
         }, [](QDialog& dialog) -> QPushButton* {
             auto* path = dialog.findChild<QLineEdit*>(QStringLiteral("bindingSelector"));
             auto* source = dialog.findChild<QComboBox*>(QStringLiteral("bindingSource"));
@@ -638,8 +918,9 @@ void InspectorTests::resets_only_the_selected_session_accumulator()
         if (!input) { return nullptr; }
         input->setTextValue(QStringLiteral("Renamed accumulator"));
         return accept_button(dialog);
-    }});
+    }}, Qt::Key_Return);
     QVERIFY2(renamed.isEmpty(), qPrintable(renamed));
+    QVERIFY(inspector.isVisible() && !QApplication::activeModalWidget());
     verify_run(2, 23, 33);
     QVERIFY(scene(window).reveal_node(selected));
     QTRY_VERIFY(reset->isEnabled());
@@ -766,7 +1047,7 @@ void InspectorTests::commits_binding_and_group_outlet_through_dialogs()
         [](QDialog& dialog) { return dialog.findChild<QPushButton*>(QStringLiteral("setBindingSource")); },
         [](QDialog& dialog) -> QPushButton* {
             auto* choices = dialog.findChild<QComboBox*>(QStringLiteral("choice"));
-            return choices && select_choice(*choices, QStringLiteral("Node output")) ? accept_button(dialog) : nullptr;
+            return choices && select_choice(*choices, QStringLiteral("节点输出")) ? accept_button(dialog) : nullptr;
         },
         [&](QDialog& dialog) { return choose_objects(dialog, QStringLiteral("0/unknown_field")); },
         [&](QDialog& dialog) -> QPushButton* {

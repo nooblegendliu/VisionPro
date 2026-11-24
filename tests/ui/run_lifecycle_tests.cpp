@@ -9,6 +9,7 @@
 
 #include <QAction>
 #include <QComboBox>
+#include <QTabBar>
 #include <QCryptographicHash>
 #include <QDockWidget>
 #include <QFile>
@@ -256,6 +257,8 @@ class RunLifecycleTests final : public QObject {
 private slots:
     void cancel_with_slow_panel_and_resume_after_hiding();
     void admits_multiple_runs_and_cancels_only_the_selected_identity();
+    void workspace_cancel_shortcut_keeps_its_flow_data();
+    void workspace_cancel_shortcut_keeps_its_flow();
     void replace_and_close_with_pending_physical_exit();
     void edits_preserve_running_capture_and_displayed_image();
     void late_completion_after_window_destruction();
@@ -314,7 +317,7 @@ void RunLifecycleTests::admits_multiple_runs_and_cancels_only_the_selected_ident
     window.findChild<QDockWidget*>(QStringLiteral("runDock"))->show();
     auto& panel = control<RunPanel>(window, "runPanel");
     auto& start = control<QAction>(window, "runWorkflow");
-    auto& cancel = control<QAction>(window, "cancelRun");
+    auto& detail_cancel = control<QPushButton>(window, "cancelDetailRun");
     auto& history = control<QComboBox>(window, "runHistory");
     auto& status = control<QLabel>(window, "runStatus");
     controller.set_limits(0, 4);
@@ -352,15 +355,15 @@ void RunLifecycleTests::admits_multiple_runs_and_cancels_only_the_selected_ident
 
     // History limit zero still displays every pending/running/cleaning handle.
     history.setCurrentIndex(3);
-    QVERIFY(panel.selected_run() && panel.selected_run()->identity() == first.identity() && cancel.isEnabled());
-    cancel.trigger();
+    QVERIFY(panel.selected_run() && panel.selected_run()->identity() == first.identity() && detail_cancel.isEnabled());
+    detail_cancel.click();
     QTRY_VERIFY(take(first.inspect()).status == ExecutionStatus::Cancelled);
     QVERIFY(!take(first.inspect()).quiescent && take(second.inspect()).status == ExecutionStatus::Running);
     QVERIFY(take(queued.inspect()).status == ExecutionStatus::Pending && !driver->call(3));
     release(*driver->call(0));
     QTRY_VERIFY(driver->call(3) && controller.runs().size() == 2);
     QVERIFY(driver->call(3)->identity.invocation.workflow_run == queued.identity().run);
-    QVERIFY(!cancel.isEnabled() && panel.selected_run()->identity() == first.identity());
+    QVERIFY(!detail_cancel.isEnabled() && panel.selected_run()->identity() == first.identity());
     for (const auto index : {1u, 3u}) {
         const auto call = *driver->call(index);
         take(call.completion.complete(succeeded(call)));
@@ -369,6 +372,80 @@ void RunLifecycleTests::admits_multiple_runs_and_cancels_only_the_selected_ident
     QTRY_VERIFY(controller.can_start() && controller.runs().empty());
     QVERIFY(take(second.inspect()).status == ExecutionStatus::Succeeded && take(queued.inspect()).status == ExecutionStatus::Succeeded);
     QCOMPARE(driver->cancellations.load(), 1u);
+}
+
+void RunLifecycleTests::workspace_cancel_shortcut_keeps_its_flow_data()
+{
+    QTest::addColumn<bool>("details_visible");
+    QTest::addColumn<bool>("details_focused");
+    QTest::newRow("details closed") << false << false;
+    QTest::newRow("details open") << true << false;
+    QTest::newRow("floating details focused") << true << true;
+}
+
+void RunLifecycleTests::workspace_cancel_shortcut_keeps_its_flow()
+{
+    QFETCH(bool, details_visible);
+    QFETCH(bool, details_focused);
+    auto draft = solution_for('1');
+    draft.workflows.front().name = "Flow A";
+    auto other = solution_for('2').workflows.front();
+    other.name = "Flow B";
+    other.nodes.front().id = uuid<NodeId>('2');
+    other.entries = {other.nodes.front().id};
+    draft.workflows.push_back(std::move(other));
+    auto driver = std::make_shared<Driver>();
+    EditorWindow window(std::move(draft), registry_for(driver));
+    const DrainOnExit drain{*driver};
+    window.show();
+    auto& controller = control<RunController>(window, "runController");
+    auto& selector = control<QTabBar>(window, "workflowSelector");
+    auto& start = control<QAction>(window, "runWorkflow");
+    auto& cancel = control<QAction>(window, "cancelRun");
+    auto& dock = control<QDockWidget>(window, "runDock");
+    auto& panel = control<RunPanel>(window, "runPanel");
+    auto& detail_cancel = control<QPushButton>(window, "cancelDetailRun");
+    start.trigger();
+    QTRY_VERIFY(controller.runs().size() == 1 && driver->call(0));
+    const auto a = controller.runs().front();
+    selector.setCurrentIndex(1);
+    QTRY_VERIFY(start.isEnabled());
+    start.trigger();
+    QTRY_VERIFY(controller.runs().size() == 2 && driver->call(1));
+    const auto b = controller.runs().back();
+    selector.setCurrentIndex(0);
+    const auto target = QStringLiteral("取消“Flow A”第 %1 轮").arg(a.identity().run.value());
+    QTRY_COMPARE(cancel.text(), target);
+    QVERIFY(control<QLabel>(window, "workspaceStats").text().contains(QStringLiteral("第 %1 轮").arg(a.identity().run.value())));
+    dock.show();
+    control<QComboBox>(window, "runHistory").setCurrentIndex(1);
+    QTRY_VERIFY(panel.selected_run() && panel.selected_run()->identity() == b.identity());
+    QVERIFY(control<QLabel>(window, "runIdentity").text().contains(QStringLiteral("Flow B")));
+    QCOMPARE(cancel.text(), target);
+    dock.hide();
+    QCOMPARE(cancel.text(), target);
+    dock.setVisible(details_visible);
+    QCOMPARE(cancel.text(), target);
+    QVERIFY(cancel.isEnabled());
+
+    QWidget* key_target = details_focused ? static_cast<QWidget*>(&detail_cancel) : static_cast<QWidget*>(&selector);
+    key_target->window()->activateWindow();
+    key_target->setFocus();
+    QTRY_VERIFY(key_target->hasFocus());
+    QTest::keyClick(key_target, Qt::Key_F5, Qt::ShiftModifier);
+    QTRY_COMPARE(take(a.inspect()).status, ExecutionStatus::Cancelled);
+    QCOMPARE(take(b.inspect()).status, ExecutionStatus::Running);
+    QTRY_VERIFY(!cancel.isEnabled());
+
+    dock.show();
+    QTRY_VERIFY(detail_cancel.isEnabled() && panel.selected_run() && panel.selected_run()->identity() == b.identity());
+    QTest::mouseClick(&detail_cancel, Qt::LeftButton);
+    QTRY_COMPARE(take(b.inspect()).status, ExecutionStatus::Cancelled);
+    QTRY_VERIFY(!detail_cancel.isEnabled());
+    release(*driver->call(0));
+    release(*driver->call(1));
+    QTRY_VERIFY(controller.can_start());
+    QCOMPARE(driver->cancellations.load(), 2u);
 }
 
 void RunLifecycleTests::cancel_with_slow_panel_and_resume_after_hiding()

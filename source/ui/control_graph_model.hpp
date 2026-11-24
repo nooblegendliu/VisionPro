@@ -33,6 +33,7 @@ public:
     std::optional<core::WorkflowId> workflow_id() const noexcept { return workflow_id_; }
     QtNodes::NodeId canvas_id(const core::NodeId& id) const;
     std::optional<core::NodeId> domain_node(QtNodes::NodeId id) const;
+    std::span<const core::ControlOutputDescriptor> named_control_outlets(QtNodes::NodeId id) const;
     std::optional<core::NodeId> scope() const noexcept { return scope_; }
     QString scope_path() const;
     Qt::Orientation layout_orientation() const;

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "solution_run_actions.hpp"
+
 #include <visionpro/infrastructure/solution_file.hpp>
 #include <visionpro/workflow/run_handle.hpp>
 
@@ -13,16 +15,16 @@
 
 class QAction;
 class QCloseEvent;
-class QComboBox;
+class QDialog;
 class QDockWidget;
 class QLabel;
 class QListWidget;
 class QListWidgetItem;
 class QMenu;
-class QResizeEvent;
+class QPlainTextEdit;
+class QTabBar;
 class QTimer;
 class QToolButton;
-class QVBoxLayout;
 
 namespace visionpro::ui {
 
@@ -55,7 +57,6 @@ public:
 
 protected:
     void closeEvent(QCloseEvent* event) override;
-    void resizeEvent(QResizeEvent* event) override;
 
 private:
     struct CommittedDocument;
@@ -65,15 +66,18 @@ private:
         const QKeySequence& shortcut = {});
     void create_actions();
     void create_docks();
+    void create_log_bar();
+    void record_event(const QString& message);
     void create_run_actions();
     void create_run_dock();
     void add_workspace_tool(const QString& type, QPointF position);
+    void choose_control_connection();
     void show_properties();
     void refresh_workspace_selection();
     void refresh_workspace_results();
     void refresh_workspace_statistics();
     void present_workspace_image();
-    std::optional<workflow::RunHandle> cancel_target() const;
+    std::optional<workflow::RunHandle> workspace_cancel_target() const;
     void start_run(std::optional<workflow::DebugStatePolicy> debug = {});
     void show_selected_run_image();
     void show_shared_preview();
@@ -134,16 +138,18 @@ private:
     bool close_confirmed_{false};
     bool showing_run_image_{false};
 
-    QComboBox* workflows_{};
+    QTabBar* workflows_{};
+    QLabel* solution_name_{};
+    QLabel* last_event_{};
+    QPlainTextEdit* event_history_{};
+    SolutionRunActions solution_actions_{};
     WorkspaceToolbox* tools_{};
-    QToolButton* toolbox_toggle_{};
-    int expanded_toolbox_width_{244};
-    QVBoxLayout* canvas_layout_{};
+    QMainWindow* canvas_host_{};
     QLabel* workspace_stats_{};
     QToolButton* diagnostics_button_{};
     ModuleHistoryPanel* module_history_{};
     std::unique_ptr<WorkspaceImageSelection> workspace_image_selection_;
-    QDockWidget* inspector_dock_{};
+    QDialog* properties_dialog_{};
     QDockWidget* images_dock_{};
     RunController* run_controller_{};
     RunPanel* run_panel_{};
@@ -190,6 +196,7 @@ private:
     QAction* add_tool_{};
     QAction* add_group_{};
     QAction* add_loop_{};
+    QAction* connect_steps_{};
     QAction* remove_nodes_{};
     QAction* remove_link_{};
     QAction* remove_invalid_link_{};

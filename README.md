@@ -181,7 +181,9 @@ S3.9 在 Windows x64、MSVC 19.51、CMake/CTest 4.4.0 环境完成 Release 验�
 
 `visionpro_cli replay` 按给定顺序在同一会话运行多条流程，适合复现共享队列和工件汇合。[输入序列与重放命令](docs/s6-acceptance.md#复现)
 
-使用 `VISIONPRO_WITH_GUI=ON` 构建 `visionpro_gui`。左侧工具箱按海康手册分为 15 栏，每栏可独立展开，节点图标每行最多三个。点击栏目名浏览，或搜索节点，双击图标或拖入画布即可添加。流程首次以 100% 倍率打开，右下角可缩放、恢复 1:1 或查看全图。在顶部选择流程并单次运行。单击节点，右上显示输出图，右下列出模块历史；范围判断分别显示本次实测值、允许范围和判定。画布底栏显示同轮统计。双击普通节点可编辑参数与绑定，双击 Group 可进入内部。[桌面工作区](docs/architecture.md#42-参考-visionmaster-的桌面工作区改版方案)
+使用 `VISIONPRO_WITH_GUI=ON` 构建 `visionpro_gui`。左侧常驻 15 个工具分类。点击分类或搜索节点，双击或拖入画布即可添加。画布上方的标签用来切换流程。顶部可运行当前流程，配置了流程间编排的方案还可运行整方案。画布首次以 100% 打开，点击或拖动右下角小地图可定位到其他节点。
+
+单击画布节点即可查看结果。右上显示所选轮次的图像和 ROI，有多个来源时可点缩略图切换。右下常驻模块历史，范围判断分列显示实测值、允许范围和判定。双击普通节点或选择“模块属性…”会打开独立参数窗口，调参时仍可操作主窗口。双击 Group 可进入内部流程，选择“属性…”可编辑 Group 自身。画布底部显示同轮统计，窗口底部的“日志”可查看近期操作与运行状态。[桌面工作区](docs/architecture.md#42-参考-visionmaster-的桌面工作区改版方案)
 
 同时启用 OpenCV 后，可从 **View** 打开图像文件或方案图像资源，选择视觉节点后使用 **Preview Selected ROI**。在 **Properties → Edit ROI…** 修改区域配置。[S5.4 构建与样例复现](docs/development.md#327-s54-release-构建与测试)
 
@@ -196,6 +198,8 @@ S3.9 在 Windows x64、MSVC 19.51、CMake/CTest 4.4.0 环境完成 Release 验�
 - [VisionPro 框架与流程设计修复方案](docs/visionmaster-alignment-plan.md)（方案级编排、运行生命周期、事件分派和旧方案迁移）
 - [架构设计](docs/architecture.md)
 - [参考 VisionMaster 的桌面工作区改版方案](docs/architecture.md#42-参考-visionmaster-的桌面工作区改版方案)
+- [VisionMaster 模块使用参考](docs/Manual/VisionMaster-模块使用参考.md)（按官方 15 组整理 164 个节点，含输入输出、配置、行为和重开发验证样例）
+- 海康 VisionMaster 2D 节点配置手册（V4.4.0，2026 年 5 月维护版，15 类、164 个模块）：[可检索网页版](docs/Manual/VisionMaster-2D-节点配置手册.html) · [打印版 PDF](docs/Manual/VisionMaster-2D-节点配置手册.pdf)
 - [ANS1 设计建议的采纳与调整记录](docs/architecture.md#11-ans1-设计建议采纳记录)
 - [SDK 指南补充的设计取舍](docs/architecture.md#12-sdk-指南补充的设计取舍)
 - [核心数据模型与 C01–C10 契约](docs/data-model.md)

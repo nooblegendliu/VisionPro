@@ -6,6 +6,7 @@
 
 #include <optional>
 #include <vector>
+#include <QImage>
 #include <QString>
 
 namespace visionpro {
@@ -26,6 +27,7 @@ struct WorkspaceImageSelection {
     std::optional<workflow::ResultIdentity> consumer;
     std::vector<WorkspaceImageSource> sources;
     int rendered_index{-2};
+    bool waiting_for_result{};
     std::optional<core::WorkflowId> workflow;
     std::optional<core::NodeId> node;
     enum class Mode { Follow, DraftPreview, RunDetails };
@@ -34,6 +36,8 @@ struct WorkspaceImageSelection {
 
 [[nodiscard]] std::vector<WorkspaceImageSource> workspace_image_sources(
     const workflow::RunHandle& run, const workflow::NodeResult& selected);
+[[nodiscard]] core::Result<QImage> workspace_thumbnail(const workflow::RunHandle& run,
+    const WorkspaceImageSource& source, const workflow::Solution& display_config);
 
 [[nodiscard]] core::Result<std::monostate> show_run_image(ImagePanel& panel, const workflow::RunHandle& run,
     const core::InvocationKey& invocation, const std::optional<core::OutputId>& output,

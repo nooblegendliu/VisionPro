@@ -197,6 +197,11 @@ void VisualTests::displays_the_actual_dynamically_selected_group_image()
         take(ImageHandle::copy(layout, second_pixels, frame_id))};
     const auto values = take(DataValue::list(DataType::image(), {take(DataValue::image({images[0]})), take(DataValue::image({images[1]}))}));
     ImagePanel panel;
+    panel.resize(480, 380);
+    panel.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&panel));
+    auto* view = panel.findChild<ImageView*>();
+    QVERIFY(view);
     for (const auto pick : {1, 0}) {
         const std::vector inputs{RunInput{frames, values}, RunInput{choice, DataValue::integer(pick)}};
         std::vector<GlobalVariableEntry> globals;
@@ -212,6 +217,10 @@ void VisualTests::displays_the_actual_dynamically_selected_group_image()
         const auto blob = run_result(*run, waited.progress, blob_id);
         take(show_run_image(panel, *run, blob.data().identity.invocation, key<OutputId>("components")));
         QVERIFY(panel.frame() && *panel.frame() == images[pick]);
+        const auto shown = view->transform();
+        view->fit_image();
+        QCOMPARE(shown, view->transform()); // Same image geometry, different resolved list element.
+        view->zoom_by(2);
     }
 }
 

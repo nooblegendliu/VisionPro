@@ -1,0 +1,12 @@
+{
+  "version": 2,
+  "skills": {
+    "qt-ui-design": {
+      "source": "TheQtCompanyRnD/agent-skills",
+      "commit": "062f7c9f0e16b7d2f66cd55e449a3ed85fba699e",
+      "sourceType": "github",
+      "skillPath": "skills/qt-ui-design/SKILL.md",
+      "computedHash": "c02290b0ce78e4fae27b7c514bc725508b6b6a0313a0ba28289b34f767c89c61"
+    }
+  }
+}

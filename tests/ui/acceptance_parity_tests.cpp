@@ -118,7 +118,7 @@ void wait_for_file(EditorWindow& window)
 
 QPushButton* inspector_button(EditorWindow& window, const char* name, const QString& target)
 {
-    if (window.findChild<QDockWidget*>(QStringLiteral("inspectorDock"))->isHidden()) { action(window, "showProperties").trigger(); }
+    action(window, "showProperties").trigger();
     for (auto* button : window.findChildren<QPushButton*>(QString::fromLatin1(name))) {
         if (button->isVisible() && button->property("bindingTarget").toString() == target) { return button; }
     }
@@ -174,7 +174,7 @@ DialogStep source_kind(QString text)
 {
     return [text = std::move(text)](QDialog& dialog) -> QPushButton* {
         auto* types = dialog.findChild<QComboBox*>(QStringLiteral("choice"));
-        if (!types || dialog.windowTitle() != QStringLiteral("Binding source")) { return nullptr; }
+        if (!types || dialog.windowTitle() != QStringLiteral("绑定来源类型")) { return nullptr; }
         const auto index = types->findText(text);
         if (index < 0) { return nullptr; }
         types->setCurrentIndex(index);
@@ -435,7 +435,7 @@ void apply_semantic_edits(EditorWindow& window, const json& workflows)
         }, 3000), "Inspector did not refresh after selecting " + selected->name);
     };
     reveal(single, single.at("judge_node_id"));
-    drive_dialog(window, "editBinding", QStringLiteral("value"), {set_source, source_kind(QStringLiteral("Node output")),
+    drive_dialog(window, "editBinding", QStringLiteral("value"), {set_source, source_kind(QStringLiteral("节点输出")),
         [](QDialog& dialog) -> QPushButton* {
             auto* source = dialog.findChild<QComboBox*>(QStringLiteral("bindingSource"));
             auto* selector = dialog.findChild<QLineEdit*>(QStringLiteral("bindingSelector"));
@@ -450,7 +450,7 @@ void apply_semantic_edits(EditorWindow& window, const json& workflows)
         }, accept_binding});
 
     reveal(five, five.at("lanes").at(3).at("threshold_node_id"));
-    drive_dialog(window, "editBinding", QStringLiteral("threshold"), {set_source, source_kind(QStringLiteral("Constant")),
+    drive_dialog(window, "editBinding", QStringLiteral("threshold"), {set_source, source_kind(QStringLiteral("常量")),
         [](QDialog& dialog) -> QPushButton* {
             auto* constant = qobject_cast<QInputDialog*>(&dialog);
             if (!constant) { return nullptr; }
@@ -864,7 +864,7 @@ void AcceptanceParityTests::reproduces_interleaved_workpieces()
         compare(sample, false);
         const auto& width = original.solution().workflows.front();
         QVERIFY(scene(window).select_workflow(width.id) && scene(window).reveal_node(width.entries.front()));
-        drive_dialog(window, "editBinding", QStringLiteral("right"), {set_source, source_kind(QStringLiteral("Constant")),
+        drive_dialog(window, "editBinding", QStringLiteral("right"), {set_source, source_kind(QStringLiteral("常量")),
             [&](QDialog& dialog) -> QPushButton* {
             auto* value = qobject_cast<QInputDialog*>(&dialog);
             if (!value) { return nullptr; }
@@ -1192,7 +1192,7 @@ void AcceptanceParityTests::reproduces_saved_communication()
             const auto& echoed = output(named(supplied.at("nodes"), "id", flow.nodes.at(1).id.to_string()), "payload");
             QVERIFY(echoed.at("hex") == "4300ff" && echoed.at("size") == 3);
             select_node_properties(window, sender);
-            drive_dialog(window, "editBinding", QStringLiteral("payload"), {set_source, source_kind(QStringLiteral("Constant")),
+            drive_dialog(window, "editBinding", QStringLiteral("payload"), {set_source, source_kind(QStringLiteral("常量")),
                 [](QDialog& dialog) -> QPushButton* {
                     auto* hex = dialog.findChild<QPlainTextEdit*>(QStringLiteral("binaryHexEditor"));
                     if (!hex) { return nullptr; }
@@ -1339,7 +1339,7 @@ void AcceptanceParityTests::reproduces_saved_calibrated_measurement()
         verify(complete_editor_run(window, "runWorkflow"), 20, 11, 5);
         const auto point_node = uuid<NodeId>("5ca4f87a-ea1e-4d62-89b0-000000006816");
         QVERIFY(scene(window).reveal_node(point_node));
-        drive_dialog(window, "editBinding", QStringLiteral("point"), {set_source, source_kind(QStringLiteral("Constant")),
+        drive_dialog(window, "editBinding", QStringLiteral("point"), {set_source, source_kind(QStringLiteral("常量")),
             [](QDialog& dialog) -> QPushButton* {
                 auto* x = dialog.findChild<QLineEdit*>(QStringLiteral("pointX"));
                 auto* y = dialog.findChild<QLineEdit*>(QStringLiteral("pointY"));
@@ -1740,7 +1740,7 @@ void AcceptanceParityTests::compares_saved_blob_loop()
             return tool && tool->type.text() == "visionpro.image.threshold";
         });
         require(threshold != flow.nodes.end() && scene(window).reveal_node(threshold->id), "Threshold missing.");
-        drive_dialog(window, "editBinding", QStringLiteral("threshold"), {set_source, source_kind(QStringLiteral("Constant")),
+        drive_dialog(window, "editBinding", QStringLiteral("threshold"), {set_source, source_kind(QStringLiteral("常量")),
             [](QDialog& dialog) -> QPushButton* {
                 auto* field = qobject_cast<QInputDialog*>(&dialog);
                 if (!field) { return nullptr; }
@@ -1817,7 +1817,7 @@ void AcceptanceParityTests::compares_saved_loop_in_group()
         };
         compare(false);
         require(scene(window).reveal_node(threshold), "Could not open the threshold inside the Group.");
-        drive_dialog(window, "editBinding", QStringLiteral("threshold"), {set_source, source_kind(QStringLiteral("Constant")),
+        drive_dialog(window, "editBinding", QStringLiteral("threshold"), {set_source, source_kind(QStringLiteral("常量")),
             [](QDialog& dialog) -> QPushButton* {
                 auto* value = qobject_cast<QInputDialog*>(&dialog);
                 if (!value) { return nullptr; }

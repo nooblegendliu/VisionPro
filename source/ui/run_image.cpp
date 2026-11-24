@@ -1,11 +1,13 @@
 #include "run_image.hpp"
 
 #include "image_panel.hpp"
+#include "class_palette.hpp"
 
 #include <visionpro/core/schema_id_factory.hpp>
 #include <visionpro/workflow/run_handle.hpp>
 
 #include <algorithm>
+#include <limits>
 #include <ranges>
 #include <unordered_set>
 #include <utility>
@@ -37,9 +39,15 @@ Result<DataValue> available_output(const OutputSlot* slot)
     return issue(ErrorCode::InputUnavailable, "The selected output was not produced by this invocation.");
 }
 
-Result<ImageHandle> selected_image(const DataValue& input, const FixedSelector& selector)
+struct TracedImage {
+    ImageHandle image;
+    IndexSource source;
+};
+
+Result<TracedImage> selected_image(const DataValue& input, IndexSource source)
 {
     // The resolver applies these steps without implicitly unwrapping Optional values.
+    const auto& selector = std::visit([](const auto& ref) -> const FixedSelector& { return ref.selector; }, source);
     const auto* selected = &input;
     for (const auto& step : selector) {
         if (const auto* field = std::get_if<FieldSelection>(&step)) { selected = selected->field(field->field); }
@@ -52,10 +60,10 @@ Result<ImageHandle> selected_image(const DataValue& input, const FixedSelector& 
     }
     const auto* frame = selected->as_image();
     if (!frame) { return issue(ErrorCode::TypeMismatch, "The recorded input does not select an Image."); }
-    return frame->image;
+    return TracedImage{frame->image, std::move(source)};
 }
 
-Result<ImageHandle> produced_image(const RunHandle& run, const ResultTrace& trace, const FixedSelector& path)
+Result<TracedImage> produced_image(const RunHandle& run, const ResultTrace& trace, const FixedSelector& path)
 {
     if (trace.run != run.identity() || trace.reference.workflow != run.identity().workflow) {
         return issue(ErrorCode::ResultIdentityMismatch, "The recorded image comes from another run.");
@@ -75,16 +83,16 @@ Result<ImageHandle> produced_image(const RunHandle& run, const ResultTrace& trac
     }
     const auto value = available_output(source->output(*output));
     if (const auto* failure = std::get_if<Diagnostic>(&value)) { return *failure; }
-    return selected_image(std::get<DataValue>(value), path);
+    return selected_image(std::get<DataValue>(value), IndexOutputReference{trace.reference.workflow, trace.reference.node, *output, path});
 }
 
-Result<ImageHandle> fixed_image(const RunHandle& run, const InputId& input, InputOrigin origin, const FixedSelector& selector)
+Result<TracedImage> fixed_image(const RunHandle& run, IndexInputReference source, InputOrigin origin)
 {
-    const auto* fixed = run.request().input(input);
+    const auto* fixed = run.request().input(source.input);
     if (!fixed || fixed->origin != origin) {
         return issue(ErrorCode::InputUnavailable, "The recorded image does not match a fixed run input.");
     }
-    return selected_image(fixed->value, selector);
+    return selected_image(fixed->value, std::move(source));
 }
 
 Result<FixedSelector> traced_selector(const Selector& selector, const RunBindingTrace& binding, std::size_t source_index)
@@ -149,7 +157,7 @@ Result<const SourceTrace*> input_source(const RunNodeProgress& node, const Workf
     return issue(ErrorCode::InputUnavailable, "The selected image has no available source.");
 }
 
-Result<ImageHandle> traced_input_image(const RunHandle& run, InvocationKey call, std::string_view port)
+Result<TracedImage> traced_input_image(const RunHandle& run, InvocationKey call, std::string_view port)
 {
     const auto inspected = run.inspect();
     if (const auto* failure = std::get_if<Diagnostic>(&inspected)) { return *failure; }
@@ -171,14 +179,14 @@ Result<ImageHandle> traced_input_image(const RunHandle& run, InvocationKey call,
             if (entry == values.end() || entry->revision != global->revision) {
                 return issue(ErrorCode::ResultIdentityMismatch, "The recorded global image does not match the run's global snapshot.");
             }
-            return selected_image(entry->current_value, path);
+            return selected_image(entry->current_value, IndexGlobalReference{global->variable, {}, path});
         }
         if (const auto* fixed = std::get_if<IndependentInputTrace>(&origin)) {
             const auto* target = std::get_if<NodeTarget>(&run.request().target());
             if (!target || target->node != call.node || fixed->run != run.identity() || fixed->input != input) {
                 return issue(ErrorCode::ResultIdentityMismatch, "The recorded debug image does not match the selected target.");
             }
-            return fixed_image(run, input, fixed->origin, path);
+            return fixed_image(run, {flow->id, call.node, input, path}, fixed->origin);
         }
         const auto* capture = std::get_if<PublicInputTrace>(&origin);
         if (!capture) { return issue(ErrorCode::InputUnavailable, "The recorded input source cannot provide a display image."); }
@@ -187,7 +195,7 @@ Result<ImageHandle> traced_input_image(const RunHandle& run, InvocationKey call,
         }
         input = capture->reference.input;
         if (!capture->reference.group && std::holds_alternative<WorkflowTarget>(run.request().target())) {
-            return fixed_image(run, input, capture->origin, path);
+            return fixed_image(run, {flow->id, {}, input, path}, capture->origin);
         }
         const auto group = std::ranges::find(progress.groups, call.scope, &RunGroupCall::scope);
         const auto loop = std::ranges::find(progress.iterations, call.scope, &RunLoopIteration::scope);
@@ -206,6 +214,61 @@ const OutputSlot* display_output(const NodeResult& result)
         return value && (value->as_image() || value->as_raster_mask() || value->type() == class_map_type());
     });
     return found != outputs.end() ? &*found : nullptr;
+}
+
+Result<QImage> sample_thumbnail(const ImageHandle& image, const RasterMask* mask, const ClassPalette* palette)
+{
+    const bool mono = image.format() == PixelFormat{PixelDepth::UInt8, ChannelOrder::Mono};
+    if (!mono && image.format() != PixelFormat{PixelDepth::UInt8, ChannelOrder::BGR}) {
+        return issue(ErrorCode::UnsupportedPixelFormat, "Preview supports Mono8 and BGR8 images.");
+    }
+    if (image.width() > (std::numeric_limits<int>::max)() || image.height() > (std::numeric_limits<int>::max)()) {
+        return issue(ErrorCode::SizeOverflow, "Preview dimensions exceed the display range.");
+    }
+    if (mask) {
+        auto checked = validate_raster_mask(*mask, image);
+        if (const auto* error = std::get_if<Diagnostic>(&checked)) { return *error; }
+        if (mask->mapping.transform || mask->pixels.format() != PixelFormat{PixelDepth::UInt8, ChannelOrder::Mono}) {
+            return issue(ErrorCode::InvalidMask, "Preview requires a directly mapped Mono8 member mask.");
+        }
+    }
+    const QSize source_size(static_cast<int>(image.width()), static_cast<int>(image.height()));
+    auto size = source_size.scaled({80, 48}, Qt::KeepAspectRatio).expandedTo({1, 1});
+    QImage preview(size, QImage::Format_RGB32);
+    if (preview.isNull()) { return issue(ErrorCode::InvalidImage, "Could not allocate the preview image."); }
+    for (int y = 0; y < size.height(); ++y) {
+        const auto sy = static_cast<std::size_t>(y) * image.height() / size.height();
+        const auto row = image.row(sy);
+        if (const auto* error = std::get_if<Diagnostic>(&row)) { return *error; }
+        const auto pixels = std::get<std::span<const std::byte>>(row);
+        std::span<const std::byte> members;
+        if (mask) {
+            const auto member_row = mask->pixels.row(sy);
+            if (const auto* error = std::get_if<Diagnostic>(&member_row)) { return *error; }
+            members = std::get<std::span<const std::byte>>(member_row);
+        }
+        auto* target = reinterpret_cast<QRgb*>(preview.scanLine(y));
+        for (int x = 0; x < size.width(); ++x) {
+            const auto sx = static_cast<std::size_t>(x) * image.width() / size.width();
+            QRgb color;
+            if (mono) {
+                const auto gray = std::to_integer<std::uint8_t>(pixels[sx]);
+                color = palette ? class_color(*palette, gray).rgb() : qRgb(gray, gray, gray);
+            } else {
+                const auto* bgr = pixels.data() + sx * 3;
+                color = qRgb(std::to_integer<int>(bgr[2]), std::to_integer<int>(bgr[1]), std::to_integer<int>(bgr[0]));
+            }
+            if (mask) {
+                const auto value = std::to_integer<std::uint8_t>(members[sx]);
+                if (mask->valid_pixels.mode == MaskValueMode::NonZero ? value != 0 : value >= mask->valid_pixels.threshold) {
+                    color = qRgb((qRed(color) * 155 + 16 * 100) / 255, (qGreen(color) * 155 + 211 * 100) / 255,
+                        (qBlue(color) * 155 + 166 * 100) / 255);
+                }
+            }
+            target[x] = color;
+        }
+    }
+    return preview;
 }
 } // namespace
 
@@ -265,6 +328,45 @@ std::vector<WorkspaceImageSource> workspace_image_sources(const RunHandle& run, 
     return unique;
 }
 
+Result<QImage> workspace_thumbnail(const RunHandle& run, const WorkspaceImageSource& source, const Solution& display_config)
+{
+    const auto queried = run.lookup(source.result.invocation);
+    if (const auto* error = std::get_if<Diagnostic>(&queried)) { return *error; }
+    const auto& record = std::get<std::optional<NodeResult>>(queried);
+    if (!record || record->data().identity != source.result) {
+        return issue(ErrorCode::ResultIdentityMismatch, "The image preview has no matching result.");
+    }
+    const auto mask = [&]() -> const RasterMask* {
+        const auto* slot = record->output(std::get<OutputId>(SchemaIdFactory::parse<OutputId>("roi_mask")));
+        const auto* value = slot ? std::get_if<DataValue>(&slot->content) : nullptr;
+        return value ? value->as_raster_mask() : nullptr;
+    };
+    const auto* tool = run_tool(run, source.result.invocation.node);
+    if (!source.output) {
+        const bool blob = version_one_tool(tool, "visionpro.image.blob");
+        auto traced = traced_input_image(run, source.result.invocation, blob ? "binary" : "image");
+        if (const auto* error = std::get_if<Diagnostic>(&traced)) { return *error; }
+        return sample_thumbnail(std::get<TracedImage>(traced).image, blob ? nullptr : mask(), nullptr);
+    }
+    const auto available = available_output(record->output(*source.output));
+    if (const auto* error = std::get_if<Diagnostic>(&available)) { return *error; }
+    const auto& value = std::get<DataValue>(available);
+    if (const auto* image = value.as_image()) {
+        const bool threshold = version_one_tool(tool, "visionpro.image.threshold") && source.output->text() == "binary";
+        return sample_thumbnail(image->image, threshold ? mask() : nullptr, nullptr);
+    }
+    if (const auto* raster = value.as_raster_mask()) { return sample_thumbnail(raster->pixels, nullptr, nullptr); }
+    if (value.type() == class_map_type()) {
+        const auto* pixels = value.field(std::get<FieldId>(SchemaIdFactory::parse<FieldId>("pixels")));
+        if (pixels && pixels->as_image()) {
+            const auto* placement = find_placement(display_config, source.result.run.workflow, source.result.invocation.node);
+            static const ClassPalette defaults;
+            return sample_thumbnail(pixels->as_image()->image, nullptr, placement ? &placement->class_palette : &defaults);
+        }
+    }
+    return issue(ErrorCode::TypeMismatch, "The selected result has no preview image.");
+}
+
 Result<std::monostate> show_run_image(ImagePanel& panel, const RunHandle& run, const InvocationKey& invocation,
     const std::optional<OutputId>& output, const Solution* display_config)
 {
@@ -281,8 +383,9 @@ Result<std::monostate> show_run_image(ImagePanel& panel, const RunHandle& run, c
         }
         const auto input = traced_input_image(run, invocation, blob ? "binary" : "image");
         if (const auto* failure = std::get_if<Diagnostic>(&input)) { return *failure; }
-        return blob ? panel.present_blob(std::get<ImageHandle>(input), *selected)
-            : panel.present_measurement(std::get<ImageHandle>(input), *selected);
+        const auto& traced = std::get<TracedImage>(input);
+        const RunImageSource source{run.identity().snapshot.session, run.identity().workflow, invocation.node, traced.source};
+        return panel.present_image(traced.image, source, blob ? nullptr : &*selected, blob ? &*selected : nullptr);
     }
 
     const auto* slot = output ? selected->output(*output) : display_output(*selected);
@@ -295,14 +398,17 @@ Result<std::monostate> show_run_image(ImagePanel& panel, const RunHandle& run, c
         if (const auto* failure = std::get_if<Diagnostic>(&map)) { return *failure; }
         const auto& layout = display_config ? *display_config : run.request().snapshot().solution();
         const auto* placement = find_placement(layout, run.identity().workflow, invocation.node);
-        return panel.present_class_map(std::get<ClassMap>(map), run.identity().workflow, invocation.node,
+        return panel.present_class_map(std::get<ClassMap>(map),
+            {run.identity().snapshot.session, run.identity().workflow, invocation.node, slot->id},
             placement ? placement->class_palette : ClassPalette{});
     }
     if (data.as_image()) {
         const bool threshold = version_one_tool(tool, "visionpro.image.threshold") && slot->id.text() == "binary";
         return panel.present_result(*selected, slot->id, threshold ? &*selected : nullptr, nullptr);
     }
-    if (const auto* mask = data.as_raster_mask()) { return panel.set_frame(mask->pixels); }
+    if (const auto* mask = data.as_raster_mask()) {
+        return panel.set_frame(mask->pixels, RunImageSource{run.identity().snapshot.session, run.identity().workflow, invocation.node, slot->id});
+    }
     return issue(ErrorCode::TypeMismatch, "The selected output is not an Image or RasterMask.");
 }
 

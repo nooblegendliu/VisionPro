@@ -21,6 +21,7 @@ public:
         QWidget* parent = nullptr, HashFile hash_file = {});
     void set_preview_image(std::optional<core::ImageHandle> image);
     void refresh();
+    bool focus_diagnostic_field(const core::DiagnosticLocation& location);
 
 private:
     void queue_refresh();
@@ -31,6 +32,7 @@ private:
     HashFile hash_file_;
     QScrollArea* scroll_;
     std::optional<core::ImageHandle> preview_image_;
+    std::optional<core::NodeId> displayed_node_;
     bool refresh_pending_{false};
 };
 

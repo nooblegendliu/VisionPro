@@ -55,20 +55,6 @@ protected:
 
 QString dash() { return QStringLiteral("—"); }
 
-QString status_text(ExecutionStatus status)
-{
-    switch (status) {
-    case ExecutionStatus::Pending: return QStringLiteral("等待");
-    case ExecutionStatus::Running: return QStringLiteral("运行中");
-    case ExecutionStatus::Succeeded: return QStringLiteral("成功");
-    case ExecutionStatus::Failed: return QStringLiteral("失败");
-    case ExecutionStatus::Skipped: return QStringLiteral("已跳过");
-    case ExecutionStatus::Cancelled: return QStringLiteral("已取消");
-    case ExecutionStatus::TimedOut: return QStringLiteral("超时");
-    }
-    return dash();
-}
-
 QString elapsed_text(const std::optional<std::chrono::nanoseconds>& elapsed)
 {
     if (!elapsed) { return dash(); }
@@ -251,7 +237,7 @@ ModuleHistoryPanel::RunSummary ModuleHistoryPanel::summarize(const RunHandle& ru
     }
     const auto& progress = std::get<RunProgress>(inspected);
     summary.complete = progress.quiescent;
-    auto state = status_text(progress.status);
+    auto state = execution_status_text(progress.status);
     if (!progress.quiescent && progress.status != ExecutionStatus::Pending && progress.status != ExecutionStatus::Running) {
         state += QStringLiteral("（清理中）");
     }
@@ -291,7 +277,7 @@ ModuleHistoryPanel::RunSummary ModuleHistoryPanel::summarize(const RunHandle& ru
             else if (call.scope->value() != 0) { label += QStringLiteral(" · 域 %1").arg(call.scope->value()); }
         }
         Row row{call.scope, call.invocation, false,
-            {label, status_text(call.status), dash(), dash(), dash(), dash(), dash()}, tooltip, dash()};
+            {label, execution_status_text(call.status), dash(), dash(), dash(), dash(), dash()}, tooltip, dash()};
         if (call.invocation) {
             row.tooltip += QStringLiteral(" · 调用 %1").arg(call.invocation->invocation.value());
             if (call.status != ExecutionStatus::Pending && call.status != ExecutionStatus::Running) {

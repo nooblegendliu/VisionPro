@@ -10,6 +10,8 @@
 #include <QAction>
 #include <QAbstractButton>
 #include <QApplication>
+#include <QComboBox>
+#include <QDialogButtonBox>
 #include <QFile>
 #include <QInputDialog>
 #include <QJsonDocument>
@@ -18,6 +20,8 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QProcess>
+#include <QPushButton>
+#include <QScopeGuard>
 #include <QTemporaryDir>
 #include <QTest>
 #include <QToolButton>
@@ -77,6 +81,7 @@ class EditorTests final : public QObject {
 
 private Q_SLOTS:
     void toolbox_search_add_and_compact_view();
+    void keyboard_connects_steps_and_undoes();
     void drag_icon_onto_canvas();
     void canvas_remembers_workflow_and_group_views();
     void canvas_zoom_controls_stay_visible_when_scrolling();
@@ -182,8 +187,10 @@ void EditorTests::toolbox_search_add_and_compact_view()
     QVERIFY(QTest::qWaitForWindowExposed(&window));
     auto* search = window.findChild<QLineEdit*>(QStringLiteral("toolSearch"));
     auto* toolbox = window.findChild<WorkspaceToolbox*>(QStringLiteral("toolList"));
-    auto* toggle = window.findChild<QToolButton*>(QStringLiteral("collapseToolbox"));
-    QVERIFY(search && toolbox && toggle);
+    auto* toggle = window.findChild<QToolButton*>(QStringLiteral("searchToolbox"));
+    auto* drawer = window.findChild<QWidget*>(QStringLiteral("toolDrawer"));
+    QVERIFY(search && toolbox && toggle && drawer);
+    QVERIFY(drawer->isHidden() && toolbox->isVisible());
     search->setText(QStringLiteral("visionpro.sim.add"));
     const auto buttons = toolbox->findChildren<QAbstractButton*>();
     const auto visible = [&buttons] {
@@ -235,9 +242,127 @@ void EditorTests::toolbox_search_add_and_compact_view()
     action(window, "undoDraft").trigger();
     QCOMPARE(window.draft().workflows.front().nodes.size(), count);
     window.resize(950, 700);
-    QTRY_VERIFY(toggle->isChecked() && !toolbox->isVisible());
+    QTRY_VERIFY(drawer->isVisible() && toolbox->isVisible());
+    search->clear();
+    QVERIFY(drawer->isHidden() && toolbox->isVisible());
     toggle->click();
-    QVERIFY(toolbox->isVisible());
+    QVERIFY(drawer->isVisible());
+    toggle->click();
+    QVERIFY(drawer->isHidden() && toggle->isVisible());
+}
+
+void EditorTests::keyboard_connects_steps_and_undoes()
+{
+    auto initial = canvas_example();
+    auto& flow = initial.workflows.front();
+    flow.nodes.clear();
+    flow.control_links.clear();
+    flow.containment.clear();
+    flow.entries.clear();
+    initial.layouts.clear();
+    EditorWindow window(std::move(initial), registry());
+    window.show();
+    window.activateWindow();
+    QVERIFY(QTest::qWaitForWindowActive(&window));
+    auto* search = window.findChild<QLineEdit*>(QStringLiteral("toolSearch"));
+    QVERIFY(search);
+    const auto tab_to = [&](QWidget* wanted) {
+        for (int i = 0; i < 80 && !wanted->hasFocus(); ++i) {
+            auto* focus = QApplication::focusWidget();
+            QTest::keyClick(focus ? focus : &window, Qt::Key_Tab);
+        }
+        return wanted->hasFocus();
+    };
+    auto* open_search = window.findChild<QToolButton*>(QStringLiteral("searchToolbox"));
+    QVERIFY(open_search && tab_to(open_search));
+    QTest::keyClick(open_search, Qt::Key_Space);
+    QTRY_VERIFY(search->hasFocus());
+    QTest::keyClicks(search, "visionpro.sim.select");
+    const auto tools = window.findChildren<QToolButton*>();
+    const auto tile = std::ranges::find_if(tools, [&](auto* button) {
+        return button->property("toolType").toString() == search->text();
+    });
+    QVERIFY(tile != tools.end());
+    auto& command = action(window, "connectSteps");
+    QVERIFY(!command.isEnabled());
+    for (int i = 0; i < 2; ++i) {
+        QVERIFY(tab_to(*tile));
+        QTest::keyClick(*tile, Qt::Key_Return);
+        QCOMPARE(window.draft().workflows.front().nodes.size(), static_cast<std::size_t>(i + 1));
+    }
+    QVERIFY(command.isEnabled());
+    const auto& nodes = window.draft().workflows.front().nodes;
+    const auto from = nodes[0].id;
+    const auto to = nodes[1].id;
+    bool connected = false;
+    QTimer::singleShot(0, &window, [&] {
+        auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+        QVERIFY(dialog);
+        const auto close = qScopeGuard([&] { if (dialog->isVisible()) { dialog->reject(); } });
+        QVERIFY(QTest::qWaitForWindowActive(dialog));
+        auto* source = dialog->findChild<QComboBox*>("controlSource");
+        auto* outlet = dialog->findChild<QComboBox*>("controlOutlet");
+        auto* target = dialog->findChild<QComboBox*>("controlTarget");
+        auto* buttons = dialog->findChild<QDialogButtonBox*>();
+        QVERIFY(source && outlet && target && buttons);
+        auto* confirm = buttons->button(QDialogButtonBox::Ok);
+        QCOMPARE(source->count(), 2);
+        QVERIFY(source->itemText(0) != source->itemText(1));
+        QCOMPARE(source->currentData().toUInt(), model(window).canvas_id(to));
+        QTRY_VERIFY(source->hasFocus());
+        QTest::keyClick(source, Qt::Key_Home);
+        QVERIFY(!confirm->isEnabled());
+        QVERIFY(tab_to(outlet));
+        QTest::keyClick(outlet, Qt::Key_End);
+        QVERIFY(outlet->currentText().contains(QStringLiteral("[right]")));
+        QVERIFY(tab_to(target));
+        QTest::keyClick(target, Qt::Key_End);
+        QVERIFY(confirm->isEnabled() && tab_to(confirm));
+        QTest::keyClick(confirm, Qt::Key_Return);
+        connected = dialog->result() == QDialog::Accepted;
+    });
+    QTest::keyClick(*tile, Qt::Key_L, Qt::ControlModifier);
+    QVERIFY(connected);
+    QVERIFY(QTest::qWaitForWindowActive(&window));
+    QTRY_VERIFY((*tile)->hasFocus());
+    const auto links = [&]() -> const auto& { return window.draft().workflows.front().control_links; };
+    QCOMPARE(links().size(), 1u);
+    const auto added = links().front();
+    QVERIFY(added.source == from && added.target == to && added.output && added.output->text() == "right");
+    QTest::keySequence(*tile, action(window, "undoDraft").shortcut());
+    QVERIFY(links().empty());
+    QCOMPARE(window.draft().workflows.front().nodes.size(), 2u);
+    QTest::keySequence(*tile, action(window, "redoDraft").shortcut());
+    QCOMPARE(links().size(), 1u);
+    QVERIFY(links().front().id == added.id && links().front().output == added.output);
+
+    bool checked_existing = false;
+    QTimer::singleShot(0, &window, [&] {
+        auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+        QVERIFY(dialog);
+        const auto close = qScopeGuard([&] { if (dialog->isVisible()) { dialog->reject(); } });
+        QVERIFY(QTest::qWaitForWindowActive(dialog));
+        auto* source = dialog->findChild<QComboBox*>("controlSource");
+        auto* outlet = dialog->findChild<QComboBox*>("controlOutlet");
+        auto* target = dialog->findChild<QComboBox*>("controlTarget");
+        auto* confirm = dialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Ok);
+        // The reverse edge would create a cycle.
+        QVERIFY(source->currentData().toUInt() == model(window).canvas_id(to) && !confirm->isEnabled());
+        QTest::keyClick(source, Qt::Key_Home);
+        QTest::keyClick(target, Qt::Key_End);
+        QVERIFY(confirm->isEnabled());
+        QTest::keyClick(outlet, Qt::Key_End);
+        QVERIFY(!confirm->isEnabled());
+        QTest::keyClick(dialog, Qt::Key_Escape);
+        checked_existing = !dialog->isVisible() && dialog->result() == QDialog::Rejected;
+    });
+    QTest::keyClick(*tile, Qt::Key_L, Qt::ControlModifier);
+    QVERIFY(checked_existing);
+    QCOMPARE(links().size(), 1u);
+    QVERIFY(QTest::qWaitForWindowActive(&window));
+    QTRY_VERIFY((*tile)->hasFocus());
+    QTest::keySequence(*tile, action(window, "undoDraft").shortcut());
+    QVERIFY(links().empty());
 }
 
 void EditorTests::drag_icon_onto_canvas()
@@ -442,7 +567,7 @@ void EditorTests::locates_cross_scope_link()
     action(window, "redoDraft").trigger();
     QTRY_VERIFY(problems->count() == 1 && problems->item(0)->text().contains(QStringLiteral("Group boundary")));
     problems->setCurrentRow(0);
-    Q_EMIT problems->itemDoubleClicked(problems->item(0));
+    QTest::keyClick(problems, Qt::Key_Return);
     QVERIFY(model(window).scope() == group);
     QVERIFY(scene(window).selected_nodes() == std::vector<NodeId>{moved_node});
     QVERIFY(action(window, "removeDiagnosedLink").isEnabled());

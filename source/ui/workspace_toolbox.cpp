@@ -1,4 +1,6 @@
 #include "workspace_toolbox.hpp"
+#include "canvas_overview.hpp"
+#include "workspace_icons.hpp"
 #include "workspace_appearance.hpp"
 #include "toolbox_catalog.hpp"
 #include "workspace_style.hpp"
@@ -9,6 +11,8 @@
 #include <QGridLayout>
 #include <QKeyEvent>
 #include <QLabel>
+#include <QLineEdit>
+#include <QScrollArea>
 #include <QMimeData>
 #include <QMouseEvent>
 #include <QSignalBlocker>
@@ -27,6 +31,17 @@ namespace {
 const QString mime_type = QStringLiteral("application/x-visionpro-tool-type");
 constexpr int columns = 3;
 
+QString category_style()
+{
+    const auto& colors = workspace_colors();
+    return QStringLiteral(
+        "QToolButton { padding: 0; color: %1; background: transparent; border: 2px solid transparent; }"
+        "QToolButton:hover { background: %2; }"
+        "QToolButton:checked { background: %2; border-left-color: %3; }"
+        "QToolButton:focus { border: 2px solid %3; }")
+        .arg(colors.text.name(), colors.button.name(), colors.accent.name());
+}
+
 class ToolTile final : public QToolButton {
     Q_OBJECT
 public:
@@ -41,6 +56,7 @@ public:
 
     QSize sizeHint() const override { return {72, iconSize().height() + 2 * fontMetrics().lineSpacing() + 12}; }
     QSize minimumSizeHint() const override { return {0, sizeHint().height()}; }
+    bool is_dragging() const { return dragging_; }
 
 signals:
     void activated();
@@ -152,58 +168,125 @@ private:
 } // namespace
 
 WorkspaceToolbox::WorkspaceToolbox(const core::ToolRegistry& registry, QWidget* parent)
-    : QScrollArea(parent), selection_(new QButtonGroup(this))
+    : QWidget(parent), selection_(new QButtonGroup(this)), drawer_(new QWidget(this))
 {
     setObjectName(QStringLiteral("toolList"));
-    setWidgetResizable(true);
-    setFrameShape(QFrame::NoFrame);
-    setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    auto* row = new QHBoxLayout(this);
+    row->setContentsMargins(0, 0, 0, 0);
+    row->setSpacing(0);
+    auto* rail = new QWidget(this);
+    rail->setObjectName(QStringLiteral("toolCategoryRail"));
+    rail->setFixedWidth(rail_width);
+    auto* rail_layout = new QVBoxLayout(rail);
+    rail_layout->setContentsMargins(0, 0, 0, 0);
+    rail_layout->setSpacing(0);
+    row->addWidget(rail);
+    search_button_ = new QToolButton(rail);
+    search_button_->setObjectName(QStringLiteral("searchToolbox"));
+    search_button_->setIcon(workspace_icon(WorkspaceIcon::Search));
+    search_button_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    search_button_->setText(tr("搜索"));
+    search_button_->setToolTip(tr("搜索全部节点"));
+    search_button_->setAccessibleName(search_button_->toolTip());
+    search_button_->setFocusPolicy(Qt::StrongFocus);
+    search_button_->installEventFilter(this);
+    search_button_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    search_button_->setMinimumHeight(32);
+    rail_layout->addWidget(search_button_);
 
+    const auto scroll = [](QWidget* parent) {
+        auto* area = new QScrollArea(parent);
+        area->setWidgetResizable(true);
+        area->setFrameShape(QFrame::NoFrame);
+        area->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        area->setFocusPolicy(Qt::NoFocus);
+        return area;
+    };
+    auto* categories = scroll(rail);
+    rail_layout->addWidget(categories, 1);
+    auto* category_list = new QWidget;
+    auto* rail_buttons = new QVBoxLayout(category_list);
+    rail_buttons->setContentsMargins(0, 0, 0, 0);
+    rail_buttons->setSpacing(0);
+    categories->setWidget(category_list);
+    drawer_->setObjectName(QStringLiteral("toolDrawer"));
+    drawer_->hide();
+    row->addWidget(drawer_, 1);
+    auto* drawer_layout = new QVBoxLayout(drawer_);
+    drawer_layout->setContentsMargins(5, 4, 4, 0);
+    drawer_layout->setSpacing(4);
+    search_ = new QLineEdit(drawer_);
+    search_->setObjectName(QStringLiteral("toolSearch"));
+    search_->setPlaceholderText(tr("搜索节点…"));
+    search_->setClearButtonEnabled(true);
+    search_->setAccessibleName(tr("搜索节点"));
+    search_->installEventFilter(this);
+    drawer_layout->addWidget(search_);
+    auto* tools = scroll(drawer_);
+    drawer_layout->addWidget(tools, 1);
     auto* content = new QWidget;
     auto* list = new QVBoxLayout(content);
     list->setContentsMargins(0, 0, 0, 0);
     list->setSpacing(2);
+    tools->setWidget(content);
+    const auto header_style = category_style();
     for (int i = 0; i < static_cast<int>(ToolboxCategory::Count); ++i) {
         const auto category = static_cast<ToolboxCategory>(i);
-        auto* header = new QToolButton(content);
         const auto title = toolbox_category_name(category);
+        auto* header = new QToolButton(category_list);
         header->setText(title);
+        header->setAccessibleName(title);
+        header->setToolTip(title);
         header->setProperty("toolCategory", title);
-        header->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-        header->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        header->setIcon(workspace_category_icon(category));
+        header->setIconSize({18, 18});
+        header->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+        header->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
         header->setFocusPolicy(Qt::StrongFocus);
+        header->installEventFilter(this);
         header->setCheckable(true);
-        header->setStyleSheet(QStringLiteral("QToolButton { text-align: left; padding: 2px 5px;"
-            " border: 0; border-bottom: 1px solid palette(midlight); background: transparent; }"
-            "QToolButton:checked, QToolButton:hover { background: palette(alternate-base); }"
-            "QToolButton:focus { border: 1px solid palette(highlight); }"));
-        header->setFont(workspace_font(WorkspaceText::Category));
-        header->setMinimumHeight(std::max(27, header->fontMetrics().height() + 6));
-        const bool open = category == ToolboxCategory::Acquisition || category == ToolboxCategory::Location;
-        header->setChecked(open);
-        header->setArrowType(open ? Qt::DownArrow : Qt::RightArrow);
-        list->addWidget(header);
-
+        header->setStyleSheet(header_style);
+        header->setFont(workspace_font(WorkspaceText::Secondary));
+        header->setFixedHeight(header->fontMetrics().height() + 25);
+        rail_buttons->addWidget(header);
+        auto* label = new QLabel(title, content);
+        label->setFont(workspace_font(WorkspaceText::Category));
+        list->addWidget(label);
         auto* panel = new QWidget(content);
         auto* grid = new QGridLayout(panel);
         grid->setContentsMargins(1, 1, 1, 1);
         grid->setSpacing(2);
         for (int column = 0; column < columns; ++column) { grid->setColumnStretch(column, 1); }
         list->addWidget(panel);
-        panel->setVisible(open);
-        sections_.push_back({header, grid, {}});
-        connect(header, &QToolButton::toggled, this, [this, header, panel](bool expanded) {
-            header->setArrowType(expanded ? Qt::DownArrow : Qt::RightArrow);
-            panel->setVisible(expanded);
-            emit selectionChanged();
+        sections_.push_back({header, label, grid, {}});
+        connect(header, &QToolButton::clicked, this, [this, i] {
+            const auto index = static_cast<std::size_t>(i);
+            const bool closing = category_ == index;
+            category_ = closing ? std::nullopt : std::optional{index};
+            browsing_all_ = false;
+            const QSignalBlocker block(search_);
+            search_->clear();
+            update_sections();
         });
     }
+    rail_buttons->addStretch();
+    empty_ = new QLabel(content);
+    list->addWidget(empty_);
     list->addStretch();
-    setWidget(content);
+    connect(search_, &QLineEdit::textChanged, this, &WorkspaceToolbox::filter);
+    connect(search_button_, &QToolButton::clicked, this, [this] {
+        browsing_all_ = !browsing_all_;
+        category_.reset();
+        const QSignalBlocker block(search_);
+        search_->clear();
+        update_sections();
+        if (browsing_all_) { search_->setFocus(Qt::ShortcutFocusReason); }
+    });
     const auto add = [this](std::string_view type, const QString& original) {
         const auto entry = toolbox_entry(type, original);
         auto& section = sections_.at(static_cast<size_t>(entry.category));
         auto* tile = new ToolTile(section.grid->parentWidget());
+        tile->installEventFilter(this);
         const auto id = QString::fromUtf8(type);
         tile->setText(entry.name);
         tile->setAccessibleName(entry.name);
@@ -223,16 +306,17 @@ WorkspaceToolbox::WorkspaceToolbox(const core::ToolRegistry& registry, QWidget* 
     for (const auto& tool : registry.descriptors()) { add(tool.id.text(), QString::fromStdString(tool.display_name)); }
     add("@group", {});
     add("@loop", {});
-    for (const auto& section : sections_) {
-        if (section.header->isChecked() && !section.tiles.empty()) {
-            section.tiles.front()->setChecked(true);
-            break;
-        }
-    }
+    update_sections();
     connect(selection_, &QButtonGroup::buttonToggled, this, [this](QAbstractButton*, bool checked) {
         if (checked) { emit selectionChanged(); }
     });
     connect(&WorkspaceAppearance::instance(), &WorkspaceAppearance::colorsChanged, this, [this] {
+        const auto style = category_style();
+        for (std::size_t i = 0; i < sections_.size(); ++i) {
+            sections_[i].header->setStyleSheet(style);
+            sections_[i].header->setIcon(workspace_category_icon(static_cast<ToolboxCategory>(i)));
+        }
+        search_button_->setIcon(workspace_icon(WorkspaceIcon::Search));
         for (auto* tile : selection_->buttons()) {
             const auto type = tile->property("toolType").toString().toStdString();
             tile->setIcon(toolbox_entry(type, tile->text()).icon);
@@ -243,47 +327,90 @@ WorkspaceToolbox::WorkspaceToolbox(const core::ToolRegistry& registry, QWidget* 
 QString WorkspaceToolbox::selected_type() const
 {
     const auto* selected = selection_->checkedButton();
-    return selected && selected->isVisibleTo(widget()) ? selected->property("toolType").toString() : QString{};
+    return selected && selected->isVisibleTo(this) ? selected->property("toolType").toString() : QString{};
+}
+
+bool WorkspaceToolbox::eventFilter(QObject* watched, QEvent* event)
+{
+    if ((event->type() == QEvent::ShortcutOverride || event->type() == QEvent::KeyPress) && !drawer_->isHidden()) {
+        const auto* key = static_cast<QKeyEvent*>(event);
+        if (key->key() == Qt::Key_Escape && key->modifiers() == Qt::NoModifier) {
+            if (event->type() == QEvent::ShortcutOverride) {
+                // Only claim Escape when a toolbox control receives it, including during a tile drag.
+                event->accept();
+                return true;
+            }
+            if (const auto* tile = qobject_cast<ToolTile*>(watched); tile && tile->is_dragging()) {
+                return false;
+            }
+            auto* focus = category_ ? sections_[*category_].header : search_button_;
+            category_.reset();
+            browsing_all_ = false;
+            const QSignalBlocker block(search_);
+            search_->clear();
+            update_sections();
+            focus->setFocus(Qt::ShortcutFocusReason);
+            event->accept();
+            return true;
+        }
+    }
+    return QWidget::eventFilter(watched, event);
 }
 
 void WorkspaceToolbox::filter(const QString& query)
 {
-    const auto term = query.trimmed();
+    if (query != search_->text()) {
+        search_->setText(query);
+        return;
+    }
+    update_sections();
+}
+
+void WorkspaceToolbox::update_sections()
+{
+    const auto term = search_->text().trimmed();
     const bool searching = !term.isEmpty();
-    QSignalBlocker changes(this);
-    for (auto& section : sections_) {
-        if (searching && !filtering_) { section.expanded_before_search = section.header->isChecked(); }
-        const bool category_matches = section.header->text().contains(term, Qt::CaseInsensitive);
+    const bool open = searching || browsing_all_ || category_.has_value();
+    bool found = false;
+    for (std::size_t i = 0; i < sections_.size(); ++i) {
+        auto& section = sections_[i];
+        const bool selected = category_ == i;
+        const bool by_name = section.header->text().contains(term, Qt::CaseInsensitive);
+        section.header->setChecked(selected);
         int shown = 0;
         for (auto* tile : section.tiles) {
-            const bool matches = category_matches || tile->toolTip().contains(term, Qt::CaseInsensitive);
+            const bool visible = by_name || tile->toolTip().contains(term, Qt::CaseInsensitive);
             section.grid->removeWidget(tile);
-            tile->setVisible(matches);
-            if (matches) {
+            tile->setVisible(visible);
+            if (visible) {
                 section.grid->addWidget(tile, shown / columns, shown % columns);
                 ++shown;
             }
         }
-        const bool visible = category_matches || shown > 0;
-        section.header->setVisible(visible);
-        if (searching) { section.header->setChecked(visible); }
-        else if (filtering_) { section.header->setChecked(section.expanded_before_search); }
+        const bool show_section = searching ? by_name || shown > 0 : (browsing_all_ ? shown > 0 : selected);
+        section.label->setVisible(show_section);
+        section.grid->parentWidget()->setVisible(show_section && shown > 0);
+        found |= show_section && shown > 0;
     }
-    filtering_ = searching;
-    changes.unblock();
+    empty_->setText(searching ? tr("没有匹配的节点") : tr("此分类暂无可用节点"));
+    empty_->setVisible(!found);
+    const bool was_open = !drawer_->isHidden();
+    drawer_->setVisible(open);
+    if (was_open != open) { emit drawerChanged(open); }
     emit selectionChanged();
 }
 
 bool WorkspaceToolbox::accepts_drag(const QObject* source, const QMimeData* payload) const
 {
     const auto* tile = qobject_cast<const QAbstractButton*>(source);
-    return tile && tile->group() == selection_ && tile->isEnabled() && tile->isVisibleTo(widget())
+    return tile && tile->group() == selection_ && tile->isEnabled() && tile->isVisibleTo(this)
         && payload && payload->hasFormat(mime_type)
         && payload->data(mime_type) == tile->property("toolType").toString().toUtf8();
 }
 
 WorkflowCanvas::WorkflowCanvas(QtNodes::BasicGraphicsScene* scene, WorkspaceToolbox* toolbox, AddTool add)
-    : QtNodes::GraphicsView(scene), toolbox_(toolbox), add_(std::move(add)), zoom_controls_(new QFrame(this))
+    : QtNodes::GraphicsView(scene), toolbox_(toolbox), add_(std::move(add)), zoom_controls_(new QFrame(this)),
+      overview_(new CanvasOverview(*this, *scene))
 {
     setAcceptDrops(true);
     setBackgroundBrush(workspace_colors().canvas);
@@ -393,6 +520,7 @@ void WorkflowCanvas::place_zoom_controls()
     bar.moveBottomRight(area.bottomRight());
     zoom_controls_->setGeometry(bar);
     zoom_controls_->raise();
+    overview_->place_above(bar, area);
 }
 
 void WorkflowCanvas::drawBackground(QPainter* painter, const QRectF& exposed)

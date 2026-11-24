@@ -1,5 +1,6 @@
 add_library(visionpro_ui STATIC
     background_result.hpp camera_editor.cpp camera_editor.hpp
+    canvas_overview.cpp canvas_overview.hpp
     binary_editor.cpp binary_editor.hpp endpoint_editor.cpp endpoint_editor.hpp
     class_palette.cpp class_palette.hpp
     control_graph_model.cpp control_graph_model.hpp

@@ -1,7 +1,7 @@
 #pragma once
 
 #include <QtNodes/GraphicsView>
-#include <QScrollArea>
+#include <QWidget>
 
 #include <visionpro/core/tool_registry.hpp>
 
@@ -10,16 +10,20 @@
 #include <vector>
 
 class QButtonGroup;
+class QFrame;
 class QGridLayout;
+class QLabel;
+class QLineEdit;
 class QMimeData;
 class QToolButton;
 
 namespace visionpro::ui {
 
-class WorkspaceToolbox final : public QScrollArea {
+class WorkspaceToolbox final : public QWidget {
     Q_OBJECT
 public:
     explicit WorkspaceToolbox(const core::ToolRegistry& registry, QWidget* parent = nullptr);
+    static constexpr int rail_width = 76;
     QString selected_type() const;
     void filter(const QString& query);
     bool accepts_drag(const QObject* source, const QMimeData* payload) const;
@@ -28,18 +32,28 @@ signals:
     void selectionChanged();
     void toolActivated();
     void toolDropped(const QObject* source, QPoint global_position);
+    void drawerChanged(bool expanded);
 
 private:
+    bool eventFilter(QObject* watched, QEvent* event) override;
     struct Section {
         QToolButton* header;
+        QLabel* label;
         QGridLayout* grid;
         std::vector<QToolButton*> tiles;
-        bool expanded_before_search{};
     };
+    void update_sections();
     std::vector<Section> sections_;
     QButtonGroup* selection_;
-    bool filtering_{};
+    QWidget* drawer_;
+    QToolButton* search_button_;
+    QLineEdit* search_;
+    QLabel* empty_;
+    std::optional<std::size_t> category_;
+    bool browsing_all_{};
 };
+
+class CanvasOverview;
 
 class WorkflowCanvas final : public QtNodes::GraphicsView {
 public:
@@ -66,6 +80,7 @@ private:
     AddTool add_;
     std::optional<QRectF> pending_entry_;
     QFrame* zoom_controls_;
+    CanvasOverview* overview_;
 };
 
 } // namespace visionpro::ui

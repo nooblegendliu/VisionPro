@@ -40,14 +40,17 @@ public:
     enum class DrawingMode { Off, Rectangle, Vertex };
     explicit ImageView(QWidget* parent = nullptr);
 
-    [[nodiscard]] core::Result<std::monostate> set_image(const core::ImageHandle& image, const QList<QRgb>& palette = {});
+    [[nodiscard]] core::Result<std::monostate> set_image(const core::ImageHandle& image,
+        const QList<QRgb>& palette = {}, bool same_source = false);
     [[nodiscard]] core::Result<std::monostate> recolor_labels(const QList<QRgb>& palette);
     [[nodiscard]] core::Result<std::monostate> set_overlays(
         const std::optional<core::RegionDefinition>& effective_region,
         const std::optional<core::RasterMask>& member_mask,
         std::span<const BlobAnnotation> blobs = {});
-    void clear_image();
+    void clear_image(bool retain_view = false);
     void fit_image();
+    void zoom_by(double factor);
+    void actual_size();
     void set_drawing_mode(DrawingMode mode);
     void set_rectangle_drawing(bool enabled) { set_drawing_mode(enabled ? DrawingMode::Rectangle : DrawingMode::Off); }
 
@@ -66,6 +69,7 @@ protected:
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
+    void keyPressEvent(QKeyEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
     bool viewportEvent(QEvent* event) override;
 
@@ -76,10 +80,19 @@ private:
     [[nodiscard]] QPointF rectangle_point(const QPoint& viewport_position) const;
     void clear_overlays();
     void update_pixel(const QPoint& viewport_position);
+    [[nodiscard]] std::optional<ImagePixel> read_pixel(const QPoint& local) const;
+    void describe_pixel(const std::optional<ImagePixel>& pixel);
+    void zoom_at(double scale, const QPoint& viewport_position);
     void finish_gesture();
     void update_cursor();
 
     std::optional<core::ImageHandle> image_;
+    struct ViewGeometry {
+        std::size_t width, height, origin_x, origin_y;
+        core::CoordinateSystemId local, root;
+        bool operator==(const ViewGeometry&) const = default;
+    };
+    std::optional<ViewGeometry> geometry_;
     QImage labels_;
     QGraphicsPixmapItem* image_item_;
     QGraphicsPixmapItem* mask_item_;
@@ -90,6 +103,8 @@ private:
     QPolygonF blob_centroids_;
     bool fit_on_resize_{true};
     double fitted_scale_{1};
+    std::optional<QPoint> sampled_pixel_;
+    bool keyboard_sample_{false};
     DrawingMode drawing_mode_{DrawingMode::Off};
     Drag drag_{Drag::None};
     Qt::MouseButton drag_button_{Qt::NoButton};

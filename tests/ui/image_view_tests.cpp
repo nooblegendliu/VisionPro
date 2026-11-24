@@ -90,6 +90,7 @@ private slots:
     void owns_and_displays_strided_cropped_bgr();
     void aligns_effective_mask_and_geometry_in_the_crop();
     void preserves_business_coordinates_through_zoom_pan_and_draw();
+    void keyboard_pixel_inspection_and_compatible_frames();
 };
 
 void ImageViewTests::owns_and_displays_strided_cropped_bgr()
@@ -277,6 +278,65 @@ void ImageViewTests::preserves_business_coordinates_through_zoom_pan_and_draw()
     view.fit_image();
     QCOMPARE(view.transform().m11(), fitted_scale);
     QVERIFY(QLineF(*view.image_coordinates(cursor), *fixed_coordinate).length() < 1 / fitted_scale);
+}
+
+void ImageViewTests::keyboard_pixel_inspection_and_compatible_frames()
+{
+    ui::ImageView view;
+    view.resize(400, 300);
+    view.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&view));
+    const auto image = cropped_mono({5, 7, 60, 45});
+    take(view.set_image(image));
+    const auto fitted = view.transform();
+    QSignalSpy pixels(&view, &ui::ImageView::pixel_changed);
+    move_pointer(view.viewport(), view.mapFromScene(QPointF(24, 18)));
+    const auto mouse = pixels.last().front().toString();
+    QVERIFY(mouse.contains("Pixel (24, 18)") && mouse.contains("Root (29, 25)") && mouse.contains("Gray 40"));
+    QTest::keyClick(&view, Qt::Key_Right);
+    QVERIFY(pixels.last().front().toString().contains("Pixel (25, 18)"));
+    QTest::keyClick(&view, Qt::Key_Left);
+    QCOMPARE(pixels.last().front().toString(), mouse);
+
+    QTest::keyClick(&view, Qt::Key_1);
+    QVERIFY(qFuzzyCompare(view.transform().m11() * view.viewport()->devicePixelRatioF(), 1.0));
+    QTest::keyClick(&view, Qt::Key_Plus);
+    QVERIFY(view.transform().m11() > 1 / view.viewport()->devicePixelRatioF());
+    QTest::keyClick(&view, Qt::Key_Minus);
+    QVERIFY(qFuzzyCompare(view.transform().m11() * view.viewport()->devicePixelRatioF(), 1.0));
+
+    view.fit_image();
+    view.zoom_by(3);
+    view.centerOn(24, 18);
+    const auto zoom = view.transform();
+    const auto viewport_center = view.viewport()->rect().center();
+    const auto center = view.mapToScene(viewport_center);
+    const std::vector<std::byte> changed(60 * 45, std::byte{72});
+    take(view.set_image(take(image.copy_with_pixels({60, 45, 60, mono8}, changed)), {}, true));
+    QCOMPARE(view.transform(), zoom);
+    QCOMPARE(view.mapToScene(viewport_center), center);
+    QVERIFY(pixels.last().front().toString().contains("Gray 72"));
+
+    view.clear_image(true);
+    QVERIFY(!view.pixel_at(viewport_center));
+    QVERIFY(pixels.last().front().toString().isEmpty());
+    take(view.set_image(image, {}, true));
+    QCOMPARE(view.transform(), zoom);
+    QCOMPARE(view.mapToScene(viewport_center), center);
+    take(view.set_image(cropped_mono({6, 7, 60, 45}), {}, true));
+    QCOMPARE(view.transform(), fitted);
+    QVERIFY(pixels.last().front().toString().isEmpty());
+    view.zoom_by(3);
+    take(view.set_image(cropped_mono({6, 7, 30, 20}), {}, true));
+    const auto resized = view.transform();
+    view.fit_image();
+    QCOMPARE(view.transform(), resized);
+    QVERIFY(resized != zoom);
+    view.zoom_by(2);
+    const auto different_frame = take(core::ImageHandle::copy({30, 20, 30, mono8},
+        std::span(changed).first(30 * 20), frame("other")));
+    take(view.set_image(different_frame, {}, true));
+    QCOMPARE(view.transform(), resized);
 }
 
 } // namespace

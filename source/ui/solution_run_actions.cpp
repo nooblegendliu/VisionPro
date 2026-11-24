@@ -1,5 +1,6 @@
 #include "solution_run_actions.hpp"
 
+#include "run_controller.hpp"
 #include "run_panel.hpp"
 
 #include <QAction>
@@ -14,20 +15,6 @@
 namespace visionpro::ui {
 namespace {
 using namespace workflow;
-
-QString status_label(ExecutionStatus status)
-{
-    switch (status) {
-    case ExecutionStatus::Pending: return QObject::tr("等待");
-    case ExecutionStatus::Running: return QObject::tr("运行中");
-    case ExecutionStatus::Succeeded: return QObject::tr("完成");
-    case ExecutionStatus::Failed: return QObject::tr("失败");
-    case ExecutionStatus::Cancelled: return QObject::tr("已取消");
-    case ExecutionStatus::TimedOut: return QObject::tr("超时");
-    case ExecutionStatus::Skipped: return QObject::tr("跳过");
-    }
-    return {};
-}
 
 QString close_reason_label(ControlCloseReason reason)
 {
@@ -67,10 +54,10 @@ void show_report(QWidget* owner, const SolutionRunReport& report)
         }
         return QString::fromStdString(id.to_string());
     };
-    QStringList lines{QObject::tr("第 %1 轮　%2").arg(report.sequence).arg(status_label(report.status))};
+    QStringList lines{QObject::tr("第 %1 轮　%2").arg(report.sequence).arg(execution_status_text(report.status))};
     for (const auto& child : report.runs) {
         auto state = child.inspect();
-        const auto label = std::holds_alternative<RunProgress>(state) ? status_label(std::get<RunProgress>(state).status)
+        const auto label = std::holds_alternative<RunProgress>(state) ? execution_status_text(std::get<RunProgress>(state).status)
             : run_diagnostic_text(std::get<core::Diagnostic>(state));
         lines << QObject::tr("%1　第 %2 轮　%3").arg(name(child.identity().workflow)).arg(child.identity().run.value()).arg(label);
         const auto result = child.public_result();
@@ -120,7 +107,7 @@ void show_report(QWidget* owner, const SolutionRunReport& report)
 }
 } // namespace
 
-void add_solution_run_actions(QMenu& menu, RunController& controller,
+SolutionRunActions add_solution_run_actions(QMenu& menu, RunController& controller,
     std::function<const Solution*()> current_draft, std::function<RunDocument()> current_document)
 {
     auto* start = menu.addAction(QObject::tr("运行整方案…"));
@@ -129,17 +116,7 @@ void add_solution_run_actions(QMenu& menu, RunController& controller,
     start->setObjectName(QStringLiteral("runSolution"));
     stop->setObjectName(QStringLiteral("cancelSolutionRun"));
     result->setObjectName(QStringLiteral("viewSolutionRunReport"));
-    stop->setEnabled(false);
-    result->setEnabled(false);
     auto* owner = qobject_cast<QWidget*>(controller.parent());
-    const auto update = [=, &controller] {
-        const auto* draft = current_draft();
-        start->setEnabled(draft && draft->graph && controller.can_start());
-        stop->setEnabled(controller.can_cancel_solution());
-        result->setEnabled(controller.solution_report().has_value());
-    };
-    QObject::connect(&menu, &QMenu::aboutToShow, &menu, update);
-    QObject::connect(&controller, &RunController::changed, &menu, update);
     QObject::connect(stop, &QAction::triggered, &controller, &RunController::cancel_solution);
     QObject::connect(result, &QAction::triggered, &menu, [owner, &controller] {
         if (controller.solution_report()) { show_report(owner, *controller.solution_report()); }
@@ -161,5 +138,6 @@ void add_solution_run_actions(QMenu& menu, RunController& controller,
         }
         controller.start_solution(draft, source, std::move(inputs));
     });
+    return {start, stop, result};
 }
 } // namespace visionpro::ui

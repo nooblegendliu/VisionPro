@@ -676,7 +676,7 @@ cmake --install $guiBuild --config Release --prefix $installPrefix --component V
 & (Join-Path $installPrefix 'bin/visionpro_gui.exe')
 ```
 
-在桌面程序中双击 **Tools** 的工具条目添加节点，拖动输出口连接控制线，选中节点后在 **Properties** 编辑入口、父层级和绑定。
+在桌面程序中双击工具箱条目添加节点，拖动输出口连接控制线。双击普通节点，或选中节点后执行 **模块属性…**，可在独立窗口编辑入口、父层级和绑定。
 数据来源选择器接受以 `/` 分隔的字段 ID 和从 0 开始的索引，例如 `0/area_pixels`。
 双击 **Diagnostics** 的作用域错误定位节点。可通过 **View** 的 **Remove Diagnosed Control Link** 删除当前诊断指向的控制边，再用撤销恢复。
 从 **File** 保存到方案目录，另存和独立复制选择尚无 `solution.json` 的目标目录。外部引用和待配置的命名根显示在诊断面板。
@@ -2496,6 +2496,29 @@ ctest --test-dir out/build/s67-gui -R '^visionpro_workspace_tests$' --output-on-
 ```
 
 复查字号和缩放时运行 `visionpro_canvas_tests`、`visionpro_editor_tests` 和 `visionpro_workspace_tests`。三组分别核对长中文标题与端口位置、视点恢复与缩放条命中、两轮历史值与表格尺寸。使用 Windows Qt 后端检查系统字体；可通过 `QT_SCALE_FACTOR=1.25` 或 `1.5` 在同一显示器上模拟额外缩放。运行 `visionpro_workspace_tests -platform windows five_lane_selection_and_history`，将 `VISIONPRO_WORKSPACE_COMPACT_SCREENSHOT` 和 `VISIONPRO_WORKSPACE_SCREENSHOT` 设为 PNG 输出路径，可分别保存 1280×720 编辑视图和 1440×800 全图视图。这两组窗口尺寸使用逻辑像素。
+
+要核对多来源图像，可运行 `visionpro_workspace_tests -platform windows format_image_sources`。将 `VISIONPRO_IMAGE_SOURCES_SCREENSHOT` 设为 PNG 输出路径，可保存实际选中第五路的缩略条和主图。
+
+在上述 Qt 构建的 `tests/ui` 目录运行以下用例，可复查桌面键盘操作与主题渲染。主题用例采样启动即深色和浅转深后的标题、分类及焦点框。并发用例让两个流程同时保持运行，再检查每次取消后的实际状态。
+
+```powershell
+.\visionpro_workspace_tests -platform windows appearance_preferences toolbox_category_grid_and_search
+.\visionpro_editor_tests -platform windows keyboard_connects_steps_and_undoes
+.\visionpro_inspector_tests -platform windows locates_diagnostic_field
+.\visionpro_run_lifecycle_tests -platform windows workspace_cancel_shortcut_keeps_its_flow
+```
+
+在 1280×720 工作区单击 **Judge lane 5**，确认右上显示第五路 ROI，右下显示该节点的历史记录。放大 ROI 后双击同一节点，在独立的“模块属性”窗口把 `maximum` 从 40 改为 50 并按 Enter。保持参数窗口打开，从主窗口再次运行，随后在右下切换两条历史记录。核对 ROI 的观察位置和倍率一致，两轮的 B 均为 50，第一轮仍显示 [10,40]、NG，第二轮显示 [10,50]、OK。另选含 Group 的方案，双击 Group 应进入内部画布，返回上层后从 Group 的右键“属性…”打开其配置。
+
+以下原生 Qt 用例还覆盖阈值 128 改为 150 后单步撤销、改绑上游并定位来源、切换不同裁剪范围后自动适配，以及用方向键读当前帧像素。将 `VISIONPRO_PROPERTIES_DIALOG_SCREENSHOT` 设为 PNG 输出路径，`five_lane_selection_and_history` 会单独保存第五路判断节点的属性窗口。
+
+```powershell
+.\visionpro_inspector_tests -platform windows edits_threshold_inline_then_binds_output preserves_full_width_values_and_defaults locates_diagnostic_field
+.\visionpro_image_view_tests -platform windows keyboard_pixel_inspection_and_compatible_frames
+.\visionpro_workspace_tests -platform windows five_lane_selection_and_history properties_dialog_reuses_selection_and_clears_on_replacement format_image_sources recovers_image_view_after_failed_measurement panels_float_and_redock
+```
+
+2026-11-23，Windows x64 Release 的 23 项 Qt 界面与集成 CTest 全部通过，其中 TCP、PLC 和五路 TCP 投递用例使用本机回环。Windows 原生 Qt 在默认倍率及额外 125%、150% 缩放下通过五路历史回看、停靠和像素读数验收。三轮测量另验证了中间轮 ROI 越界时清空图像及读数，第三轮显示自己的图像并恢复首轮的观察位置。
 
 2026-11-20，Windows x64 Release 启用 Qt、OpenCV 与 MVS 的 176 项 CTest 全部通过，其中 6 项通信测试使用本机回环。上述工作区还在 Windows 原生 Qt 平台上运行了两轮历史回看、OK/NG 两条分支的来源切换与循环调用回看，各项均通过。部署的桌面版已验证可通过清单路径启动五路方案。
 

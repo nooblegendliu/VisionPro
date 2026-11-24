@@ -102,18 +102,19 @@ SchemaId trigger_id(bool independent)
 void EditorWindow::create_run_actions()
 {
     auto& menu = *menuBar()->addMenu(QStringLiteral("运行(&R)"));
-    add_solution_run_actions(menu, *run_controller_, [this] {
+    solution_actions_ = add_solution_run_actions(menu, *run_controller_, [this] {
         return model_ && !busy_ && !close_confirmed_ && writable() ? &draft() : nullptr;
     }, [this] { return RunDocument{source_, directory_, roots_}; });
-    run_workflow_ = action(menu, QStringLiteral("单次运行"), "runWorkflow", [this] { start_run(); },
+    run_workflow_ = action(menu, QStringLiteral("运行当前流程"), "runWorkflow", [this] { start_run(); },
         QKeySequence(Qt::Key_F5));
     run_group_ = action(menu, QStringLiteral("运行所选 Group…"), "runSelectedGroup",
         [this] { start_run(DebugStatePolicy::Active); });
     debug_node_ = action(menu, QStringLiteral("调试所选模块…"), "debugSelectedNode", [this] { start_run(DebugStatePolicy::Isolated); },
         QKeySequence(Qt::CTRL | Qt::Key_F5));
-    cancel_run_ = action(menu, QStringLiteral("取消所选轮次"), "cancelRun", [this] {
-        if (const auto run = cancel_target()) { run_controller_->cancel(*run); }
+    cancel_run_ = action(menu, tr("取消工作台所示轮次"), "cancelRun", [this] {
+        if (const auto run = workspace_cancel_target()) { run_controller_->cancel(*run); }
     }, QKeySequence(Qt::SHIFT | Qt::Key_F5));
+    run_dock_->addAction(cancel_run_);
     reset_state_ = action(menu, QStringLiteral("重置所选模块状态"), "resetSelectedState", [this] {
         const auto flow = model_->workflow_id();
         const auto selected = scene_->selected_nodes();
@@ -237,7 +238,20 @@ void EditorWindow::create_run_dock()
         show_status(QString::fromStdString(diagnostic.message));
     });
     connect(run_controller_, &RunController::trigger_notice, this, &EditorWindow::show_status);
+    connect(run_controller_, &RunController::run_finished, this, [this](const RunHandle& run, ExecutionStatus status) {
+        const auto& id = run.identity();
+        const auto* flow = find_workflow(run.request().snapshot().solution(), id.workflow);
+        auto name = QString::fromStdString(flow ? flow->name : id.workflow.to_string());
+        if (const auto* target = std::get_if<NodeTarget>(&run.request().target())) {
+            const auto* node = flow ? find_node(*flow, target->node) : nullptr;
+            name += QStringLiteral(" / ") + QString::fromStdString(node ? node->name : target->node.to_string());
+        }
+        record_event(tr("%1 · 第 %2 轮 · %3").arg(name).arg(id.run.value()).arg(execution_status_text(status)));
+    });
     connect(run_panel_, &RunPanel::image_requested, this, &EditorWindow::show_selected_run_image);
+    connect(run_panel_, &RunPanel::cancel_requested, this, [this] {
+        if (const auto run = run_panel_->selected_run()) { run_controller_->cancel(*run); }
+    });
     connect(run_panel_, &RunPanel::selected_run_changed, this, &EditorWindow::refresh_actions);
     connect(module_history_, &ModuleHistoryPanel::selection_changed, this, [this] {
         refresh_workspace_statistics();
@@ -245,6 +259,7 @@ void EditorWindow::create_run_dock()
         refresh_actions();
     });
     const auto follow = [this] {
+        if (workspace_image_selection_->mode == WorkspaceImageSelection::Mode::Follow) { return; }
         workspace_image_selection_->mode = WorkspaceImageSelection::Mode::Follow;
         workspace_image_selection_->rendered_index = -2;
         images_->set_manual_view(false);
@@ -255,9 +270,10 @@ void EditorWindow::create_run_dock()
     connect(images_, &ImagePanel::source_changed, this, &EditorWindow::present_workspace_image);
 }
 
-std::optional<RunHandle> EditorWindow::cancel_target() const
+std::optional<RunHandle> EditorWindow::workspace_cancel_target() const
 {
-    return run_dock_->isVisible() ? run_panel_->selected_run() : module_history_->selected_run();
+    const auto run = module_history_->selected_run();
+    return run && run->identity().workflow == model_->workflow_id() ? run : std::nullopt;
 }
 
 void EditorWindow::refresh_workspace_selection()
@@ -277,6 +293,8 @@ void EditorWindow::refresh_workspace_selection()
     display.node = node;
     const auto* current_flow = flow ? find_workflow(draft(), *flow) : nullptr;
     const auto* current_node = current_flow && node ? find_node(*current_flow, *node) : nullptr;
+    properties_dialog_->setWindowTitle(current_node ? tr("模块属性 · %1").arg(QString::fromStdString(current_node->name))
+        : current_flow ? tr("流程属性 · %1").arg(QString::fromStdString(current_flow->name)) : tr("流程属性"));
     module_history_->set_selection(current_flow, current_node);
     refresh_workspace_statistics();
     present_workspace_image();
@@ -301,9 +319,10 @@ void EditorWindow::present_workspace_image()
     if (close_confirmed_ || !workspace_image_selection_ || !module_history_) { return; }
     auto& display = *workspace_image_selection_;
     if (display.mode != WorkspaceImageSelection::Mode::Follow) { return; }
-    const auto empty = [this](const QString& message) {
+    const auto empty = [this](const QString& message, bool retain_view = false) {
         showing_run_image_ = false;
-        if (images_->frame()) { images_->clear_frame(); }
+        if (images_->frame()) { images_->clear_frame(retain_view); }
+        else if (!retain_view) { images_->reset_view_source(); }
         images_->set_provenance(message);
     };
     try {
@@ -314,32 +333,69 @@ void EditorWindow::present_workspace_image()
             const auto result = run->lookup(*call);
             if (const auto* record = std::get_if<std::optional<NodeResult>>(&result)) { selected = *record; }
         }
+        const auto no_result = [&](const QString& message) {
+            if (display.consumer && !display.waiting_for_result) { images_->set_sources({}, -1); }
+            display.waiting_for_result = display.consumer && run && display.node == display.consumer->invocation.node
+                && run->identity().workflow == display.consumer->run.workflow
+                && run->identity().snapshot.session == display.consumer->run.snapshot.session;
+            if (!display.waiting_for_result) {
+                display.consumer.reset();
+                display.sources.clear();
+                display.rendered_index = -2;
+            }
+            empty(message, display.waiting_for_result);
+        };
         if (!selected) {
-            if (display.consumer) { images_->set_sources({}, -1); }
-            display.consumer.reset();
-            display.sources.clear();
-            display.rendered_index = -2;
-            empty(module_history_->selection_message());
+            no_result(module_history_->selection_message());
             return;
         }
-        if (display.consumer != selected->data().identity) {
-            display.consumer = selected->data().identity;
-            display.sources = workspace_image_sources(*run, *selected);
+        if (display.waiting_for_result || display.consumer != selected->data().identity) {
+            const auto& consumer = selected->data().identity;
+            auto sources = workspace_image_sources(*run, *selected);
+            if (sources.empty()) {
+                no_result(QStringLiteral("该调用没有可显示的图像"));
+                return;
+            }
+            const bool choose = sources.size() > 1 && sources.front().upstream;
+            int index = choose ? -1 : 0;
+            const int previous = display.rendered_index;
+            const bool same_consumer = display.consumer && display.consumer->invocation.node == consumer.invocation.node
+                && display.consumer->run.workflow == consumer.run.workflow && display.consumer->run.snapshot.session == consumer.run.snapshot.session;
+            if (same_consumer && previous >= 0 && static_cast<std::size_t>(previous) < display.sources.size()) {
+                const auto& prior = display.sources[static_cast<std::size_t>(previous)];
+                const auto same_channel = [&](const WorkspaceImageSource& candidate) {
+                    return prior.result.invocation.node == candidate.result.invocation.node && prior.output == candidate.output;
+                };
+                // Several loop invocations may offer the same port. Do not guess which call corresponds.
+                if (std::ranges::count_if(display.sources, same_channel) == 1 && std::ranges::count_if(sources, same_channel) == 1) {
+                    index = static_cast<int>(std::ranges::find_if(sources, same_channel) - sources.begin());
+                }
+            } else if (!same_consumer) { images_->reset_view_source(); }
+            display.consumer = consumer;
+            display.waiting_for_result = false;
+            display.sources = std::move(sources);
             QStringList labels;
             for (const auto& source : display.sources) { labels.push_back(source.label); }
-            const bool choose = display.sources.size() > 1 && display.sources.front().upstream;
-            images_->set_sources(labels, labels.empty() || choose ? -1 : 0);
+            images_->set_sources(labels, index, [this, consumer](int row) -> Result<QImage> {
+                const auto current = module_history_->selected_run();
+                const auto& selection = *workspace_image_selection_;
+                if (!current || current->identity() != consumer.run || selection.consumer != consumer
+                    || row < 0 || static_cast<std::size_t>(row) >= selection.sources.size()) {
+                    return Diagnostic{ErrorCode::ResultIdentityMismatch, Severity::Error, {}, "The preview no longer belongs to the selected invocation."};
+                }
+                return workspace_thumbnail(*current, selection.sources[static_cast<std::size_t>(row)], draft());
+            });
             display.rendered_index = -2;
         }
         const int index = images_->selected_source();
         if (display.rendered_index == index) { return; }
         display.rendered_index = index;
         if (index < 0 || static_cast<std::size_t>(index) >= display.sources.size()) {
-            empty(display.sources.empty() ? QStringLiteral("该调用没有可显示的图像") : QStringLiteral("请选择本次调用的来源图"));
+            empty(QStringLiteral("请选择本次调用的来源图"));
             return;
         }
         const auto& source = display.sources[static_cast<std::size_t>(index)];
-        const auto result = show_run_image(*images_, *run, source.result.invocation, source.output);
+        const auto result = show_run_image(*images_, *run, source.result.invocation, source.output, &draft());
         if (const auto* failure = std::get_if<Diagnostic>(&result)) {
             empty(QString::fromStdString(failure->message));
             return;
@@ -348,7 +404,13 @@ void EditorWindow::present_workspace_image()
         images_->set_provenance(QStringLiteral("轮次 %1 · 快照 %2 · %3 · 调用 %4")
             .arg(run->identity().run.value()).arg(run->identity().snapshot.snapshot.value())
             .arg(source.label).arg(source.result.invocation.invocation.value()));
-    } catch (const std::exception& error) { empty(QString::fromUtf8(error.what())); }
+    } catch (const std::exception& error) {
+        images_->set_sources({}, -1);
+        display.consumer.reset();
+        display.sources.clear();
+        display.rendered_index = -2;
+        empty(QString::fromUtf8(error.what()));
+    }
 }
 
 void EditorWindow::start_run(std::optional<DebugStatePolicy> debug)
@@ -401,13 +463,21 @@ void EditorWindow::start_run(std::optional<DebugStatePolicy> debug)
 void EditorWindow::show_selected_run_image()
 {
     if (busy_ || close_confirmed_) { return; }
+    const auto unavailable = [this](const QString& message) {
+        workspace_image_selection_->mode = WorkspaceImageSelection::Mode::RunDetails;
+        showing_run_image_ = false;
+        images_->set_manual_view(true);
+        images_->clear_frame();
+        images_->set_provenance(message);
+        report_error(message);
+    };
     try {
         const auto run = run_panel_->selected_run();
         const auto invocation = run_panel_->selected_invocation();
         if (!run || !invocation) { return; }
         const auto displayed = show_run_image(*images_, *run, *invocation, run_panel_->selected_output(), &draft());
         if (const auto* failure = std::get_if<Diagnostic>(&displayed)) {
-            report_error(QString::fromStdString(failure->message));
+            unavailable(QString::fromStdString(failure->message));
             return;
         }
         const auto* flow = find_workflow(run->request().snapshot().solution(), run->identity().workflow);
@@ -426,9 +496,9 @@ void EditorWindow::show_selected_run_image()
         images_dock_->show();
         images_dock_->raise();
     } catch (const std::exception& failure) {
-        report_error(QString::fromUtf8(failure.what()));
+        unavailable(QString::fromUtf8(failure.what()));
     } catch (...) {
-        report_error(QStringLiteral("Could not display the selected run image."));
+        unavailable(QStringLiteral("Could not display the selected run image."));
     }
 }
 

@@ -5,6 +5,7 @@
 #include <QGraphicsPixmapItem>
 #include <QGraphicsRectItem>
 #include <QGraphicsScene>
+#include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QScrollBar>
@@ -201,6 +202,7 @@ ImageView::ImageView(QWidget* parent)
     setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     setTransformationAnchor(QGraphicsView::NoAnchor);
     setResizeAnchor(QGraphicsView::AnchorViewCenter);
+    setFocusPolicy(Qt::StrongFocus);
     viewport()->setMouseTracking(true);
 
     image_item_ = display_scene->addPixmap({});
@@ -219,7 +221,7 @@ ImageView::ImageView(QWidget* parent)
     drawing_item_->hide();
 }
 
-core::Result<std::monostate> ImageView::set_image(const core::ImageHandle& image, const QList<QRgb>& palette)
+core::Result<std::monostate> ImageView::set_image(const core::ImageHandle& image, const QList<QRgb>& palette, bool same_source)
 {
     if (!palette.empty() && (image.format() != mono8 || palette.size() != 256)) {
         return error(ErrorCode::InvalidImage, "Class display requires Mono8 labels and a 256-color palette.");
@@ -232,14 +234,24 @@ core::Result<std::monostate> ImageView::set_image(const core::ImageHandle& image
     if (pixmap.isNull()) {
         return error(ErrorCode::InvalidImage, "Qt could not create the display pixmap.");
     }
+    const ViewGeometry geometry{image.width(), image.height(), image.origin_x(), image.origin_y(),
+        image.coordinate_frame(), image.root_frame()};
+    const bool same_view = same_source && geometry_ == geometry;
+    geometry_ = geometry;
     image_ = image;
     labels_ = palette.empty() ? QImage{} : std::move(pixels);
     image_item_->setPixmap(pixmap);
     clear_overlays();
     finish_gesture();
-    setSceneRect(image_bounds());
-    fit_image();
-    emit pixel_changed({});
+    if (!same_view || fit_on_resize_) {
+        setSceneRect(image_bounds());
+        fit_image();
+    }
+    if (!same_view) {
+        sampled_pixel_.reset();
+        keyboard_sample_ = false;
+    }
+    describe_pixel(sampled_pixel_ ? read_pixel(*sampled_pixel_) : std::nullopt);
     return std::monostate{};
 }
 
@@ -320,15 +332,20 @@ core::Result<std::monostate> ImageView::set_overlays(
     return std::monostate{};
 }
 
-void ImageView::clear_image()
+void ImageView::clear_image(bool retain_view)
 {
     image_.reset();
+    sampled_pixel_.reset();
+    keyboard_sample_ = false;
     labels_ = {};
     image_item_->setPixmap({});
     clear_overlays();
     finish_gesture();
-    setSceneRect({});
-    resetTransform();
+    if (!retain_view) {
+        geometry_.reset();
+        setSceneRect({});
+        resetTransform();
+    }
     emit pixel_changed({});
 }
 
@@ -339,6 +356,28 @@ void ImageView::fit_image()
     fitInView(image_bounds(), Qt::KeepAspectRatio);
     fitted_scale_ = transform().m11();
     fit_on_resize_ = true;
+}
+
+void ImageView::zoom_at(double target_scale, const QPoint& position)
+{
+    if (!image_ || drag_ != Drag::None) { return; }
+    const auto anchor = mapToScene(position);
+    const auto actual = 1.0 / viewport()->devicePixelRatioF();
+    const auto bounded = std::clamp(target_scale, std::min(fitted_scale_ / 16, actual), std::max(fitted_scale_ * 32, actual));
+    const auto factor = bounded / transform().m11();
+    scale(factor, factor);
+    centerOn(mapToScene(viewport()->rect().center()) + anchor - mapToScene(position));
+    fit_on_resize_ = false;
+}
+
+void ImageView::zoom_by(double factor)
+{
+    zoom_at(transform().m11() * factor, viewport()->rect().center());
+}
+
+void ImageView::actual_size()
+{
+    zoom_at(1.0 / viewport()->devicePixelRatioF(), viewport()->rect().center());
 }
 
 void ImageView::set_drawing_mode(DrawingMode mode)
@@ -364,8 +403,15 @@ std::optional<ImagePixel> ImageView::pixel_at(const QPoint& viewport_position) c
 {
     const auto position = image_coordinates(viewport_position);
     if (!position) { return std::nullopt; }
-    const auto x = static_cast<std::size_t>(std::floor(position->x() - pixel_edge));
-    const auto y = static_cast<std::size_t>(std::floor(position->y() - pixel_edge));
+    return read_pixel({static_cast<int>(std::floor(position->x() - pixel_edge)),
+        static_cast<int>(std::floor(position->y() - pixel_edge))});
+}
+
+std::optional<ImagePixel> ImageView::read_pixel(const QPoint& local) const
+{
+    if (!image_ || local.x() < 0 || local.y() < 0) { return std::nullopt; }
+    const auto x = static_cast<std::size_t>(local.x());
+    const auto y = static_cast<std::size_t>(local.y());
     const auto order = image_->format().order;
     const auto channels = order == ChannelOrder::Mono ? 1u : 3u;
     const auto row = image_->row(y);
@@ -381,12 +427,22 @@ std::optional<ImagePixel> ImageView::pixel_at(const QPoint& viewport_position) c
 void ImageView::drawForeground(QPainter* painter, const QRectF& rect)
 {
     QGraphicsView::drawForeground(painter, rect);
-    if (blob_centroids_.isEmpty()) { return; }
     painter->save();
-    auto pen = overlay_pen(QColor(123, 194, 255), 5);
-    pen.setCapStyle(Qt::RoundCap);
-    painter->setPen(pen);
-    painter->drawPoints(blob_centroids_);
+    if (!blob_centroids_.isEmpty()) {
+        auto pen = overlay_pen(QColor(123, 194, 255), 5);
+        pen.setCapStyle(Qt::RoundCap);
+        painter->setPen(pen);
+        painter->drawPoints(blob_centroids_);
+    }
+    if (keyboard_sample_ && sampled_pixel_) {
+        const auto center = mapFromScene(*sampled_pixel_);
+        painter->resetTransform();
+        for (const auto& pen : {QPen(Qt::black, 3), QPen(Qt::white, 1)}) {
+            painter->setPen(pen);
+            painter->drawLine(center - QPoint(6, 0), center + QPoint(6, 0));
+            painter->drawLine(center - QPoint(0, 6), center + QPoint(0, 6));
+        }
+    }
     painter->restore();
 }
 
@@ -461,17 +517,37 @@ void ImageView::wheelEvent(QWheelEvent* event)
     }
     if (drag_ == Drag::None) {
         const auto position = event->position().toPoint();
-        const auto target = mapToScene(position);
-        const auto scale_before = transform().m11();
-        const auto scale_after = std::clamp(scale_before * std::pow(1.2, delta / 120.0),
-            fitted_scale_ / 16, fitted_scale_ * 32);
-        const auto factor = scale_after / scale_before;
-        scale(factor, factor);
-        centerOn(mapToScene(viewport()->rect().center()) + target - mapToScene(position));
-        fit_on_resize_ = false;
+        zoom_at(transform().m11() * std::pow(1.2, delta / 120.0), position);
         update_pixel(position);
     }
     event->accept();
+}
+
+void ImageView::keyPressEvent(QKeyEvent* event)
+{
+    if (!image_ || drag_ != Drag::None || event->modifiers() & (Qt::AltModifier | Qt::ControlModifier | Qt::MetaModifier)) {
+        QGraphicsView::keyPressEvent(event);
+        return;
+    }
+    QPoint step;
+    switch (event->key()) {
+    case Qt::Key_Plus: case Qt::Key_Equal: zoom_by(1.2); return;
+    case Qt::Key_Minus: zoom_by(1 / 1.2); return;
+    case Qt::Key_1: actual_size(); return;
+    case Qt::Key_Left: step.setX(-1); break;
+    case Qt::Key_Right: step.setX(1); break;
+    case Qt::Key_Up: step.setY(-1); break;
+    case Qt::Key_Down: step.setY(1); break;
+    default: QGraphicsView::keyPressEvent(event); return;
+    }
+    auto point = sampled_pixel_.value_or(mapToScene(viewport()->rect().center()).toPoint()) + step;
+    point.setX(std::clamp(point.x(), 0, static_cast<int>(image_->width() - 1)));
+    point.setY(std::clamp(point.y(), 0, static_cast<int>(image_->height() - 1)));
+    sampled_pixel_ = point;
+    keyboard_sample_ = true;
+    ensureVisible(QRectF(point.x() + pixel_edge, point.y() + pixel_edge, 1, 1), 8, 8);
+    viewport()->update();
+    describe_pixel(read_pixel(point));
 }
 
 void ImageView::resizeEvent(QResizeEvent* event)
@@ -482,7 +558,10 @@ void ImageView::resizeEvent(QResizeEvent* event)
 
 bool ImageView::viewportEvent(QEvent* event)
 {
-    if (event->type() == QEvent::Leave) { emit pixel_changed({}); }
+    if (event->type() == QEvent::Leave && !keyboard_sample_) {
+        sampled_pixel_.reset();
+        emit pixel_changed({});
+    }
     if (event->type() == QEvent::UngrabMouse && drag_ != Drag::None) { finish_gesture(); }
     return QGraphicsView::viewportEvent(event);
 }
@@ -512,6 +591,14 @@ void ImageView::clear_overlays()
 void ImageView::update_pixel(const QPoint& viewport_position)
 {
     const auto pixel = pixel_at(viewport_position);
+    if (keyboard_sample_) { viewport()->update(); }
+    keyboard_sample_ = false;
+    sampled_pixel_ = pixel ? std::optional{QPoint(static_cast<int>(pixel->x), static_cast<int>(pixel->y))} : std::nullopt;
+    describe_pixel(pixel);
+}
+
+void ImageView::describe_pixel(const std::optional<ImagePixel>& pixel)
+{
     if (!pixel) {
         emit pixel_changed({});
         return;

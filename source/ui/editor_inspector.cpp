@@ -12,6 +12,7 @@
 #include <visionpro/core/schema_id_factory.hpp>
 #include <visionpro/workflow/validation.hpp>
 
+#include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDialog>
@@ -27,11 +28,15 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QLocale>
 #include <QMessageBox>
 #include <QPushButton>
 #include <QPointer>
 #include <QScrollArea>
+#include <QScrollBar>
+#include <QScopeGuard>
 #include <QSignalBlocker>
+#include <QSpinBox>
 #include <QStringList>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -422,12 +427,12 @@ std::optional<TypedSource> choose_reference(QWidget* parent, Choices<TypedSource
         });
     });
     if (choices.empty()) {
-        warn(parent, QStringLiteral("No compatible source is available in this scope."));
+        warn(parent, QObject::tr("当前作用域没有可绑定的来源。"));
         return std::nullopt;
     }
 
     QDialog dialog(parent);
-    dialog.setWindowTitle(QStringLiteral("Choose source"));
+    dialog.setWindowTitle(QObject::tr("选择来源"));
     auto* layout = new QVBoxLayout(&dialog);
     auto* form = new QFormLayout;
     auto* source = new QComboBox(&dialog);
@@ -437,14 +442,14 @@ std::optional<TypedSource> choose_reference(QWidget* parent, Choices<TypedSource
     }
     auto* selector = new QLineEdit(&dialog);
     selector->setObjectName(QStringLiteral("bindingSelector"));
-    selector->setPlaceholderText(QStringLiteral("Example: 0/area_pixels"));
+    selector->setPlaceholderText(QObject::tr("例如 0/area_pixels"));
     selector->setToolTip(pick_index
-        ? QStringLiteral("Separate field IDs and zero-based indices with /. Place the cursor on an index to choose its source.")
-        : QStringLiteral("Separate exact Record field IDs and zero-based List indices with /."));
+        ? QObject::tr("用 / 分隔字段 ID 和从 0 开始的下标。将光标放在下标上可选择其来源。")
+        : QObject::tr("用 / 分隔记录的字段 ID 和列表下标，下标从 0 开始。"));
     auto* details = new QLabel(&dialog);
     details->setWordWrap(true);
-    form->addRow(QStringLiteral("Source"), source);
-    form->addRow(QStringLiteral("Selector"), selector);
+    form->addRow(QObject::tr("来源"), source);
+    form->addRow(QObject::tr("取值路径"), selector);
     std::vector<IndexSource> indices;
     auto* index_labels = new QLabel(&dialog);
     index_labels->setWordWrap(true);
@@ -461,7 +466,7 @@ std::optional<TypedSource> choose_reference(QWidget* parent, Choices<TypedSource
     };
     QPushButton* index_button = nullptr;
     if (pick_index) {
-        index_button = action(&dialog, QStringLiteral("Choose index source…"), "chooseIndexSource", [&] {
+        index_button = action(&dialog, QObject::tr("选择下标来源…"), "chooseIndexSource", [&] {
             auto parts = selector->text().split(u'/');
             const auto position = selector->text().left(selector->cursorPosition()).count(u'/');
             auto& part = parts[position];
@@ -506,7 +511,7 @@ std::optional<TypedSource> choose_reference(QWidget* parent, Choices<TypedSource
             for (const auto& field : listed.fields()) { fields.append(id_text(field.id)); }
         }
         details->setText(fields.isEmpty() ? type_text(type)
-            : QStringLiteral("%1\nFields: %2").arg(type_text(type), fields.join(QStringLiteral(", "))));
+            : QObject::tr("%1\n可用字段：%2").arg(type_text(type), fields.join(QStringLiteral(", "))));
     };
     QObject::connect(source, &QComboBox::currentIndexChanged, &dialog, [&](int) { guarded(&dialog, show_schema); });
     if (current) {
@@ -728,11 +733,11 @@ std::optional<ConfigValue> edit_constant(QWidget* owner, const RoiEditContext& c
 QString kind_text(BindingSourceKind kind)
 {
     switch (kind) {
-    case BindingSourceKind::Constant: return QStringLiteral("Constant");
-    case BindingSourceKind::RunOutput: return QStringLiteral("Node output");
-    case BindingSourceKind::PublicInput: return QStringLiteral("Public input");
-    case BindingSourceKind::Resource: return QStringLiteral("Resource");
-    case BindingSourceKind::GlobalRead: return QStringLiteral("Global variable");
+    case BindingSourceKind::Constant: return QObject::tr("常量");
+    case BindingSourceKind::RunOutput: return QObject::tr("节点输出");
+    case BindingSourceKind::PublicInput: return QObject::tr("公开输入");
+    case BindingSourceKind::Resource: return QObject::tr("资源");
+    case BindingSourceKind::GlobalRead: return QObject::tr("全局变量");
     }
     return {};
 }
@@ -740,9 +745,9 @@ QString kind_text(BindingSourceKind kind)
 QString conversion_text(ConversionKind kind)
 {
     switch (kind) {
-    case ConversionKind::Exact: return QStringLiteral("Exact");
-    case ConversionKind::WrapOptional: return QStringLiteral("Wrap in Optional");
-    case ConversionKind::Int64ToFloat64Explicit: return QStringLiteral("Int64 to Float64");
+    case ConversionKind::Exact: return QObject::tr("类型完全匹配");
+    case ConversionKind::WrapOptional: return QObject::tr("包装为 Optional");
+    case ConversionKind::Int64ToFloat64Explicit: return QObject::tr("Int64 转 Float64");
     }
     return {};
 }
@@ -800,7 +805,7 @@ std::optional<BindingSource> edit_source(QWidget* owner, const RoiEditContext& c
         kinds.emplace_back(kind_text(kind), kind);
     }
     const auto kind = kinds.size() == 1 ? std::optional{kinds.front().second}
-        : choose(owner, QStringLiteral("Binding source"), QStringLiteral("Source kind"), kinds, previous_kind);
+        : choose(owner, QObject::tr("绑定来源类型"), QObject::tr("来源类型"), kinds, previous_kind);
     if (!kind) { return std::nullopt; }
     if (*kind != BindingSourceKind::Constant) {
         PickIndex pick_index;
@@ -903,11 +908,11 @@ std::optional<BindingEdit> edit_binding(QWidget* owner, const RoiEditContext& co
     const Binding* existing)
 {
     QDialog dialog(owner);
-    dialog.setWindowTitle(QStringLiteral("Edit binding • %1").arg(qtext(target.display_name)));
+    dialog.setWindowTitle(QObject::tr("绑定来源 · %1").arg(qtext(target.display_name)));
     dialog.resize(500, 300);
     auto* layout = new QVBoxLayout(&dialog);
     auto* form = new QFormLayout;
-    form->addRow(QStringLiteral("Target"), new QLabel(type_text(target.type), &dialog));
+    form->addRow(QObject::tr("目标类型"), new QLabel(type_text(target.type), &dialog));
     auto* conversion = new QComboBox(&dialog);
     conversion->setObjectName(QStringLiteral("bindingConversion"));
     auto conversions = target.binding.allowed_conversions;
@@ -918,7 +923,7 @@ std::optional<BindingEdit> edit_binding(QWidget* owner, const RoiEditContext& co
         conversion->addItem(conversion_text(kind));
         if (existing && kind == existing->conversion) { conversion->setCurrentIndex(conversion->count() - 1); }
     }
-    form->addRow(QStringLiteral("Conversion"), conversion);
+    form->addRow(QObject::tr("类型转换"), conversion);
     layout->addLayout(form);
     auto* sources = new QListWidget(&dialog);
     sources->setObjectName(QStringLiteral("bindingSources"));
@@ -947,13 +952,13 @@ std::optional<BindingEdit> edit_binding(QWidget* owner, const RoiEditContext& co
         refresh(index);
     };
     const auto multiple = target.binding.cardinality == BindingCardinality::MultipleSources;
-    edits->addWidget(action(&dialog, multiple ? QStringLiteral("Add Source") : QStringLiteral("Set Source"), "setBindingSource",
+    edits->addWidget(action(&dialog, multiple ? QObject::tr("添加来源…") : QObject::tr("设置来源…"), "setBindingSource",
         [&] { update_source(multiple || values.empty() ? -1 : 0); }));
     if (multiple) {
-        edits->addWidget(action(&dialog, QStringLiteral("Edit Source"), "editBindingSource",
+        edits->addWidget(action(&dialog, QObject::tr("编辑来源…"), "editBindingSource",
             [&] { if (sources->currentRow() >= 0) { update_source(sources->currentRow()); } }));
     }
-    edits->addWidget(action(&dialog, QStringLiteral("Remove Source"), "removeBindingSource", [&] {
+    edits->addWidget(action(&dialog, QObject::tr("移除来源"), "removeBindingSource", [&] {
         const int index = sources->currentRow();
         if (index < 0) { return; }
         values.erase(values.begin() + index);
@@ -1027,6 +1032,7 @@ struct InspectorContext {
     QWidget* owner;
     const std::optional<ImageHandle>& preview_image;
     const EditorInspector::HashFile& hash_file;
+    const bool& refresh_pending;
 
     template<class Change>
     bool edit_flow(const WorkflowId& id, const QString& label, const Change& change) const
@@ -1318,7 +1324,7 @@ void edit_execution_policy(const InspectorContext& context, WorkflowId flow, Nod
 
 void node_properties(QVBoxLayout& panel, const InspectorContext& context, const Workflow& flow, const Node& node)
 {
-    auto* group = section(panel, QStringLiteral("Node"));
+    auto* group = section(panel, QObject::tr("模块"));
     auto* form = new QFormLayout(group);
     const auto id = flow.id;
     const auto selected = node.id;
@@ -1327,9 +1333,9 @@ void node_properties(QVBoxLayout& panel, const InspectorContext& context, const 
     const auto* parent_node = parent ? find_node(flow, *parent) : nullptr;
     const auto* parent_group = group_at(flow, parent);
     const auto& entries = parent_group ? parent_group->entries : flow.entries;
-    const auto parent_name = parent_node ? qtext(parent_node->name) : QStringLiteral("Workflow root");
+    const auto parent_name = parent_node ? qtext(parent_node->name) : QObject::tr("流程根层");
     auto* field = action(group, button_text(name), "renameNode", [context, id, selected, name] {
-        const auto updated = rename(context.owner, QStringLiteral("Rename node"), name);
+        const auto updated = rename(context.owner, QObject::tr("重命名模块"), name);
         if (!updated) { return; }
         context.edit_node(id, selected, QStringLiteral("Rename node"), [&](Solution&, Workflow&, Node& draft) -> Check {
             draft.name = *updated;
@@ -1337,24 +1343,24 @@ void node_properties(QVBoxLayout& panel, const InspectorContext& context, const 
         });
     });
     field->setToolTip(name);
-    form->addRow(QStringLiteral("Name"), field);
+    form->addRow(QObject::tr("名称"), field);
     if (const auto* config = std::get_if<ToolConfiguration>(&node.configuration)) {
         const auto* tool = context.registry.find_descriptor(config->type);
         if (tool && tool->config_version == config->config_version) {
             const auto policy = node.execution_policy;
-            form->addRow(QStringLiteral("Execution policy"),
-                action(group, QStringLiteral("Timeout, retries and error outlet…"), "editNodeExecutionPolicy",
+            form->addRow(QObject::tr("执行策略"),
+                action(group, QObject::tr("超时、重试与错误出口…"), "editNodeExecutionPolicy",
                     [context, id, selected, tool, policy] { edit_execution_policy(context, id, selected, *tool, policy); }));
         }
     }
-    form->addRow(QStringLiteral("Enabled"), checkbox(group, node.enabled, "nodeEnabled", [context, id, selected](bool enabled) {
+    form->addRow(QObject::tr("启用"), checkbox(group, node.enabled, "nodeEnabled", [context, id, selected](bool enabled) {
         return context.edit_node(id, selected, QStringLiteral("Change node enablement"), [&](Solution&, Workflow&, Node& draft) -> Check {
             draft.enabled = enabled;
             return std::monostate{};
         });
     }));
     const auto is_entry = std::ranges::find(entries, selected) != entries.end();
-    form->addRow(QStringLiteral("Entry"), checkbox(group, is_entry, "nodeEntry", [context, id, selected](bool entry) {
+    form->addRow(QObject::tr("入口"), checkbox(group, is_entry, "nodeEntry", [context, id, selected](bool entry) {
         return context.edit_node(id, selected, QStringLiteral("Change scope entry"), [&](Solution&, Workflow& draft, Node& target) -> Check {
             auto* list = entries_at(draft, parent_of(draft, target.id));
             if (!list) { return error(ErrorCode::InvalidContainment, "The entry scope does not exist."); }
@@ -1366,8 +1372,8 @@ void node_properties(QVBoxLayout& panel, const InspectorContext& context, const 
     auto* ownership = action(group, button_text(parent_name), "moveNodeToGroup", [context, id, selected] {
         move_to_group(context, id, selected);
     });
-    ownership->setToolTip(QStringLiteral("Change the Group parent of this node."));
-    form->addRow(QStringLiteral("Parent"), ownership);
+    ownership->setToolTip(QObject::tr("更改模块所属的工具组"));
+    form->addRow(QObject::tr("所属层级"), ownership);
 }
 
 void write_resource_binding(Node& node, const ResourceRequirement& slot, const std::optional<ResourceReference>& resource)
@@ -1419,6 +1425,15 @@ Check bind_roi_mask(const Solution& solution, Node& node, const ResourceRequirem
     return std::monostate{};
 }
 
+void replace_binding(Node& node, const BindingTarget& id, const std::optional<Binding>& replacement)
+{
+    const auto current = std::ranges::find(node.bindings, id, &Binding::target);
+    if (current != node.bindings.end()) {
+        if (replacement) { *current = *replacement; }
+        else { node.bindings.erase(current); }
+    } else if (replacement) { node.bindings.push_back(*replacement); }
+}
+
 template<class Target>
 void open_binding(const InspectorContext& context, const WorkflowId& id, const NodeId& selected, const Target& target,
     bool region_only = false)
@@ -1463,13 +1478,153 @@ void open_binding(const InspectorContext& context, const WorkflowId& id, const N
                 }
             }
         }
-        const auto current = std::ranges::find(draft.bindings, binding_id, &Binding::target);
-        if (current != draft.bindings.end()) {
-            if (edited->binding) { *current = *edited->binding; }
-            else { draft.bindings.erase(current); }
-        } else if (edited->binding) { draft.bindings.push_back(*edited->binding); }
+        replace_binding(draft, binding_id, edited->binding);
         return std::monostate{};
     });
+}
+
+// The widget's focus proxy is the editable field; validation feedback stays in its row.
+QWidget* scalar_editor(QWidget* owner, const DataType& type, const ConfigValue* initial,
+    const ValueConstraints& constraints, const std::function<QString(const ConfigValue&)>& commit)
+{
+    const auto kind = type.kind();
+    if (kind != TypeKind::Bool && kind != TypeKind::Enum && kind != TypeKind::Int64
+        && kind != TypeKind::Float64 && kind != TypeKind::String) { return nullptr; }
+    if (kind == TypeKind::String && initial && initial->as_string()->find_first_of("\r\n") != std::string_view::npos) {
+        return nullptr;
+    }
+    auto* container = new QWidget(owner);
+    auto* column = new QVBoxLayout(container);
+    column->setContentsMargins(0, 0, 0, 0);
+    column->setSpacing(1);
+    auto* feedback = new QLabel(container);
+    feedback->setObjectName(QStringLiteral("constantError"));
+    feedback->setTextFormat(Qt::PlainText);
+    feedback->setWordWrap(true);
+    feedback->hide();
+    const auto report = [feedback](const QString& message) {
+        feedback->setText(message);
+        feedback->setVisible(!message.isEmpty());
+    };
+    const auto submit = [container, commit, report](const ConfigValue& value) {
+        if (!container->isVisible()) { return; }
+        guarded(container, [&] { report(commit(value)); });
+    };
+    QWidget* field = nullptr;
+    if (!constraints.allowed_values.empty() || kind == TypeKind::Bool || kind == TypeKind::Enum) {
+        Choices<ConfigValue> choices;
+        if (!constraints.allowed_values.empty()) {
+            for (const auto& value : constraints.allowed_values) { choices.emplace_back(constant_text(value), value); }
+        } else if (kind == TypeKind::Bool) {
+            choices = {{QObject::tr("否"), ConfigValue::boolean(false)}, {QObject::tr("是"), ConfigValue::boolean(true)}};
+        } else {
+            for (const auto& member : type.enum_members()) {
+                choices.emplace_back(qtext(member.display_name), std::get<ConfigValue>(ConfigValue::enumeration(type, member.id)));
+            }
+        }
+        auto* combo = new QComboBox(container);
+        int current = -1;
+        for (const auto& [label, value] : choices) {
+            if (initial && *initial == value) { current = combo->count(); }
+            combo->addItem(label);
+        }
+        combo->setPlaceholderText(initial ? QObject::tr("请选择有效值") : QObject::tr("未绑定"));
+        combo->setCurrentIndex(current);
+        QObject::connect(combo, &QComboBox::activated, combo, [choices = std::move(choices), submit](int index) {
+            submit(choices.at(static_cast<std::size_t>(index)).second);
+        });
+        field = combo;
+    } else if (kind == TypeKind::Int64 && initial && constraints.integer_range
+        && constraints.integer_range->minimum >= std::numeric_limits<int>::min()
+        && constraints.integer_range->maximum <= std::numeric_limits<int>::max()
+        && *initial->as_int64() >= constraints.integer_range->minimum && *initial->as_int64() <= constraints.integer_range->maximum) {
+        auto* spin = new QSpinBox(container);
+        spin->setRange(static_cast<int>(constraints.integer_range->minimum), static_cast<int>(constraints.integer_range->maximum));
+        spin->setValue(static_cast<int>(*initial->as_int64()));
+        spin->setKeyboardTracking(false);
+        QObject::connect(spin, &QSpinBox::valueChanged, spin, [submit](int value) { submit(ConfigValue::integer(value)); });
+        field = spin;
+    } else {
+        auto* line = new QLineEdit(container);
+        line->setMaxLength(std::numeric_limits<int>::max());
+        auto locale = line->locale();
+        locale.setNumberOptions(locale.numberOptions() | QLocale::OmitGroupSeparator | QLocale::RejectGroupSeparator);
+        if (initial) {
+            line->setText(kind == TypeKind::Float64 ? locale.toString(*initial->as_float64(), 'g', QLocale::FloatingPointShortest)
+                : kind == TypeKind::Int64 ? locale.toString(static_cast<qlonglong>(*initial->as_int64())) : constant_text(*initial));
+        }
+        line->setPlaceholderText(initial ? QString{} : QObject::tr("未绑定"));
+        QObject::connect(line, &QLineEdit::editingFinished, line, [line, locale, kind, report, submit] {
+            if (!line->isModified()) { return; }
+            line->setModified(false);
+            bool ok = false;
+            if (kind == TypeKind::Int64) {
+                const auto value = locale.toLongLong(line->text(), &ok);
+                if (ok) { submit(ConfigValue::integer(value)); }
+                else { report(QObject::tr("请输入有效的 64 位整数。")); }
+            } else {
+                const auto real = kind == TypeKind::Float64 ? locale.toDouble(line->text(), &ok) : 0.0;
+                if (kind == TypeKind::Float64 && !ok) { report(QObject::tr("请输入有效的数值。")); return; }
+                const auto value = kind == TypeKind::String ? ConfigValue::string(utf8(line->text())) : ConfigValue::real(real);
+                if (const auto* valid = std::get_if<ConfigValue>(&value)) { submit(*valid); }
+                else { report(qtext(std::get<Diagnostic>(value).message)); }
+            }
+        });
+        field = line;
+    }
+    column->addWidget(field);
+    column->addWidget(feedback);
+    container->setFocusProxy(field);
+    field->setObjectName(QStringLiteral("inlineConstant"));
+    return container;
+}
+
+template<class Target>
+QWidget* constant_field(QWidget* owner, const InspectorContext& context, const WorkflowId& flow,
+    const NodeId& node, const Target& target, const Binding* binding)
+{
+    if (target.binding.cardinality != BindingCardinality::SingleSource
+        || (binding && (binding->cardinality != BindingCardinality::SingleSource || binding->sources.size() != 1))) { return nullptr; }
+    const auto* initial = binding ? std::get_if<ConfigValue>(&binding->sources.front())
+                                  : (target.default_value ? &*target.default_value : nullptr);
+    if (binding && !initial) { return nullptr; }
+    const auto conversion = binding ? binding->conversion : ConversionKind::Exact;
+    const auto type = initial ? initial->type() : target.type;
+    if (type != target.type && !target.constraints.allowed_values.empty()) { return nullptr; }
+    if (std::holds_alternative<Diagnostic>(validate_binding(target, BindingSourceKind::Constant, type, conversion))) { return nullptr; }
+    const auto expected = initial ? std::optional{*initial} : std::nullopt;
+    const auto commit = [context, flow, node, target, expected, bound = binding != nullptr, conversion](const ConfigValue& value) -> QString {
+        if ((expected && *expected == value) || context.refresh_pending || context.model.workflow_id() != flow
+            || context.scene.selected_nodes() != std::vector<NodeId>{node}) { return {}; }
+        const auto* workflow = find_workflow(context.model.draft(), flow);
+        const auto* current = workflow ? find_node(*workflow, node) : nullptr;
+        if (!current) { return QObject::tr("节点已变更。"); }
+        const BindingTarget id{target.id};
+        const auto previous = std::ranges::find(current->bindings, id, &Binding::target);
+        if ((previous != current->bindings.end()) != bound || (bound && (previous->conversion != conversion
+            || previous->sources.size() != 1 || previous->sources.front() != BindingSource{*expected}))) {
+            return QObject::tr("绑定已变更，请重新编辑。");
+        }
+        const Binding next{id, {value}, BindingCardinality::SingleSource, conversion, bound ? previous->availability : AvailabilityPolicy{}};
+        if (const auto checked = check_constants(target, next); const auto* failure = std::get_if<Diagnostic>(&checked)) {
+            if (target.constraints.real_range) {
+                return QObject::tr("取值范围为 %1 至 %2。").arg(target.constraints.real_range->minimum).arg(target.constraints.real_range->maximum);
+            }
+            if (target.constraints.integer_range) {
+                return QObject::tr("取值范围为 %1 至 %2。").arg(target.constraints.integer_range->minimum).arg(target.constraints.integer_range->maximum);
+            }
+            if (target.type.kind() == TypeKind::String && target.constraints.max_length) {
+                return QObject::tr("文本最多可用 %1 个 UTF-8 字节。").arg(*target.constraints.max_length);
+            }
+            return qtext(failure->message);
+        }
+        const bool changed = context.edit_node(flow, node, QObject::tr("修改常量"), [&](Solution&, Workflow&, Node& draft) -> Check {
+            replace_binding(draft, id, next);
+            return std::monostate{};
+        });
+        return changed ? QString{} : QObject::tr("无法保存此常量。");
+    };
+    return scalar_editor(owner, type, initial, target.constraints, commit);
 }
 
 template<class Target>
@@ -1484,14 +1639,14 @@ void binding_row(QFormLayout& form, QWidget* owner, const InspectorContext& cont
         if (binding->sources.size() > 1) { summary += QStringLiteral(" +%1").arg(binding->sources.size() - 1); }
         else { output = std::get_if<OutputReference>(&binding->sources.front()); }
     } else {
-        summary = target.default_value ? QStringLiteral("Default: %1").arg(constant_text(*target.default_value))
-            : QStringLiteral("Unbound");
+        summary = target.default_value ? QObject::tr("默认值：%1").arg(constant_text(*target.default_value)) : QObject::tr("未绑定");
     }
     const auto name = qtext(target.display_name);
     auto* edit = action(owner, button_text(summary), "editBinding", [context, id = flow.id, node_id = node.id, target] {
         open_binding(context, id, node_id, target);
     });
     edit->setProperty("bindingTarget", id_text(target.id));
+    edit->setProperty("bindingIsParameter", std::is_same_v<Target, ParameterDescriptor>);
     edit->setToolTip(QStringLiteral("%1 • %2\n%3").arg(name, type_text(target.type), summary));
     const bool constant_roi = target.binding.cardinality == BindingCardinality::SingleSource
         && (target.type.kind() == TypeKind::Region2D
@@ -1501,10 +1656,23 @@ void binding_row(QFormLayout& form, QWidget* owner, const InspectorContext& cont
         && (binding == node.bindings.end() || (binding->sources.size() == 1
             && std::holds_alternative<ConfigValue>(binding->sources.front())
             && (binding->conversion == ConversionKind::Exact || binding->conversion == ConversionKind::WrapOptional)));
-    if (constant_roi) {
+    if (auto* box = constant_field(owner, context, flow.id, node.id, target, binding == node.bindings.end() ? nullptr : &*binding)) {
+        auto* row = new QHBoxLayout;
+        auto* field = box->focusProxy();
+        field->setProperty("bindingTarget", id_text(target.id));
+        field->setProperty("bindingIsParameter", std::is_same_v<Target, ParameterDescriptor>);
+        field->setAccessibleName(name);
+        field->setToolTip(edit->toolTip());
+        edit->setText(QObject::tr("绑定来源…"));
+        edit->setAccessibleName(QObject::tr("%1 的绑定来源").arg(name));
+        QWidget::setTabOrder(field, edit);
+        row->addWidget(box, 1);
+        row->addWidget(edit);
+        form.addRow(name, row);
+    } else if (constant_roi) {
         auto* row = new QHBoxLayout;
         row->addWidget(edit, 1);
-        auto* region = action(owner, QStringLiteral("Edit ROI…"), "editRegion", [context, id = flow.id, node_id = node.id, target] {
+        auto* region = action(owner, QObject::tr("编辑 ROI…"), "editRegion", [context, id = flow.id, node_id = node.id, target] {
             open_binding(context, id, node_id, target, true);
         });
         region->setProperty("bindingTarget", id_text(target.id));
@@ -1516,7 +1684,8 @@ void binding_row(QFormLayout& form, QWidget* owner, const InspectorContext& cont
         auto* locate = action(owner, QStringLiteral("↗"), "locateBindingSource", [context, source = output->node] {
             context.scene.reveal_node(source);
         });
-        locate->setToolTip(QStringLiteral("Locate the producer node on the canvas."));
+        locate->setToolTip(QObject::tr("在画布中定位来源节点"));
+        locate->setAccessibleName(locate->toolTip());
         row->addWidget(locate);
         form.addRow(name, row);
     } else { form.addRow(name, edit); }
@@ -1762,17 +1931,17 @@ void tool_settings(QVBoxLayout& panel, const InspectorContext& context, const Wo
         }));
     }
     if (!tool->inputs.empty()) {
-        auto* group = section(panel, QStringLiteral("Inputs"));
+        auto* group = section(panel, QObject::tr("输入"));
         auto* form = new QFormLayout(group);
         for (const auto& input : tool->inputs) { binding_row(*form, group, context, flow, node, input); }
     }
     if (!tool->parameters.empty()) {
-        auto* group = section(panel, QStringLiteral("Parameters"));
+        auto* group = section(panel, QObject::tr("参数"));
         auto* form = new QFormLayout(group);
         for (const auto& parameter : tool->parameters) { binding_row(*form, group, context, flow, node, parameter); }
     }
     if (!tool->resources.empty()) {
-        auto* group = section(panel, QStringLiteral("Resources"));
+        auto* group = section(panel, QObject::tr("资源"));
         auto* form = new QFormLayout(group);
         for (const auto& slot : tool->resources) { resource_row(*form, group, context, flow, node, slot); }
     }
@@ -2200,6 +2369,7 @@ void boundary_controls(QVBoxLayout& panel, const InspectorContext& context, cons
     std::vector<std::pair<BoundaryKind, PortId>> ids;
     for (const auto& input : interface.inputs) {
         ports->addItem(QStringLiteral("Input • %1 [%2]").arg(qtext(input.display_name), id_text(input.id)));
+        ports->item(ports->count() - 1)->setData(Qt::UserRole, id_text(input.id));
         ports->item(ports->count() - 1)->setToolTip(type_text(input.type));
         ids.emplace_back(BoundaryKind::Input, input.id);
     }
@@ -2295,26 +2465,43 @@ void EditorInspector::queue_refresh()
     if (refresh_pending_) { return; }
     refresh_pending_ = true;
     QTimer::singleShot(0, this, [this] {
-        refresh_pending_ = false;
-        guarded(this, [this] { refresh(); });
+        if (refresh_pending_) { guarded(this, [this] { refresh(); }); }
     });
 }
 
 void EditorInspector::refresh()
 {
+    // Focus-out on the old form may arrive while its widgets are being replaced.
+    refresh_pending_ = true;
+    const auto refreshed = qScopeGuard([this] { refresh_pending_ = false; });
+    const auto selected = scene_.selected_nodes();
+    const auto node_id = selected.size() == 1 ? std::optional{selected.front()} : std::nullopt;
+    const bool same_node = node_id && displayed_node_ == node_id;
+    const int scroll_position = scroll_->verticalScrollBar()->value();
+    QString focused_binding;
+    bool focused_parameter = false;
+    if (auto* focused = QApplication::focusWidget(); same_node && focused && isAncestorOf(focused)) {
+        for (auto* field = focused; field && field != this; field = field->parentWidget()) {
+            if (field->objectName() == QStringLiteral("inlineConstant")) {
+                focused_binding = field->property("bindingTarget").toString();
+                focused_parameter = field->property("bindingIsParameter").toBool();
+                break;
+            }
+        }
+    }
+    displayed_node_ = node_id;
     auto content = std::make_unique<QWidget>();
     auto* layout = new QVBoxLayout(content.get());
-    const InspectorContext context{model_, scene_, registry_, this, preview_image_, hash_file_};
+    const InspectorContext context{model_, scene_, registry_, this, preview_image_, hash_file_, refresh_pending_};
     const auto flow_id = model_.workflow_id();
     const auto* flow = flow_id ? find_workflow(model_.draft(), *flow_id) : nullptr;
     if (flow) {
-        const auto selected = scene_.selected_nodes();
-        const auto* node = selected.size() == 1 ? find_node(*flow, selected.front()) : nullptr;
+        const auto* node = node_id ? find_node(*flow, *node_id) : nullptr;
         if (node) {
             node_properties(*layout, context, *flow, *node);
             if (const auto* configuration = std::get_if<GroupConfiguration>(&node->configuration)) {
                 if (!configuration->interface.inputs.empty()) {
-                    auto* group = section(*layout, QStringLiteral("Inputs"));
+                    auto* group = section(*layout, tr("输入"));
                     auto* form = new QFormLayout(group);
                     for (const auto& target : configuration->interface.inputs) {
                         if (configuration->loop && target.id.text() == "index") { continue; }
@@ -2336,6 +2523,54 @@ void EditorInspector::refresh()
         previous->deleteLater();
     }
     scroll_->setWidget(content.release());
+    if (same_node) { scroll_->verticalScrollBar()->setValue(scroll_position); }
+    if (!focused_binding.isEmpty()) {
+        for (auto* field : scroll_->widget()->findChildren<QWidget*>(QStringLiteral("inlineConstant"))) {
+            if (field->property("bindingIsParameter").toBool() == focused_parameter
+                && field->property("bindingTarget").toString() == focused_binding) {
+                field->setFocus(Qt::OtherFocusReason);
+                break;
+            }
+        }
+    }
+}
+
+bool EditorInspector::focus_diagnostic_field(const DiagnosticLocation& location)
+{
+    // Revealing a node queues a rebuild. Focus the new form before returning to the event loop.
+    if (refresh_pending_) { refresh(); }
+    auto* content = scroll_->widget();
+    if (!content || (!location.input && !location.parameter)) { return false; }
+    const bool parameter = location.parameter.has_value();
+    const auto field = parameter ? id_text(*location.parameter) : id_text(*location.input);
+    QWidget* target = nullptr;
+    if (location.node) {
+        for (const auto& editor : {QStringLiteral("inlineConstant"), QStringLiteral("editBinding")}) {
+            for (auto* widget : content->findChildren<QWidget*>(editor)) {
+                if (widget->property("bindingIsParameter").toBool() == parameter
+                    && widget->property("bindingTarget").toString() == field) {
+                    target = widget;
+                    break;
+                }
+            }
+            if (target) { break; }
+        }
+    }
+    if (!target && location.input) {
+        if (auto* ports = content->findChild<QListWidget*>(QStringLiteral("publicPorts"))) {
+            for (int row = 0; row < ports->count(); ++row) {
+                if (ports->item(row)->data(Qt::UserRole).toString() == field) {
+                    ports->setCurrentRow(row);
+                    target = ports;
+                    break;
+                }
+            }
+        }
+    }
+    if (!target) { return false; }
+    scroll_->ensureWidgetVisible(target);
+    target->setFocus(Qt::OtherFocusReason);
+    return true;
 }
 
 } // namespace visionpro::ui

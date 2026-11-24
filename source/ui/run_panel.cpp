@@ -273,6 +273,21 @@ QString shared_summary(const Value& value)
 }
 } // namespace
 
+QString execution_status_text(workflow::ExecutionStatus status)
+{
+    using workflow::ExecutionStatus;
+    switch (status) {
+    case ExecutionStatus::Pending: return QObject::tr("等待");
+    case ExecutionStatus::Running: return QObject::tr("运行中");
+    case ExecutionStatus::Succeeded: return QObject::tr("成功");
+    case ExecutionStatus::Failed: return QObject::tr("失败");
+    case ExecutionStatus::Skipped: return QObject::tr("已跳过");
+    case ExecutionStatus::Cancelled: return QObject::tr("已取消");
+    case ExecutionStatus::TimedOut: return QObject::tr("超时");
+    }
+    return QStringLiteral("—");
+}
+
 QString shared_value_text(const core::DataValue& value) { return shared_summary(value); }
 QString shared_value_text(const core::ConfigValue& value) { return shared_summary(value); }
 QString run_diagnostic_text(const core::Diagnostic& diagnostic) { return diagnostic_text(diagnostic); }
@@ -281,6 +296,11 @@ void RunPanel::set_camera_status(const QString& status)
 {
     set_text(*camera_, status);
     camera_->setVisible(!status.isEmpty());
+}
+
+void RunPanel::set_cancel_enabled(bool enabled)
+{
+    cancel_->setEnabled(enabled);
 }
 
 RunPanel::RunPanel(QWidget* parent)
@@ -298,6 +318,11 @@ RunPanel::RunPanel(QWidget* parent)
     history_label->setBuddy(history_);
     history_row->addWidget(history_label);
     history_row->addWidget(history_, 1);
+    cancel_ = new QPushButton(tr("取消此轮"), this);
+    cancel_->setObjectName(QStringLiteral("cancelDetailRun"));
+    cancel_->setEnabled(false);
+    connect(cancel_, &QPushButton::clicked, this, &RunPanel::cancel_requested);
+    history_row->addWidget(cancel_);
     notifications_ = panel_label(this, "runNotifications");
     history_row->addWidget(notifications_);
     camera_ = panel_label(this, "cameraTriggerStatus");
@@ -510,7 +535,8 @@ void RunPanel::refresh_run()
     const auto* old_node = same_run ? selected_node() : nullptr;
     const auto& solution = run->request().snapshot().solution();
     const auto* flow = find_workflow(solution, run->identity().workflow);
-    set_text(*identity_, QStringLiteral("%1 · Revision %2").arg(run_identity_text(run->identity())).arg(solution.revision));
+    const auto name = flow ? text(flow->name) : id_text(run->identity().workflow);
+    set_text(*identity_, QStringLiteral("%1 · %2 · Revision %3").arg(name, run_identity_text(run->identity())).arg(solution.revision));
     if (!same_run) { reset_display(); }
 
     auto inspected = run->inspect();

@@ -21,7 +21,6 @@
 #include <QJsonObject>
 #include <QLabel>
 #include <QLineEdit>
-#include <QMenu>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QProcess>
@@ -30,6 +29,7 @@
 #include <QTemporaryDir>
 #include <QTest>
 #include <QTimer>
+#include <QToolBar>
 #include <QTreeWidget>
 #include <QUndoStack>
 
@@ -168,9 +168,8 @@ void EditorRunTests::runs_linked_solution_and_shows_delivery()
     window.show();
     auto& controller = *window.findChild<RunController*>();
     auto& start = action(window, "runSolution");
-    auto* menu = qobject_cast<QMenu*>(start.parent());
-    QVERIFY(menu);
-    menu->aboutToShow();
+    auto* toolbar = window.findChild<QToolBar*>(QStringLiteral("workspaceToolbar"));
+    QVERIFY(toolbar && toolbar->widgetForAction(&start) && toolbar->widgetForAction(&start)->isVisible());
     QVERIFY(start.isEnabled());
     QVERIFY(submit_dialog(start, [](QDialog& dialog, QPushButton&) {
         auto* mode = dialog.findChild<QComboBox*>(QStringLiteral("runInputMode.index"));
