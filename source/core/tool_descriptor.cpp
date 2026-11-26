@@ -8,6 +8,16 @@
 #include <utility>
 
 namespace visionpro::core {
+bool DisplayItemStyle::valid() const noexcept
+{
+    const auto valid_color = [](std::string_view value) {
+        return value.empty() || (value.size() == 7 && value.front() == '#' &&
+            value.find_first_not_of("0123456789ABCDEFabcdef", 1) == std::string_view::npos);
+    };
+    return valid_color(color) && valid_color(ok_color) && valid_color(ng_color)
+        && opacity >= 0 && opacity <= 100 && thickness >= 1 && thickness <= 64;
+}
+
 namespace {
 
 using Check = Result<std::monostate>;
@@ -395,6 +405,9 @@ Result<std::monostate> validate_output_descriptor(const OutputDescriptor& descri
     }
     DiagnosticLocation location;
     location.output = descriptor.id;
+    if (duplicates(descriptor.display_items)) {
+        return error(ErrorCode::InvalidDescriptor, "Result display items must have unique identifiers.", location);
+    }
     const bool may_omit = !descriptor.allowed_absence.empty();
     if (descriptor.required == may_omit) {
         return error(ErrorCode::InvalidDescriptor, "Required outputs cannot allow omissions; non-required outputs must declare a reason.", location);
@@ -433,6 +446,14 @@ Result<std::monostate> validate_shared_targets(const ToolDescriptor& descriptor,
 
 Result<std::monostate> validate_descriptor(const ToolDescriptor& descriptor)
 {
+    if (const auto& filter = descriptor.message_filter) {
+        const auto input = std::ranges::find(descriptor.parameters, filter->input, &ParameterDescriptor::id);
+        const auto expected = std::ranges::find(descriptor.parameters, filter->expected, &ParameterDescriptor::id);
+        if (input == descriptor.parameters.end() || input->type != DataType::optional(DataType::string())
+            || expected == descriptor.parameters.end() || expected->type != DataType::string()) {
+            return error(ErrorCode::InvalidDescriptor, "Message filtering requires an optional string input and a string match parameter.");
+        }
+    }
     if (descriptor.shared_target) {
         const auto& required = *descriptor.shared_target;
         if ((required.kind != SharedTargetKind::Variable && required.kind != SharedTargetKind::Queue)
@@ -444,6 +465,10 @@ Result<std::monostate> validate_descriptor(const ToolDescriptor& descriptor)
     tool_location.tool = descriptor.id;
     tool_location.schema = descriptor.schema.id;
     const auto& execution = descriptor.execution;
+    if (descriptor.state_in_admission_order && (!descriptor.state
+        || descriptor.state->concurrency != StateConcurrencyPolicy::Serialized)) {
+        return error(ErrorCode::InvalidDescriptor, "Admission ordering requires serialized node state.", tool_location);
+    }
     if ((execution.mode != ToolExecutionMode::Synchronous && execution.mode != ToolExecutionMode::Asynchronous)
         || (execution.lifetime != ToolInstanceLifetime::Invocation && execution.lifetime != ToolInstanceLifetime::WorkflowRun
             && execution.lifetime != ToolInstanceLifetime::SolutionSession)
@@ -451,10 +476,16 @@ Result<std::monostate> validate_descriptor(const ToolDescriptor& descriptor)
         || (execution.effects != ToolEffects::None && execution.effects != ToolEffects::State && execution.effects != ToolEffects::External)
         || (execution.cancellation != ToolCancellation::Unsupported && execution.cancellation != ToolCancellation::Cooperative)
         || (execution.retry != ToolRetry::Never && execution.retry != ToolRetry::Idempotent
-            && execution.retry != ToolRetry::ProtocolDeduplicated)) {
+            && execution.retry != ToolRetry::ProtocolDeduplicated && execution.retry != ToolRetry::StagedState)) {
         return error(ErrorCode::InvalidDescriptor, "Tool execution policy contains an unknown capability.", tool_location);
     }
-    if (execution.retry != ToolRetry::Never
+    if (execution.retry == ToolRetry::StagedState) {
+        if (!descriptor.state || execution.effects != ToolEffects::State || descriptor.shared_target
+            || descriptor.requires_correlation_join || descriptor.state->mutation != StateMutationTiming::OnResultAccepted
+            || descriptor.state->concurrency != StateConcurrencyPolicy::Serialized) {
+            return error(ErrorCode::InvalidDescriptor, "State retry requires serialized, commit-on-accept state without external effects.", tool_location);
+        }
+    } else if (execution.retry != ToolRetry::Never
         && (descriptor.state || descriptor.shared_target || descriptor.requires_correlation_join
             || (execution.retry == ToolRetry::Idempotent && execution.effects != ToolEffects::None)
             || (execution.retry == ToolRetry::ProtocolDeduplicated && execution.effects != ToolEffects::External))) {
@@ -531,6 +562,12 @@ Result<std::monostate> validate_descriptor(const ToolDescriptor& descriptor)
     }
     if (auto checked = check_targets(descriptor.inputs); std::holds_alternative<Diagnostic>(checked)) { return checked; }
     std::set<OutputId> outputs;
+    if (descriptor.module_status_output) {
+        const auto port = std::ranges::find(descriptor.outputs, *descriptor.module_status_output, &OutputDescriptor::id);
+        if (port == descriptor.outputs.end() || !port->required || port->type != DataType::integer()) {
+            return error(ErrorCode::InvalidDescriptor, "Module status requires a declared, required integer output.", tool_location);
+        }
+    }
     for (const auto& output : descriptor.outputs) {
         DiagnosticLocation output_location = tool_location;
         output_location.output = output.id;

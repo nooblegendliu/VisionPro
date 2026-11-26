@@ -49,7 +49,8 @@ bool same_output(const OutputDescriptor& left, const OutputDescriptor& right)
 {
     return left.id == right.id && left.type == right.type && left.semantics == right.semantics
         && left.required == right.required
-        && std::ranges::is_permutation(left.allowed_absence, right.allowed_absence);
+        && std::ranges::is_permutation(left.allowed_absence, right.allowed_absence)
+        && std::ranges::is_permutation(left.display_items, right.display_items);
 }
 
 bool same_state(const std::optional<NodeStateDefinition>& left, const std::optional<NodeStateDefinition>& right)
@@ -81,7 +82,11 @@ bool same_contract(const ToolDescriptor& left, const ToolDescriptor& right)
         && left.region_capabilities == right.region_capabilities
         && std::ranges::is_permutation(left.image_formats, right.image_formats)
         && left.execution == right.execution && left.shared_target == right.shared_target
-        && left.requires_correlation_join == right.requires_correlation_join;
+        && left.requires_correlation_join == right.requires_correlation_join && left.specialize == right.specialize
+        && left.may_end_continuous == right.may_end_continuous && left.message_filter == right.message_filter
+        && left.state_in_admission_order == right.state_in_admission_order
+        && left.module_status_output == right.module_status_output
+        && left.uses_display_item_styles == right.uses_display_item_styles;
 }
 
 } // namespace
@@ -158,7 +163,18 @@ Result<std::monostate> ToolRegistry::validate(const ToolDescriptor& descriptor) 
 Result<std::shared_ptr<ToolInstance>> ToolRegistry::create_instance(const ToolExecutionConfiguration& configuration) const
 {
     const auto& data = configuration.data();
-    if (auto checked = validate(data.tool); auto* failure = std::get_if<Diagnostic>(&checked)) {
+    const auto* registered = find_descriptor(data.tool.id);
+    if (registered && registered->specialize) {
+        if (auto checked = validate_schema_support(data.tool, *find_support(data.tool.id));
+            auto* failure = std::get_if<Diagnostic>(&checked)) { return *failure; }
+        auto expected = *registered;
+        registered->specialize(expected, data.parameters, data.resources);
+        if (data.tool.config_version != expected.config_version || data.tool.schema.id != expected.schema.id
+            || data.tool.schema.version != expected.schema.version || !same_contract(expected, data.tool)) {
+            return registration_error(ErrorCode::InvalidDescriptor, data.tool,
+                "The configured tool contract differs from its registered specialization.");
+        }
+    } else if (auto checked = validate(data.tool); auto* failure = std::get_if<Diagnostic>(&checked)) {
         failure->location.workflow = data.workflow;
         failure->location.node = data.node;
         return std::move(*failure);

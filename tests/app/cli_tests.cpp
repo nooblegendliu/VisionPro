@@ -1,9 +1,11 @@
 #include <visionpro/core/id_factory.hpp>
 #include <visionpro/core/schema_id_factory.hpp>
 #include <visionpro/infrastructure/solution_file.hpp>
+#include <visionpro/infrastructure/subgraph_package.hpp>
+#include <visionpro/workflow/trigger_control.hpp>
+#include "tool_catalog.hpp"
 
 #ifdef VISIONPRO_WITH_OPENCV
-#include "simulation.hpp"
 #include "vision/vision_tools.hpp"
 #include "../tools/image_fixtures.hpp"
 
@@ -433,6 +435,13 @@ Json comparable(Json report)
     for (const auto key : {"revision", "session", "snapshot", "run"}) { report.erase(key); }
     for (auto& call : report.at("nodes")) {
         for (const auto key : {"scope", "invocation", "attempt", "elapsed", "elapsed_ns", "timings"}) { call.erase(key); }
+        for (auto& output : call.at("outputs")) {
+            if (output.at("id") == "elapsed_ms" && output.at("status") == "Produced") {
+                const auto& measured = output.at("value");
+                check(measured.is_number() && measured.get<double>() >= 0, "Each execution reports a nonnegative module duration.");
+                output.erase("value");
+            }
+        }
         for (auto& binding : call.at("bindings")) {
             for (auto& source : binding.at("sources")) {
                 for (const auto key : {"session", "snapshot", "run", "scope", "invocation", "attempt"}) { source.erase(key); }
@@ -495,6 +504,7 @@ void cameras(const fs::path& executable)
     const auto package = scratch.path / "camera";
     fs::copy(VISIONPRO_CAMERA_DIRECTORY, package, fs::copy_options::recursive);
     const auto manifest = package / "solution.json";
+    const auto legacy = read_file(manifest);
     const auto single = success(invoke(executable, scratch.path, {L"run", L"--solution", manifest.native(),
         L"--workflow", L"5ca4f87a-ea1e-4d62-89b0-000000061010"}));
     const auto& call = single.at("nodes").at(0);
@@ -520,7 +530,65 @@ void cameras(const fs::path& executable)
     }
     rejected(invoke(executable, scratch.path, {L"trigger", L"--solution", manifest.native(),
         L"--workflow", L"5ca4f87a-ea1e-4d62-89b0-000000061020", L"--frame", L"1"}), 1, "InvalidRunRequest");
+    check(read_file(manifest) == legacy, "Reading and executing a legacy camera solution must never write its manifest.");
+    const auto registry = take(visionpro::app::make_tool_registry());
+    const auto loaded = take(load_solution(package, registry));
+    const auto original = Json::parse(legacy);
+    {
+        auto sdk = loaded.solution();
+        auto& flow = sdk.workflows.at(1);
+        flow.trigger.reset();
+        flow.interface.outputs.clear();
+        flow.outputs.clear();
+        auto& bindings = flow.nodes.front().bindings;
+        auto kind = std::ranges::find(bindings, BindingTarget{key<ParameterId>("source_type")}, &Binding::target);
+        auto& selected = std::get<ConfigValue>(kind->sources.front());
+        selected = take(ConfigValue::enumeration(selected.type(), key<EnumMemberId>("SDK")));
+        const auto sdk_package = scratch.path / "sdk";
+        take(write_new_solution(sdk_package, sdk));
+        const auto supplied = success(invoke(executable, scratch.path, {L"run", L"--solution", (sdk_package / solution_manifest_name).native(),
+            L"--workflow", L"5ca4f87a-ea1e-4d62-89b0-000000061020", L"--input", L"frame=1",
+            L"--input", LR"(image={"format":"Mono8","width":1,"height":2,"stride":2,"coordinates":"camera","pixels":"04ff08"})"}));
+        const auto& pixels = produced(supplied.at("nodes").front(), "image");
+        check(pixels.at("samples").at("minimum") == 4 && pixels.at("samples").at("maximum") == 8,
+            "CLI public Image inputs preserve declared row strides and exclude padding from samples.");
+    }
+    for (std::size_t i = 0; i < 2; ++i) {
+        const auto& flow = loaded.solution().workflows.at(i);
+        const auto& node = flow.nodes.front();
+        const auto& before = original.at("workflows").at(i).at("nodes").at(0);
+        check(std::get<ToolConfiguration>(node.configuration).type.text() == "visionpro.image.source"
+            && text_is(before.at("id"), node.id.to_string()), "Migration preserves both original camera node IDs.");
+        const auto selection = std::ranges::find(node.bindings, BindingTarget{key<ParameterId>("camera_input")}, &Binding::target);
+        check(selection != node.bindings.end() && std::get<ConfigValue>(selection->sources.front()).as_enum()->text()
+                == (i == 0 ? "Acquire" : "Delivered"), "A triggered frame must stay delivered rather than being acquired again.");
+    }
+    const auto old_package = scratch.path / "subgraph";
+    take(export_subgraph_package(old_package, loaded.solution(), loaded.solution().workflows.front().id, {}, registry, &loaded));
+    const auto sub_manifest = old_package / subgraph_manifest_name;
+    auto disk_package = Json::parse(read_file(sub_manifest));
+    disk_package["model"]["workflows"][0]["nodes"] = original.at("workflows").at(0).at("nodes");
+    disk_package["host"]["node_state"] = false;
+    write_file(sub_manifest, disk_package.dump());
+    const auto imported = take(import_subgraph_package(old_package, loaded.solution(), {}, {}, registry, &loaded));
+    const auto* added = find_workflow(imported.solution, imported.workflow);
+    check(added && std::get<ToolConfiguration>(added->nodes.front().configuration).type.text() == "visionpro.image.source"
+        && added->nodes.front().resources.front().resource.id == loaded.solution().resources.front().id,
+        "A legacy subgraph derives the new state requirement and retains its host camera binding.");
+    const auto denied = import_subgraph_package(old_package, loaded.solution(), {}, {}, registry, &loaded, {false, true, true});
+    check(std::get<Diagnostic>(denied).code == ErrorCode::MissingCapability, "An upgraded package still requires host node state.");
+    auto future = original;
+    future["workflows"][0]["nodes"][0]["configuration"]["future_field"] = true;
+    write_file(manifest, future.dump());
+    const auto unsupported = take(load_solution(package, registry));
+    check(!unsupported.can_save() && std::holds_alternative<Diagnostic>(save_solution(unsupported, unsupported.solution()))
+        && read_file(manifest) == future.dump(), "Unknown future fields survive failed migration/save attempts on disk.");
+    write_file(manifest, legacy);
+    success(invoke(executable, scratch.path, {L"save", L"--solution", manifest.native()}));
     auto absent = Json::parse(read_file(manifest));
+    check(absent.at("workflows").at(0).at("nodes").at(0).at("configuration").at("type") == "visionpro.image.source"
+        && absent.at("workflows").at(1).at("trigger") == original.at("workflows").at(1).at("trigger"),
+        "Explicit save writes the unified node and preserves the original trigger declaration.");
     absent.at("resources")[0]["location"]["configuration"]["value"][0]["value"]["value"] = "unavailable";
     write_file(manifest, absent.dump());
     rejected(invoke(executable, scratch.path, {L"run", L"--solution", manifest.native(),
@@ -1077,13 +1145,6 @@ void check_vision_report(const Json& report, char flow, std::string_view revisio
     }
 }
 
-ToolRegistry full_catalog()
-{
-    auto registrations = visionpro::tools::simulation_registrations();
-    for (auto& item : vision::registrations()) { registrations.push_back(std::move(item)); }
-    return take(ToolRegistry::create(registrations));
-}
-
 void check_pixels(const SolutionDocument& document, const ToolRegistry& registry, char flow)
 {
     const auto execution = take(open_solution_execution(document, registry));
@@ -1125,14 +1186,120 @@ void check_pixels(const SolutionDocument& document, const ToolRegistry& registry
     }
 }
 
+void check_embedded_sequence(const VisionFixture& fixture, const SolutionDocument& source, const ToolRegistry& registry)
+{
+    auto draft = source.solution();
+    auto& flow = draft.workflows.front();
+    auto& reader = flow.nodes.front();
+    const auto first = fixture.scratch.path / "set-a" / "part.bmp";
+    const auto last = fixture.scratch.path / "set-b" / "part.bmp";
+    const auto bmp = read_file(fixture.bmp_path);
+    const auto png = read_file(fixture.png_path);
+    write_file(first, bmp);
+    write_file(last, png);
+    const auto absolute = [](const fs::path& file) {
+        const auto spelling = file.generic_u8string();
+        return ResourcePath{PathBase::Absolute, {spelling.begin(), spelling.end()}, {}};
+    };
+    const auto sequence_id = uuid<ResourceId>('4');
+    draft.resources.push_back({sequence_id, "Test sequence", ResourceKind::DirectorySequence,
+        ImageSequenceResource{{std::vector{absolute(first), absolute(last)}}, SequenceSort::ExplicitOrder,
+            SequenceAdvance::PerInvocation, SequenceRepeat::Loop, SequenceMissing::Fail, SequenceTrigger::Manual, 0}});
+    reader.bindings.push_back(setting("embed_images", ConfigValue::boolean(true)));
+    reader.resources = {{key<SchemaId>("sequence"), {sequence_id, ResourceKind::DirectorySequence, {}}}};
+    const auto target = fixture.scratch.path / "portable";
+    auto transfer = take(transfer_solution(target, draft, SolutionTransfer::SaveAs, &source));
+    const auto saved = take(reload_saved_solution(target, transfer.solution, registry));
+    check(saved.diagnostics().empty(), "The saved embedded sequence is a valid executable configuration.");
+    const auto relative = [](const ResourcePath& file) { return fs::path(std::u8string(file.path.begin(), file.path.end())); };
+    const auto stored = [&](const ResourceDefinition& r, const fs::path& directory) {
+        const auto& seq = std::get<ImageSequenceResource>(r.location);
+        const auto& files = std::get<std::vector<ResourcePath>>(seq.selection);
+        check(seq.embedded_sha256.size() == 2 && seq.embedded_sha256[0] != seq.embedded_sha256[1] && files.size() == 2
+            && files[0] != files[1], "Same-name images retain separate paths and SHA-256 fingerprints.");
+        for (std::size_t i = 0; i < files.size(); ++i) {
+            const auto path = directory / relative(files[i]);
+            check(files[i].base == PathBase::SolutionDirectory && path.filename() == "part.bmp"
+                && read_file(path) == (i == 0 ? bmp : png), "Embedded images preserve name, order and bytes.");
+        }
+    };
+    fs::remove(first);
+    fs::remove(last);
+    stored(saved.solution().resources.back(), target);
+    const auto subgraph = fixture.scratch.path / "image-subgraph";
+    take(export_subgraph_package(subgraph, saved.solution(), flow.id, {}, registry, &saved));
+    const auto imported = take(import_subgraph_package(subgraph, source.solution(), {}, {}, registry, &source));
+    const auto& imported_node = find_workflow(imported.solution, imported.workflow)->nodes.front();
+    const auto resource = std::ranges::find(imported.solution.resources, imported_node.resources.front().resource.id, &ResourceDefinition::id);
+    check(resource != imported.solution.resources.end() && resource->id != sequence_id,
+        "An imported sequence gets its own resource and node binding.");
+    stored(*resource, source.directory());
+    auto oversized = saved.solution();
+    auto& seq = std::get<ImageSequenceResource>(oversized.resources.back().location);
+    const auto member = std::get<std::vector<ResourcePath>>(seq.selection).front();
+    seq.selection = std::vector<ResourcePath>(120, member);
+    seq.embedded_sha256.clear();
+    const auto full_directory = fixture.scratch.path / "full-portable";
+    const auto full = take(transfer_solution(full_directory, oversized, SolutionTransfer::SaveAs, &saved));
+    const auto& at_limit = std::get<ImageSequenceResource>(full.solution.resources.back().location);
+    check(at_limit.embedded_sha256.size() == 120
+        && read_file(full_directory / relative(std::get<std::vector<ResourcePath>>(at_limit.selection).back())) == bmp,
+        "A package at the 120-image limit writes every sequence member, including the last.");
+    std::get<std::vector<ResourcePath>>(seq.selection).push_back(member);
+    const auto baseline = read_file(target / solution_manifest_name);
+    check(std::holds_alternative<Diagnostic>(save_solution(saved, oversized)) && read_file(target / solution_manifest_name) == baseline,
+        "A 121-image save fails before replacing the valid manifest.");
+    const auto& saved_seq = std::get<ImageSequenceResource>(saved.solution().resources.back().location);
+    write_file(target / relative(std::get<std::vector<ResourcePath>>(saved_seq.selection).front()), "changed");
+    const auto corrupt = save_solution(saved, saved.solution());
+    check(std::get<Diagnostic>(corrupt).code == ErrorCode::ResourceVersionMismatch
+        && read_file(target / solution_manifest_name) == baseline, "A changed embedded file cannot be re-blessed on save.");
+}
+
 void vision_roundtrip(const fs::path& executable)
 {
     const VisionFixture fixture(executable);
-    const auto registry = full_catalog();
-    const auto original = read_file(fixture.manifest);
+    const auto registry = take(visionpro::app::make_tool_registry());
+    const auto canonical = Json::parse(read_file(fixture.manifest));
+    auto old = canonical;
+    for (auto& flow : old.at("workflows")) {
+        for (auto& node : flow.at("nodes")) {
+            if (node.at("configuration").at("type") != "visionpro.image.source") { continue; }
+            node["configuration"]["type"] = "visionpro.image.read_file";
+            auto& bindings = node.at("bindings");
+            bindings.erase(std::remove_if(bindings.begin(), bindings.end(), [](const Json& binding) {
+                const auto& id = binding.at("target").at("id");
+                return id == "source_type" || id == "auto_next" || id == "stop_at_end";
+            }), bindings.end());
+            for (auto& binding : bindings) {
+                if (binding.at("target").at("id") != "decode_mode") { continue; }
+                auto& type = binding.at("sources").at(0).at("value").at("type");
+                type["schema"] = "visionpro.image.read_file.decode_mode";
+                type.at("members").erase(type.at("members").end() - 1);
+            }
+        }
+    }
+    const auto original = old.dump();
+    write_file(fixture.manifest, original);
     const auto original_png = read_file(fixture.png_path);
     const auto original_bmp = read_file(fixture.bmp_path);
     const auto loaded = take(load_solution(fixture.package, registry));
+    {
+        std::shared_ptr<WorkflowSession> session = take(WorkflowSession::create(registry));
+        const auto active = take(activate_solution(*session, loaded));
+        const auto epoch = TriggerControl::Clock::time_point{};
+        auto reader = take(TriggerControl::start_local(session, active.identity(), uuid<WorkflowId>('1'), 10, epoch));
+        for (const auto when : {10, 20}) {
+            auto receipt = reader->tick(epoch + std::chrono::milliseconds(when));
+            check(receipt && std::holds_alternative<RunHandle>(receipt->submission),
+                "A migrated single-file source keeps accepting continuous runs after the first frame.");
+            const auto& handle = std::get<RunHandle>(receipt->submission);
+            const auto finished = take(handle.wait(RunWaitTarget::Quiescence, TriggerControl::Clock::now() + std::chrono::seconds(5)));
+            check(finished.progress.status == ExecutionStatus::Succeeded, "Both continuous reads of the same old single image succeed.");
+        }
+        take(reader->stop(TriggerStopMode::Drain, TriggerControl::Clock::now() + std::chrono::seconds(5)));
+    }
+    check_embedded_sequence(fixture, loaded, registry);
     check_pixels(loaded, registry, '1');
     check_pixels(loaded, registry, '3');
 
@@ -1154,7 +1321,7 @@ void vision_roundtrip(const fs::path& executable)
     const auto saved = success(invoke(executable, fixture.first, {L"save", L"--solution", fixture.manifest.native()}));
     check(saved.at("status") == "Committed" && saved.at("revision") == "13" && saved.at("cleanup").at("diagnostics").empty(),
         "The independent save process commits a new revision.");
-    auto expected = Json::parse(original);
+    auto expected = canonical;
     expected["revision"] = "13";
     check(Json::parse(read_file(fixture.manifest)) == expected, "The manifest keeps configuration and resource references across revisions.");
     check(read_file(fixture.png_path) == original_png && read_file(fixture.bmp_path) == original_bmp,
@@ -1166,8 +1333,9 @@ void vision_roundtrip(const fs::path& executable)
     for (const auto& [flow, previous] : before) {
         const auto after = success(fixture.run(flow, fixture.second));
         check_vision_report(after, flow, "13");
-        check(previous.at("session") != after.at("session") && comparable(previous) == comparable(after),
-            "Fresh CLI processes agree on values, binding sources and control from different working directories.");
+        const auto difference = Json::diff(comparable(previous), comparable(after));
+        check(previous.at("session") != after.at("session") && difference.empty(),
+            "Fresh CLI processes must agree on values, binding sources and control: " + difference.dump());
     }
 }
 

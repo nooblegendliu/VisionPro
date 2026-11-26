@@ -1,8 +1,10 @@
 #include "tool_catalog.hpp"
+#include <visionpro/core/id_factory.hpp>
 #include <visionpro/infrastructure/camera.hpp>
 #include <visionpro/infrastructure/camera_trigger.hpp>
 #include <visionpro/infrastructure/solution_file.hpp>
 #include <visionpro/workflow/copy.hpp>
+#include <visionpro/workflow/validation.hpp>
 #include <algorithm>
 #include <future>
 #include <initializer_list>
@@ -29,6 +31,40 @@ void exercise()
     const auto& flow = solution.workflows.at(1);
     const auto& device = solution.resources.front();
     const auto& entry = *flow.trigger->camera;
+    {
+        auto modified = solution;
+        auto& workflow = modified.workflows.at(1);
+        auto& receiver = workflow.nodes.front();
+        const auto receiver_id = receiver.id;
+        const auto& acquisition = modified.workflows.front().nodes.front();
+        receiver.resources = acquisition.resources;
+        take(validate_camera_trigger_ownership(modified, workflow, registry.descriptors()));
+        receiver = acquisition;
+        receiver.id = receiver_id;
+        const auto conflict = [&] {
+            auto checked = validate_camera_trigger_ownership(modified, workflow, registry.descriptors());
+            const auto* failure = std::get_if<Diagnostic>(&checked);
+            return failure && failure->code == ErrorCode::InvalidResource && failure->location.workflow == workflow.id
+                && failure->location.node == receiver_id && failure->location.resource == receiver.resources.front().resource.id;
+        };
+        check(conflict(), "A reachable acquisition cannot use the camera already owned by its workflow trigger.");
+        auto alias = device;
+        alias.id = take(IdFactory::generate<ResourceId>());
+        auto& alias_device = std::get<DeviceResource>(alias.location);
+        alias_device.configuration = take(camera_device_config("SIM-001", 2));
+        modified.resources.push_back(alias);
+        receiver.resources.front().resource.id = alias.id;
+        check(conflict(), "A second catalog identity with different strobe settings still addresses the same physical camera.");
+        auto prepare = take(WorkflowSession::create(registry));
+        const auto activated = prepare->activate(modified);
+        const auto* denied = std::get_if<Diagnostic>(&activated);
+        check(denied && denied->code == ErrorCode::InvalidResource, "Planning rejects duplicate acquisition before the camera opens.");
+        receiver.enabled = false;
+        take(validate_camera_trigger_ownership(modified, workflow, registry.descriptors()));
+        receiver.enabled = true;
+        std::get<DeviceResource>(modified.resources.back().location).configuration = take(camera_device_config("SIM-OTHER"));
+        take(validate_camera_trigger_ownership(modified, workflow, registry.descriptors()));
+    }
     auto clone = take(clone_solution(solution, ExternalReferencePolicy::Reject));
     check(clone.solution.workflows.at(1).trigger->camera->device == clone.identities.resources.at(device.id),
         "An independent copy must remap the camera trigger resource.");
@@ -53,6 +89,10 @@ void exercise()
     take(first_run.wait(RunWaitTarget::Quiescence, Clock::now() + 2s));
     const auto second = pulse(stream);
     const auto& second_run = std::get<RunHandle>(second.submission);
+    const auto& submitted = *second_run.request().input(entry.image_input)->value.as_image();
+    check(second.camera && submitted.acquisition && submitted.acquisition->device_ticks == second.camera->device_ticks
+        && submitted.acquisition->device_frame_number == second.camera->device_frame_number
+        && submitted.acquisition->serial == "SIM-001", "Camera receipt and workflow input must carry the same capture metadata.");
     const auto read_pixels = [&](const RunHandle& run, std::byte expected) {
         const auto progress = take(run.wait(RunWaitTarget::Quiescence, Clock::now() + 2s)).progress;
         check(progress.status == ExecutionStatus::Succeeded && progress.call_order.size() == 1, "Exactly one successor should execute.");

@@ -79,7 +79,7 @@ Check location_check(ResourceKind kind, const ImageSequenceResource& source)
         return error(ErrorCode::InvalidResource, "Image sequences require explicit, recognized ordering, advance, repeat, missing and trigger policies.");
     }
     if (const auto* directory = std::get_if<DirectorySelection>(&source.selection)) {
-        if (source.sort == SequenceSort::ExplicitOrder || !text_ok(directory->filename_pattern)
+        if (!source.embedded_sha256.empty() || source.sort == SequenceSort::ExplicitOrder || !text_ok(directory->filename_pattern)
             || directory->filename_pattern.find_first_of("/\\:\"<>|") != std::string::npos
             || std::ranges::any_of(directory->filename_pattern, [](unsigned char c) { return c < 0x20; })) {
             return error(ErrorCode::InvalidResource, "Directory sequences require named sorting and a filename-only filter.");
@@ -90,8 +90,13 @@ Check location_check(ResourceKind kind, const ImageSequenceResource& source)
     if (files.empty() || source.initial_index >= files.size() || source.sort != SequenceSort::ExplicitOrder) {
         return error(ErrorCode::InvalidResource, "Explicit sequences require nonempty ordered files and an in-range initial cursor.");
     }
+    const bool embedded = !source.embedded_sha256.empty();
+    if (embedded && (source.embedded_sha256.size() != files.size() || files.size() > 120
+        || !std::ranges::all_of(source.embedded_sha256, digest_ok))) {
+        return error(ErrorCode::InvalidResource, "An embedded image sequence requires a digest for each of at most 120 members.");
+    }
     for (const auto& file : files) {
-        if (auto checked = file_path(file); std::holds_alternative<Diagnostic>(checked)) { return checked; }
+        if (auto checked = file_path(file, embedded); std::holds_alternative<Diagnostic>(checked)) { return checked; }
     }
     return std::monostate{};
 }

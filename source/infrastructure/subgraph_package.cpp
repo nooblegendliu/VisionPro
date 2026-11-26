@@ -7,6 +7,8 @@
 #include "package_assets.hpp"
 #include "resource_files.hpp"
 #include "solution_codec.hpp"
+#include "solution_image_source.hpp"
+#include "solution_images.hpp"
 #include "solution_storage.hpp"
 #include "value_codec.hpp"
 
@@ -87,6 +89,10 @@ Solution extract(const Solution& draft, WorkflowId workflow, std::optional<NodeI
         const auto& root = by_id(source.nodes, *group, "Export Group");
         const auto* config = std::get_if<GroupConfiguration>(&root.configuration);
         if (!config || config->loop) { fail(ErrorCode::InvalidModel, "Export a workflow or an ordinary Group."); }
+        if (!root.result_variables.empty()) {
+            DiagnosticLocation where; where.node = root.id;
+            fail(ErrorCode::ScopeViolation, "The selected Group writes results into its caller. Export the enclosing scope to preserve these mappings.", where);
+        }
         const auto body = require(descendants(source, *group));
         kept.insert(body.begin(), body.end());
         for (const auto& edge : flow.control_links) {
@@ -102,6 +108,7 @@ Solution extract(const Solution& draft, WorkflowId workflow, std::optional<NodeI
         flow.entries = config->entries;
         flow.outputs = config->outputs;
         flow.control_exports = config->control_exports;
+        flow.local_variables = config->local_variables;
         flow.enabled = root.enabled;
         flow.admission = {}; // A Group's calls run under the importing workflow's admission policy.
         flow.trigger.reset(); // A Group runs when called by its enclosing workflow.
@@ -137,8 +144,16 @@ SubgraphHostCapabilities required_capabilities(const Package& pack, const ToolRe
     SubgraphHostCapabilities needs{false, !pack.model.resources.empty(), false};
     for (const auto& flow : pack.model.workflows) {
         for (const auto& node : flow.nodes) {
+            needs.shared_data |= std::ranges::any_of(node.result_variables, [](const auto& binding) {
+                return binding.scope == VariableScope::Global;
+            });
             const auto* config = std::get_if<ToolConfiguration>(&node.configuration);
             if (!config) { continue; }
+            if (const auto legacy = detail::legacy_image_source(node)) {
+                // Version 1 image readers used file leases. Neither camera tool used a node-state service.
+                needs.file_leases |= *legacy == detail::LegacyImageSource::Local;
+                continue;
+            }
             const auto* tool = registry.find_descriptor(config->type);
             if (!tool) { DiagnosticLocation where; where.node = node.id; where.tool = config->type;
                 fail(ErrorCode::UnknownTool, "The package requires a tool missing from the host registry.", where); }
@@ -146,7 +161,8 @@ SubgraphHostCapabilities required_capabilities(const Package& pack, const ToolRe
             needs.shared_data |= tool->shared_target.has_value() || tool->requires_correlation_join;
             for (const auto& slot : tool->resources) {
                 const bool file = slot.kind == ResourceKind::Image || slot.kind == ResourceKind::Mask ||
-                    slot.kind == ResourceKind::Template || slot.kind == ResourceKind::Calibration || slot.kind == ResourceKind::Binary;
+                    slot.kind == ResourceKind::Template || slot.kind == ResourceKind::Calibration || slot.kind == ResourceKind::Binary ||
+                    slot.kind == ResourceKind::DirectorySequence;
                 if (file && (slot.required || std::ranges::find(node.resources, slot.slot, &NodeResourceBinding::slot) != node.resources.end())) {
                     needs.file_leases = true;
                 }
@@ -168,6 +184,7 @@ void resolve_dependencies(Package& pack, const Solution& source)
     // The copier already walks defaults, ROI/mask/transform references, output
     // selectors and resource slots. Empty catalogs reveal all non-local references.
     const auto scan = require(clone_solution(pack.model, ExternalReferencePolicy::Preserve));
+    const auto image_resources = detail::embedded_image_resources(pack.model);
     std::set<ResourceId> resources;
     for (const auto& external : scan.report.preserved_references) {
         if (const auto* global = std::get_if<GlobalReference>(&external.reference)) {
@@ -180,7 +197,10 @@ void resolve_dependencies(Package& pack, const Solution& source)
             require(validate_resource_reference(*ref, source.resources));
             if (!resources.insert(ref->id).second) { continue; }
             auto resource = by_id(source.resources, ref->id, "Required resource");
-            if (file_path(resource)) { pack.model.resources.push_back(std::move(resource)); }
+            const auto* sequence = std::get_if<ImageSequenceResource>(&resource.location);
+            if (file_path(resource) || (sequence && (image_resources.contains(resource.id) || !sequence->embedded_sha256.empty()))) {
+                pack.model.resources.push_back(std::move(resource));
+            }
             else { pack.services.resources.emplace(resource.id, resource.kind); }
         } else {
             DiagnosticLocation where; where.node = external.owner;
@@ -191,6 +211,8 @@ void resolve_dependencies(Package& pack, const Solution& source)
 
 // Validate against the host's own declarations. Only the identity and Schema
 // of a required host service are serialized; the host owns its data and state.
+void add_host_variable_context(Solution& candidate, const Solution& host);
+
 void validate_package(const Package& pack, const Solution& host, const ToolRegistry& registry)
 {
     auto candidate = pack.model;
@@ -228,6 +250,7 @@ void validate_package(const Package& pack, const Solution& host, const ToolRegis
         }
         candidate.resources.push_back(*it);
     }
+    add_host_variable_context(candidate, host);
     require(validate_solution(candidate, registry.descriptors()));
 }
 
@@ -300,10 +323,15 @@ Package decode(const fs::path& directory)
     return pack;
 }
 
-class CoordinateUses {
+class ConfigUses {
 public:
     std::set<CoordinateSystemId> ids;
-    void transform(const Transform2D& t) { ids.insert(t.from); ids.insert(t.to); }
+    std::set<ResourceId> resources;
+    void transform(const Transform2D& t)
+    {
+        ids.insert(t.from); ids.insert(t.to);
+        if (t.calibration) { resources.insert(t.calibration->id); }
+    }
     void region_source(const RegionSource& source)
     {
         std::visit([&](const auto& item) {
@@ -311,6 +339,7 @@ public:
             if (item.transform) { transform(*item.transform); }
             if constexpr (std::same_as<std::decay_t<decltype(item)>, RegionPrimitive>) {
                 if (const auto* mask = std::get_if<MaskConfig>(&item.geometry)) {
+                    resources.insert(mask->resource.id);
                     ids.insert(mask->mask_frame); ids.insert(mask->mapping.target_frame);
                     if (mask->mapping.transform) { transform(*mask->mapping.transform); }
                 }
@@ -319,6 +348,7 @@ public:
     }
     void value(const ConfigValue& v)
     {
+        if (const auto* r = v.as_resource_reference()) { resources.insert(r->id); }
         if (const auto* p = v.as_point2d()) { ids.insert(p->coordinate_frame); }
         if (const auto* p = v.as_pose2d()) { ids.insert(p->position.coordinate_frame); }
         if (const auto* p = v.as_circle2d()) { ids.insert(p->center.coordinate_frame); }
@@ -347,14 +377,34 @@ public:
     }
 };
 
+void add_host_variable_context(Solution& candidate, const Solution& host)
+{
+    ConfigUses needed;
+    for (const auto& variable : candidate.variables) { needed.value(variable.initial_value); }
+    for (const auto& frame : needed.ids) {
+        if (std::ranges::find(candidate.coordinates, frame, &CoordinateFrameDefinition::id) == candidate.coordinates.end()) {
+            candidate.coordinates.push_back(by_id(host.coordinates, frame, "Host variable coordinate frame"));
+        }
+    }
+    for (const auto& resource : needed.resources) {
+        if (std::ranges::find(candidate.resources, resource, &ResourceDefinition::id) == candidate.resources.end()) {
+            candidate.resources.push_back(by_id(host.resources, resource, "Host variable resource"));
+        }
+    }
+}
+
 void collect_coordinates(Package& package, const Solution& draft, const ToolRegistry& registry)
 {
-    CoordinateUses seen;
+    ConfigUses seen;
     const auto& flow = package.model.workflows.front();
     seen.interface(flow.interface);
+    for (const auto& variable : flow.local_variables) { seen.value(variable.initial_value); }
     if (flow.trigger && flow.trigger->camera) { seen.ids.insert(flow.trigger->camera->coordinate_frame); }
     for (const auto& node : flow.nodes) {
-        if (const auto* group = std::get_if<GroupConfiguration>(&node.configuration)) { seen.interface(group->interface); }
+        if (const auto* group = std::get_if<GroupConfiguration>(&node.configuration)) {
+            seen.interface(group->interface);
+            for (const auto& variable : group->local_variables) { seen.value(variable.initial_value); }
+        }
         else if (const auto* tool = registry.find_descriptor(std::get<ToolConfiguration>(node.configuration).type)) {
             for (const auto& p : tool->inputs) { seen.port(p); }
             for (const auto& p : tool->parameters) { seen.port(p); }
@@ -385,9 +435,27 @@ void copy_assets(Package& pack, const detail::ResourcePaths& from, const fs::pat
     }
     if (pack.model.resources.empty()) { return; }
     const auto directory = "assets-" + require(IdFactory::generate<MessageId>()).to_string();
-    require(transaction.create_directory(destination / directory, true));
+    if (std::ranges::any_of(pack.model.resources, [](const auto& asset) {
+        return !std::holds_alternative<ImageSequenceResource>(asset.location);
+    })) { require(transaction.create_directory(destination / directory, true)); }
     for (auto& resource : pack.model.resources) {
         DiagnosticLocation where; where.resource = resource.id;
+        if (auto* sequence = std::get_if<ImageSequenceResource>(&resource.location)) {
+            if (importing && sequence->embedded_sha256.empty()) {
+                fail(ErrorCode::InvalidResource, "Packaged sequences must contain verified, package-relative image files.", where);
+            }
+            require(detail::stage_image_resource(resource, from, destination, transaction, true));
+            std::string hashes;
+            for (const auto& hash : sequence->embedded_sha256) { hashes += hash; }
+            const auto digest = require(detail::sha256(std::as_bytes(std::span(hashes))));
+            if (importing) {
+                const auto declared = pack.digests.find(resource.id);
+                if (declared == pack.digests.end() || !equal_digest(digest, declared->second)) {
+                    fail(ErrorCode::ResourceVersionMismatch, "The embedded image list differs from its package manifest.", where);
+                }
+            } else { pack.digests.emplace(resource.id, digest); }
+            continue;
+        }
         auto* path = file_path(resource);
         if (!path) { fail(ErrorCode::InvalidResource, "Only regular file assets may be embedded.", where); }
         const auto* managed = std::get_if<ManagedResource>(&resource.location);
@@ -396,6 +464,21 @@ void copy_assets(Package& pack, const detail::ResourcePaths& from, const fs::pat
         }
         try {
             const auto actual = require(detail::existing_path(*path, from, importing || managed));
+            if (!importing && resource.kind == ResourceKind::Image) {
+                const auto names_id = require(SchemaIdFactory::parse<ParameterId>("source_names"));
+                const auto name = actual.filename().generic_u8string();
+                for (auto& node : pack.model.workflows.front().nodes) {
+                    const auto* tool = std::get_if<ToolConfiguration>(&node.configuration);
+                    if (!tool || tool->type.text() != "visionpro.image.source") { continue; }
+                    const bool uses_image = std::ranges::any_of(node.resources, [&](const auto& slot) {
+                        return slot.slot.text() == "source" && slot.resource.id == resource.id;
+                    });
+                    if (uses_image && std::ranges::find(node.bindings, BindingTarget{names_id}, &Binding::target) == node.bindings.end()) {
+                        node.bindings.push_back({names_id, {require(ConfigValue::list(DataType::string(),
+                            {require(ConfigValue::string(std::string(name.begin(), name.end())))}))}});
+                    }
+                }
+            }
             const auto contents = require(read_file_bytes(actual));
             const auto digest = require(detail::sha256(*contents));
             const auto expected = managed ? std::optional{managed->sha256} : std::get<ExternalFileResource>(resource.location).expected_sha256;
@@ -446,7 +529,7 @@ SubgraphImport insert(const Package& pack, SolutionCopy copied, const Solution& 
         const auto top = require(children(incoming));
         rebase_inputs(incoming, {}, result.group);
         flow->nodes.push_back({*result.group, incoming.name, GroupConfiguration{incoming.interface, incoming.entries, incoming.outputs,
-            incoming.control_exports}, {}, {}, incoming.enabled});
+            incoming.control_exports, {}, std::move(incoming.local_variables)}, {}, {}, incoming.enabled});
         flow->nodes.insert(flow->nodes.end(), incoming.nodes.begin(), incoming.nodes.end());
         flow->control_links.insert(flow->control_links.end(), incoming.control_links.begin(), incoming.control_links.end());
         flow->containment.insert(flow->containment.end(), incoming.containment.begin(), incoming.containment.end());
@@ -474,6 +557,7 @@ core::Result<std::monostate> export_subgraph_package(const fs::path& directory, 
         const auto manifest = target / subgraph_manifest_name;
         if (fs::exists(detail::windows_access_path(manifest))) { fail(ErrorCode::SolutionAlreadyExists, "The subgraph package already exists."); }
         Package pack{extract(draft, workflow, group), group.has_value(), {}, {}};
+        detail::migrate_image_sources(pack.model);
         resolve_dependencies(pack, draft);
         collect_coordinates(pack, draft, registry);
         const auto needs = required_capabilities(pack, registry);
@@ -504,10 +588,12 @@ core::Result<SubgraphImport> import_subgraph_package(const fs::path& directory, 
         check_document(draft, host);
         const auto from = require(detail::resource_paths(directory, {}));
         auto pack = decode(from.directory);
-        const auto needs = required_capabilities(pack, registry);
-        if (pack.services.node_state != needs.node_state || pack.services.file_leases != needs.file_leases || pack.services.shared_data != needs.shared_data) {
+        const auto recorded = required_capabilities(pack, registry);
+        if (pack.services.node_state != recorded.node_state || pack.services.file_leases != recorded.file_leases || pack.services.shared_data != recorded.shared_data) {
             fail(ErrorCode::InvalidModel, "The host-service manifest does not match its tool and resource dependencies.");
         }
+        detail::migrate_image_sources(pack.model);
+        const auto needs = required_capabilities(pack, registry);
         if (needs.node_state && !capabilities.node_state) { fail(ErrorCode::MissingCapability, "The package requires a host node state service."); }
         if (needs.shared_data && !capabilities.shared_data) { fail(ErrorCode::MissingCapability, "The package requires host shared data services."); }
         if (needs.file_leases && !capabilities.file_leases) { fail(ErrorCode::MissingCapability, "The package requires host file resource leases."); }

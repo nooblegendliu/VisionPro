@@ -3,6 +3,7 @@
 #include <visionpro/workflow/run.hpp>
 
 #include <map>
+#include <functional>
 #include <set>
 
 namespace visionpro::workflow {
@@ -13,7 +14,10 @@ class ResultStore final {
 public:
     explicit ResultStore(core::SolutionSessionId session) : session_(session) {}
     [[nodiscard]] const core::SolutionSessionId& session() const noexcept { return session_; }
-    [[nodiscard]] core::Result<std::monostate> insert(const ConfigSnapshot& snapshot, const NodeResult& result);
+    // The owner may commit associated writes after record validation and allocation.
+    // A failed commit leaves the logical invocation available for its failure record.
+    [[nodiscard]] core::Result<std::monostate> insert(const ConfigSnapshot& snapshot, const NodeResult& result,
+        const std::function<core::Result<std::monostate>()>& on_accept = {});
     [[nodiscard]] core::Result<std::optional<NodeResult>> lookup(const RunIdentity& run,
         const core::InvocationKey& invocation) const;
     // Returned records/values keep their ownership. Retired run IDs cannot be reused.

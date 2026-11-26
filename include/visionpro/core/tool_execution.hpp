@@ -14,8 +14,6 @@ namespace visionpro::core {
 class SharedData;
 class CorrelationJoinAccess;
 
-struct FixedToolParameter { ParameterId id; ConfigValue value; };
-struct ToolResourceBinding { SchemaId slot; ResourceReference resource; };
 struct ToolExecutionConfigurationData {
     SolutionSessionId session;
     ConfigSnapshotId snapshot;
@@ -79,7 +77,15 @@ private:
 
 struct FixedToolInput { InputId id; DataValue value; };
 struct FixedInvocationParameter { ParameterId id; DataValue value; };
+[[nodiscard]] bool message_filtered(const ToolDescriptor& descriptor, std::span<const FixedInvocationParameter> parameters);
 using ToolValueTarget = std::variant<InputId, ParameterId>;
+enum class ToolJudgement { NotEvaluated, OK, NG };
+struct ResolvedDisplayItem {
+    ToolValueTarget target;
+    std::size_t element_index;
+    ToolJudgement judgement;
+    std::optional<DisplayItemStyle> style;
+};
 struct ResolvedRegionInput {
     ToolValueTarget target;
     InheritedRegion reference;
@@ -101,6 +107,7 @@ private:
     ResourceReference reference_;
 };
 struct InvocationResourceLease { SchemaId slot; std::shared_ptr<const ResourceLease> lease; };
+class ImageArchiveWriter;
 struct InvocationContextData {
     ToolExecutionConfiguration configuration;
     ToolInvocationIdentity identity;
@@ -114,6 +121,10 @@ struct InvocationContextData {
     std::shared_ptr<ToolStateAccess> state{};
     std::shared_ptr<SharedData> shared_data{};
     std::shared_ptr<CorrelationJoinAccess> correlation_join{};
+    std::optional<std::vector<std::string>> changed_image_files{};
+    std::shared_ptr<ImageArchiveWriter> image_archive_writer{};
+    std::shared_ptr<ImageArchiveWriter> image_storage_writer{};
+    std::vector<ResolvedDisplayItem> display_items{};
 };
 class InvocationContext final {
 public:
@@ -129,7 +140,6 @@ private:
 };
 
 enum class ToolCompletionStatus { Succeeded, Failed, Cancelled, TimedOut };
-enum class ToolJudgement { NotEvaluated, OK, NG };
 struct ToolOutput { OutputId id; OutputContent content; };
 struct ToolCompletion {
     ToolInvocationIdentity identity;
@@ -140,6 +150,7 @@ struct ToolCompletion {
     std::optional<std::chrono::nanoseconds> elapsed{};
     std::vector<ControlOutputId> selected_control_outputs{};
     std::vector<TimingMeasurement> timings{};
+    InvocationFlow flow{InvocationFlow::Continue};
 };
 [[nodiscard]] Result<std::monostate> validate_tool_completion(const InvocationContext& context,
     const ToolCompletion& result);

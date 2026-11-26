@@ -7,6 +7,8 @@
 
 namespace visionpro::workflow {
 
+class TriggerControl;
+
 enum class WorkflowSessionStatus { Empty, Active, Switching, Closing, Closed };
 enum class SessionOperationKind { Activate, Close, Publish };
 struct SessionOperationId {
@@ -106,6 +108,8 @@ private:
     // Called only at final admission, after resource preparation and capture revalidation.
     using AdmissionGate = std::function<RunSubmission(const std::function<RunSubmission()>&)>;
     [[nodiscard]] RunSubmission submit_guarded(const RunRequest& request, const AdmissionGate* gate);
+    [[nodiscard]] core::Result<std::monostate> register_sdk_sender(const SnapshotIdentity& target,
+        core::WorkflowId workflow, core::InputId input, core::SchemaId sender, const std::shared_ptr<TriggerControl>& subscription);
     struct Impl;
     explicit WorkflowSession(std::unique_ptr<Impl> impl);
     std::unique_ptr<Impl> impl_;

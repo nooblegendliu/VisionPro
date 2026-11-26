@@ -4,7 +4,13 @@ add_library(visionpro_infrastructure STATIC
     value_codec.cpp
     resource_codec.cpp
     solution_codec.cpp
+    solution_image_source.cpp
+    solution_images.cpp
     file_resources.cpp
+    image_archive.cpp
+    image_package.cpp
+    image_ftp.cpp
+    image_directory_trigger.cpp
     camera.cpp
     communication.cpp
     camera_trigger.cpp
@@ -24,7 +30,7 @@ target_include_directories(visionpro_infrastructure SYSTEM PRIVATE
 )
 target_compile_features(visionpro_infrastructure PUBLIC cxx_std_20)
 target_compile_definitions(visionpro_infrastructure PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
-target_link_libraries(visionpro_infrastructure PUBLIC visionpro_workflow PRIVATE visionpro_build_options bcrypt ws2_32)
+target_link_libraries(visionpro_infrastructure PUBLIC visionpro_workflow PRIVATE visionpro_build_options bcrypt ws2_32 cabinet advapi32)
 
 option(VISIONPRO_WITH_MVS "Enable the Hikrobot MVS GigE/USB camera backend" OFF)
 target_sources(visionpro_infrastructure PRIVATE mvs_camera.cpp)

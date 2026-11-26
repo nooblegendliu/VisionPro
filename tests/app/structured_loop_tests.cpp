@@ -39,14 +39,14 @@ InputDescriptor integer_input(std::string_view name, std::int64_t value)
     port.binding.allowed_sources = {BindingSourceKind::Constant, BindingSourceKind::PublicInput, BindingSourceKind::RunOutput};
     return port;
 }
-Binding bind(std::string_view name, BindingSource source)
+Binding input_binding(std::string_view name, BindingSource source)
 { return {key<InputId>(name), {std::move(source)}}; }
 ScopedInputReference index_of(NodeId loop)
 { return {id<WorkflowId>(), loop, key<InputId>("index"), {}}; }
 Node addition(NodeId node)
 {
     return {node, "Add", ToolConfiguration{key<ToolTypeId>("visionpro.sim.add"), 1},
-        {bind("left", ConfigValue::integer(4)), bind("right", ConfigValue::integer(7))}};
+        {input_binding("left", ConfigValue::integer(4)), input_binding("right", ConfigValue::integer(7))}};
 }
 GroupConfiguration region(std::string_view schema, NodeId child, std::string_view source, DataType element,
     std::int64_t start, std::int64_t end, std::int64_t step)
@@ -64,7 +64,7 @@ Solution scenario(std::int64_t start, std::int64_t end, std::int64_t step = 1)
     const auto values = take(ConfigValue::list(DataType::integer(),
         {ConfigValue::integer(6), ConfigValue::integer(9), ConfigValue::integer(11)}));
     Node item{item_id, "Select item", ToolConfiguration{key<ToolTypeId>("visionpro.list.int64_at"), 1},
-        {bind("list", values), bind("index", index_of(loop_id))}};
+        {input_binding("list", values), input_binding("index", index_of(loop_id))}};
     Workflow main{id<WorkflowId>(), "Main", {key<SchemaId>("loop.main"), 1, {}, {}, {}},
         {{loop_id, "Loop", region("loop.outer", item_id, "item", DataType::integer(), start, end, step)}, item},
         {}, {{loop_id, item_id}}, {loop_id}};
@@ -198,10 +198,10 @@ void nested_break(Runner& runner)
     auto inner = region("loop.inner", item_id, "item", DataType::integer(), 0, 3, 1);
     inner.entries.push_back(selector_id);
     inner.loop->break_source = break_id;
-    flow.nodes[1].bindings[1] = bind("index", index_of(inner_id));
-    flow.nodes.push_back({inner_id, "Inner loop", inner, {bind("start", index_of(outer_id))}});
+    flow.nodes[1].bindings[1] = input_binding("index", index_of(inner_id));
+    flow.nodes.push_back({inner_id, "Inner loop", inner, {input_binding("start", index_of(outer_id))}});
     flow.nodes.push_back({selector_id, "Break when left is selected", ToolConfiguration{key<ToolTypeId>("visionpro.sim.select"), 1},
-        {bind("mask", index_of(inner_id))}});
+        {input_binding("mask", index_of(inner_id))}});
     flow.nodes.push_back(addition(break_id));
     flow.containment = {{outer_id, inner_id}, {inner_id, item_id}, {inner_id, selector_id}, {inner_id, break_id}};
     flow.control_links = {{id<ControlLinkId>(), selector_id, key<ControlOutputId>("left"), break_id}};
@@ -224,7 +224,7 @@ void failure_cases(Runner& runner)
 
     const auto max = std::numeric_limits<std::int64_t>::max();
     draft = scenario(max - 1, max, 2);
-    draft.workflows[0].nodes[1].bindings[1] = bind("index", ConfigValue::integer(0));
+    draft.workflows[0].nodes[1].bindings[1] = input_binding("index", ConfigValue::integer(0));
     const auto overflow = runner.start(draft);
     auto trace = done(overflow, ExecutionStatus::Failed);
     check(trace.iterations.size() == 1 && reports(trace, ErrorCode::ConstraintViolation), "Index overflow must stop before a wrapped iteration.");

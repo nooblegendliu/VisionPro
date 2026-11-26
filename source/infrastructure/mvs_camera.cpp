@@ -25,6 +25,16 @@ using namespace std::chrono_literals;
 Diagnostic error(ErrorCode code, std::string message)
 { return {code, Severity::Error, {}, std::move(message)}; }
 
+std::optional<ChannelOrder> packed_channels(unsigned pixel_type)
+{
+    switch (pixel_type) {
+    case PixelType_Gvsp_Mono8: return ChannelOrder::Mono;
+    case PixelType_Gvsp_RGB8_Packed: return ChannelOrder::RGB;
+    case PixelType_Gvsp_BGR8_Packed: return ChannelOrder::BGR;
+    default: return {};
+    }
+}
+
 std::string sdk_version()
 {
     const auto value = MV_CC_GetSDKVersion();
@@ -184,11 +194,11 @@ Result<CameraFrame> copy_frame(const CameraCaptureRequest& request, const MV_FRA
     if (!frame.pBufAddr || !width || !height || info.nLostPacket || info.nExtraType != MV_FRAME_EXTRA_NO_INFO) {
         return error(ErrorCode::InvalidImage, "MVS delivered an incomplete or multipart image.");
     }
-    PixelFormat format{PixelDepth::UInt8, ChannelOrder::Mono};
-    if (info.enPixelType == PixelType_Gvsp_BGR8_Packed) { format.order = ChannelOrder::BGR; }
-    else if (info.enPixelType != PixelType_Gvsp_Mono8) {
-        return error(ErrorCode::UnsupportedPixelFormat, "MVS capture supports native Mono8 or packed BGR8 pixels.");
+    const auto channels = packed_channels(info.enPixelType);
+    if (!channels) {
+        return error(ErrorCode::UnsupportedPixelFormat, "MVS capture supports native Mono8, packed RGB8 and packed BGR8 pixels.");
     }
+    const PixelFormat format{PixelDepth::UInt8, *channels};
     const ImageLayout layout{width, height, static_cast<std::size_t>(width) * (format.order == ChannelOrder::Mono ? 1u : 3u), format};
     const auto needed = required_image_bytes(layout);
     if (const auto* failure = std::get_if<Diagnostic>(&needed)) { return *failure; }
@@ -249,16 +259,25 @@ public:
         const auto deadline = Clock::now() + request.timeout;
         const auto cancelled = [&] { return stop.stop_requested() || generation != close_generation_.load(); };
         if (cancelled()) { return error(ErrorCode::SourceCancelled, "MVS acquisition cancelled."); }
-        if (handle_ && mode_ != request.mode) {
+        if (handle_ && (mode_ != request.mode || controls_ != request.controls)) {
             if (auto closed = shutdown(); closed.first != MV_OK) {
                 return sdk_error(ErrorCode::InvalidResource, closed.second, closed.first);
             }
         }
         if (!handle_) {
-            auto started = start(request.mode);
+            auto started = start(request.mode, request.controls);
             if (auto* failure = std::get_if<Diagnostic>(&started)) { shutdown(); return *failure; }
         }
         auto frame = receive(request, deadline, cancelled);
+        if (auto* captured = std::get_if<CameraFrame>(&frame); captured && network_counters_) {
+            // SDK network counters cover the current StartGrabbing/StopGrabbing interval.
+            MV_MATCH_INFO_NET_DETECT counters{};
+            MV_ALL_MATCH_INFO info{MV_MATCH_TYPE_NET_DETECT, &counters, sizeof(counters)};
+            if (MV_CC_GetAllMatchInfo(handle_, &info) == MV_OK) {
+                captured->lost_frames = counters.nLostFrameCount;
+                if (counters.nLostPacketCount >= 0) { captured->lost_packets = static_cast<std::uint64_t>(counters.nLostPacketCount); }
+            }
+        }
         if (cancelled()) { frame = error(ErrorCode::SourceCancelled, "MVS acquisition cancelled."); }
         if (std::holds_alternative<Diagnostic>(frame) || request.mode == CameraMode::Single) {
             const auto closed = shutdown();
@@ -270,18 +289,31 @@ public:
     }
 
 private:
-    Check start(CameraMode mode)
+    Check start(CameraMode mode, const CameraCaptureControls& controls)
     {
         auto acquired = runtime();
         if (const auto* failure = std::get_if<Diagnostic>(&acquired)) { return *failure; }
         runtime_ = std::get<std::shared_ptr<Runtime>>(std::move(acquired));
         auto chosen = select(*runtime_, serial_);
         if (const auto* failure = std::get_if<Diagnostic>(&chosen)) { return *failure; }
-        int code = MV_CC_CreateHandle(&handle_, &std::get<MV_CC_DEVICE_INFO>(chosen));
+        auto& selected = std::get<MV_CC_DEVICE_INFO>(chosen);
+        network_counters_ = selected.nTLayerType == MV_GIGE_DEVICE || selected.nTLayerType == MV_GENTL_GIGE_DEVICE;
+        int code = MV_CC_CreateHandle(&handle_, &selected);
         if (code != MV_OK) { return sdk_error(ErrorCode::InvalidResource, "MV_CC_CreateHandle", code); }
         code = MV_CC_OpenDevice(handle_, MV_ACCESS_Exclusive, 0);
         if (code != MV_OK) { return sdk_error(ErrorCode::InvalidResource, "MV_CC_OpenDevice", code); }
         open_ = true;
+        for (const auto& [feature, value] : {std::pair{"ExposureTime", controls.exposure_us}, std::pair{"Gain", controls.gain}}) {
+            if (!value) { continue; }
+            MVCC_FLOATVALUE range{};
+            code = MV_CC_GetFloatValue(handle_, feature, &range);
+            if (code != MV_OK) { return sdk_error(ErrorCode::MissingCapability, feature, code); }
+            if (*value < range.fMin || *value > range.fMax) {
+                return error(ErrorCode::ConstraintViolation, std::string(feature) + " is outside the supported camera range.");
+            }
+            code = MV_CC_SetFloatValue(handle_, feature, static_cast<float>(*value));
+            if (code != MV_OK) { return sdk_error(ErrorCode::MissingCapability, feature, code); }
+        }
         const bool triggered = mode == CameraMode::Software || mode == CameraMode::Hardware;
         auto setting = set_enum(handle_, "AcquisitionMode", mode == CameraMode::Single ? "SingleFrame" : "Continuous");
         if (auto* failure = std::get_if<Diagnostic>(&setting)) { return *failure; }
@@ -298,8 +330,8 @@ private:
         MVCC_ENUMVALUE format{};
         code = MV_CC_GetEnumValue(handle_, "PixelFormat", &format);
         if (code != MV_OK) { return sdk_error(ErrorCode::InvalidResource, "MV_CC_GetEnumValue(PixelFormat)", code); }
-        if (format.nCurValue != PixelType_Gvsp_Mono8 && format.nCurValue != PixelType_Gvsp_BGR8_Packed) {
-            return error(ErrorCode::UnsupportedPixelFormat, "Configured camera format must be Mono8 or BGR8Packed.");
+        if (!packed_channels(format.nCurValue)) {
+            return error(ErrorCode::UnsupportedPixelFormat, "Configured camera format must be Mono8, RGB8Packed or BGR8Packed.");
         }
         MVCC_INTVALUE_EX frequency{};
         if (MV_CC_GetIntValueEx(handle_, "GevTimestampTickFrequency", &frequency) == MV_OK && frequency.nCurValue > 0) {
@@ -309,6 +341,7 @@ private:
         if (code != MV_OK) { return sdk_error(ErrorCode::InvalidResource, "MV_CC_StartGrabbing", code); }
         grabbing_ = true;
         mode_ = mode;
+        controls_ = controls;
         return std::monostate{};
     }
 
@@ -375,7 +408,9 @@ private:
     std::atomic<std::uint64_t> close_generation_{};
     void* handle_{};
     bool open_{}, grabbing_{};
+    bool network_counters_{};
     CameraMode mode_{CameraMode::Single};
+    CameraCaptureControls controls_{};
     std::optional<std::uint64_t> frequency_;
     // Capture failure can initiate teardown before the owner explicitly finishes the lease.
     std::pair<int, const char*> close_failure_{MV_OK, ""};

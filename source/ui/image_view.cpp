@@ -188,7 +188,8 @@ core::Result<QImage> to_display_image(const core::ImageHandle& image)
 {
     if (image.format() == mono8) { return copy_rows(image, QImage::Format_Grayscale8); }
     if (image.format() == bgr8) { return copy_rows(image, QImage::Format_BGR888); }
-    return error(ErrorCode::UnsupportedPixelFormat, "Display supports UInt8 Mono and UInt8 BGR images.");
+    if (image.format() == PixelFormat{PixelDepth::UInt8, ChannelOrder::RGB}) { return copy_rows(image, QImage::Format_RGB888); }
+    return error(ErrorCode::UnsupportedPixelFormat, "Display supports UInt8 Mono, BGR and RGB images.");
 }
 
 ImageView::ImageView(QWidget* parent)
@@ -268,7 +269,7 @@ core::Result<std::monostate> ImageView::recolor_labels(const QList<QRgb>& palett
 core::Result<std::monostate> ImageView::set_overlays(
     const std::optional<core::RegionDefinition>& effective_region,
     const std::optional<core::RasterMask>& member_mask,
-    std::span<const BlobAnnotation> blobs)
+    std::span<const BlobAnnotation> blobs, bool append, bool bounds, bool centers)
 {
     if (!image_) {
         if (!effective_region && !member_mask && blobs.empty()) { return std::monostate{}; }
@@ -313,8 +314,8 @@ core::Result<std::monostate> ImageView::set_overlays(
         if (const auto* invalid = std::get_if<Diagnostic>(&checked)) { return *invalid; }
         const auto& b = blob.bounds;
         // Blob origins are pixel indices. The outline encloses the entire pixel footprint.
-        blob_bounds.addRect(b.x + pixel_edge, b.y + pixel_edge, b.width, b.height);
-        centroids.append({blob.centroid.x, blob.centroid.y});
+        if (bounds) { blob_bounds.addRect(b.x + pixel_edge, b.y + pixel_edge, b.width, b.height); }
+        if (centers) { centroids.append({blob.centroid.x, blob.centroid.y}); }
     }
 
     QPixmap mask;
@@ -323,13 +324,53 @@ core::Result<std::monostate> ImageView::set_overlays(
         if (const auto* invalid = std::get_if<Diagnostic>(&converted)) { return *invalid; }
         mask = std::get<QPixmap>(std::move(converted));
     }
+    if (append) {
+        inclusion.addPath(inclusion_item_->path());
+        exclusions.addPath(exclusions_item_->path());
+        blob_bounds.addPath(blob_bounds_item_->path());
+        centroids += blob_centroids_;
+        if (!mask.isNull()) {
+            auto* layer = scene()->addPixmap(mask);
+            layer->setOffset(pixel_edge,pixel_edge);
+            layer->setZValue(1);
+            extra_masks_.push_back(layer);
+        }
+    } else {
+        qDeleteAll(extra_masks_);
+        extra_masks_.clear();
+        mask_item_->setPixmap(mask);
+    }
     inclusion_item_->setPath(inclusion);
     exclusions_item_->setPath(exclusions);
     blob_bounds_item_->setPath(blob_bounds);
     blob_centroids_ = std::move(centroids);
-    mask_item_->setPixmap(mask);
     viewport()->update();
     return std::monostate{};
+}
+
+core::Result<std::monostate> ImageView::append_geometry(const DataValue& value)
+{
+    if (!image_) { return error(ErrorCode::InvalidImage,"Select an image before adding geometry."); }
+    const auto local = [&](const Point2D& p) -> std::optional<QPointF> {
+        if (p.unit != MeasurementUnit::Pixel) { return {}; }
+        if (p.coordinate_frame == image_->coordinate_frame()) { return QPointF(p.x,p.y); }
+        if (p.coordinate_frame == image_->root_frame()) { return QPointF(p.x-image_->origin_x(),p.y-image_->origin_y()); }
+        return {};
+    };
+    auto outline = blob_bounds_item_->path();
+    if (const auto* p = value.as_point2d()) {
+        if (auto xy = local(*p)) { blob_centroids_.append(*xy); viewport()->update(); return std::monostate{}; }
+    } else if (const auto* line = value.as_line2d()) {
+        const auto a = local(line->start), b = local(line->end);
+        if (a && b) { outline.moveTo(*a); outline.lineTo(*b); blob_bounds_item_->setPath(outline); return std::monostate{}; }
+    } else if (const auto* circle = value.as_circle2d()) {
+        if (auto xy = local(circle->center)) {
+            outline.addEllipse(*xy,circle->radius,circle->radius);
+            blob_bounds_item_->setPath(outline);
+            return std::monostate{};
+        }
+    }
+    return error(ErrorCode::CoordinateMismatch,"The graphic does not use the selected image's pixel frame.");
 }
 
 void ImageView::clear_image(bool retain_view)
@@ -582,6 +623,8 @@ QPointF ImageView::rectangle_point(const QPoint& viewport_position) const
 
 void ImageView::clear_overlays()
 {
+    qDeleteAll(extra_masks_);
+    extra_masks_.clear();
     mask_item_->setPixmap({});
     inclusion_item_->setPath({});
     exclusions_item_->setPath({});
@@ -614,6 +657,8 @@ void ImageView::describe_pixel(const std::optional<ImagePixel>& pixel)
     const auto& value = pixel->samples;
     description += pixel->order == ChannelOrder::Mono
         ? (labels_.isNull() ? tr(" · 灰度 %1") : tr(" · 类别 ID %1")).arg(static_cast<int>(value[0]))
+        : pixel->order == ChannelOrder::RGB
+        ? tr(" · R %1, G %2, B %3").arg(static_cast<int>(value[0])).arg(static_cast<int>(value[1])).arg(static_cast<int>(value[2]))
         : tr(" · B %1, G %2, R %3").arg(static_cast<int>(value[0])).arg(static_cast<int>(value[1])).arg(static_cast<int>(value[2]));
     emit pixel_changed(description);
 }

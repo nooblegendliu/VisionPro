@@ -3,6 +3,8 @@
 #include <visionpro/workflow/resolver.hpp>
 #include <visionpro/workflow/run.hpp>
 
+#include <string_view>
+
 namespace visionpro::workflow {
 
 enum class RunWaitTarget { Completion, Quiescence };
@@ -77,6 +79,11 @@ struct RunGroupCall {
 
 // A logical terminal status does not imply that callbacks, leases or workers
 // have exited. Pending is an accepted run which has not started yet.
+struct GroupLocalVariables {
+    core::ExecutionScopeId scope;
+    core::NodeId group;
+    std::vector<core::GlobalVariableEntry> variables;
+};
 struct RunProgress {
     ExecutionStatus status{ExecutionStatus::Pending};
     bool quiescent{false};
@@ -88,6 +95,9 @@ struct RunProgress {
     std::vector<RunGroupCall> groups{};
     // From first dispatch step to logical completion. Queuing and physical cleanup are excluded.
     std::optional<std::chrono::nanoseconds> elapsed{};
+    bool end_continuous{};
+    std::vector<core::GlobalVariableEntry> local_variables{};
+    std::vector<GroupLocalVariables> group_local_variables{};
 };
 struct RunWaitResult { RunWaitOutcome outcome; RunProgress progress; };
 
@@ -139,6 +149,10 @@ public:
         std::chrono::steady_clock::time_point deadline) const;
     [[nodiscard]] core::Result<RunCancelDisposition> cancel() const;
     [[nodiscard]] core::Result<std::optional<NodeResult>> lookup(const core::InvocationKey& invocation) const;
+    // Addresses a port of one exact call. A missing call yields nullopt; a published
+    // slot keeps its typed value, absence, or diagnostic independently of the handle.
+    [[nodiscard]] core::Result<std::optional<OutputSlot>> lookup_output(const core::InvocationKey& call,
+        std::string_view node_uuid, std::string_view output_id) const;
     // Root WorkflowTarget requests publish their complete public interface at logical completion.
     // Failed, cancelled and timed-out runs expose only typed absence at their data ports.
     [[nodiscard]] core::Result<WorkflowPublicResult> public_result() const;

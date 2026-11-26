@@ -544,6 +544,8 @@ void EditorRunTests::selects_each_iteration_of_the_same_node()
         const auto selected = panel.selected_invocation();
         QVERIFY(selected && selected->node == child && selected->scope == progress.iterations[i].scope);
         QVERIFY(panel.selected_iteration_index() == i);
+        QVERIFY(details.toPlainText().contains(QStringLiteral("作用域 %1 · 调用 %2 · 尝试次数 1")
+            .arg(selected->scope.value()).arg(selected->invocation.value())));
         QVERIFY(details.toPlainText().contains(QStringLiteral("value = %1").arg(10 + i)));
     }
 }

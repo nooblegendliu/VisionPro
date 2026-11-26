@@ -46,6 +46,11 @@ void frame_copy()
     check(first.image.frame && second.image.frame && first.image.frame->source == source
         && second.image.frame->sequence > first.image.frame->sequence && first.device_frame_number == 1
         && second.device_frame_number == 1, "Reset native counters must retain distinct published identities.");
+    info.enPixelType = PixelType_Gvsp_RGB8_Packed;
+    const auto rgb = take(mvs_detail::copy_frame(request, frame, {}));
+    check(rgb.image.image.format().order == ChannelOrder::RGB &&
+        rgb.image.image.copy_pixels() == std::vector<std::byte>{std::byte{31}, std::byte{0}, std::byte{19}},
+        "Packed RGB24 must retain its declared channel order and native bytes.");
     info.enPixelType = PixelType_Gvsp_Mono8;
     info.nExtendWidth = 3;
     const auto mono = take(mvs_detail::copy_frame(request, frame, {}));

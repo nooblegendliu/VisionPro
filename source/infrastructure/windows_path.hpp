@@ -7,9 +7,9 @@ namespace visionpro::infrastructure::detail {
 
 // Extended-length names disable Win32's slash and dot-segment normalization.
 // Keep ordinary spellings in domain/configuration values and use this only at I/O.
-inline std::filesystem::path windows_access_path(const std::filesystem::path& path)
+inline std::filesystem::path windows_access_path(const std::filesystem::path& path, bool force_extended = false)
 {
-    if (!path.is_absolute() || path.native().size() < 248) { return path; }
+    if (!path.is_absolute() || (!force_extended && path.native().size() < 248)) { return path; }
     auto normalized = path.lexically_normal().make_preferred().native();
     if (normalized.starts_with(LR"(\\?\)") || normalized.starts_with(LR"(\\.\)")) { return normalized; }
     if (normalized.starts_with(LR"(\\)")) { return LR"(\\?\UNC\)" + normalized.substr(2); }

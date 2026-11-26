@@ -209,6 +209,10 @@ void boundaries()
     auto handle = take(RunHandle::from_accepted(control));
     const auto key = result(handle.identity()).data().identity.invocation;
     check(!take(handle.lookup(key)), "missing exact current invocation remains absent");
+    const auto node_id = key.node.to_string();
+    check(!take(handle.lookup_output(key, node_id, "output")), "unpublished output has no record");
+    error(handle.lookup_output(key, uuid<NodeId>(2).to_string(), "output"), ErrorCode::ResultIdentityMismatch);
+    error(handle.lookup_output(key, node_id, "bad port"), ErrorCode::InvalidSchemaId);
     auto other = key; other.workflow_run = count<WorkflowRunId>(2);
     const auto prior = control->lookups;
     error(handle.lookup(other), ErrorCode::ResultIdentityMismatch);
@@ -217,6 +221,16 @@ void boundaries()
     check(control->lookups == prior, "outside run/node lookup is rejected before calling backend");
     control->record = result(handle.identity());
     const auto saved = *take(handle.lookup(key));
+    const auto slot = take(handle.lookup_output(key, node_id, "output"));
+    error(handle.lookup_output(key, node_id, "missing"), ErrorCode::UnknownTarget);
+    auto cancelled = saved.data();
+    cancelled.status = ExecutionStatus::Cancelled;
+    cancelled.judgement = Judgement::NotEvaluated;
+    cancelled.outputs.front().content = NotProduced{OutputAbsenceReason::Cancelled};
+    control->record = take(NodeResult::create(cancelled));
+    const auto absent = take(handle.lookup_output(key, node_id, "output"));
+    check(absent && std::get<NotProduced>(absent->content).reason == OutputAbsenceReason::Cancelled,
+        "absence from a cancelled call is retained in a published output");
     check(saved.data().judgement == Judgement::NG, "NG remains a successful technical result");
     auto wrong_run = handle.identity(); wrong_run.snapshot.snapshot = count<ConfigSnapshotId>(2);
     control->record = result(wrong_run);
@@ -231,11 +245,13 @@ void boundaries()
     wrong_scope.identity.invocation.scope = count<ExecutionScopeId>(1);
     control->record = take(NodeResult::create(wrong_scope));
     error(handle.lookup(key), ErrorCode::ResultIdentityMismatch);
+    error(handle.lookup_output(key, node_id, "output"), ErrorCode::ResultIdentityMismatch);
     control->record = result(handle.identity(), uuid<NodeId>(), 2);
     error(handle.lookup(key), ErrorCode::ResultIdentityMismatch);
     control->record = result(handle.identity(), uuid<NodeId>(), 1, true);
     check(std::holds_alternative<Diagnostic>(handle.lookup(key)), "schema-invalid backend output is rejected");
     control->record.reset();
+    check(slot && *std::get<DataValue>(slot->content).as_int64() == 12, "the copied SDK output retains its value after release");
     check(*std::get<DataValue>(saved.output(output_id())->content).as_int64() == 12, "returned immutable result owns its content independently");
 
     auto node_control = std::make_shared<ControlledRun>(request(7, true), 1);

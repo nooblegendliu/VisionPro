@@ -4,6 +4,7 @@
 #include "class_map_tool.hpp"
 #include "inspection.hpp"
 #include "integer_range.hpp"
+#include "image_output.hpp"
 #include "read_file.hpp"
 #include "threshold.hpp"
 
@@ -53,7 +54,13 @@ InputDescriptor input(std::string_view id, DataType type, std::vector<BindingSou
 }
 
 OutputDescriptor output(std::string_view id, DataType type, ValueSemantics semantics = {})
-{ return {key<OutputId>(id), std::string(id), std::move(type), semantics}; }
+{
+    OutputDescriptor port{key<OutputId>(id), std::string(id), type, semantics};
+    if (type == DataType::raster_mask()) { port.display_items = {key<SchemaId>("masks")}; }
+    if (type == DataType::region2d()) { port.display_items = {key<SchemaId>("regions")}; }
+    if (type == DataType::point2d() && semantics.unit == MeasurementUnit::Pixel) { port.display_items = {key<SchemaId>("points")}; }
+    return port;
+}
 
 const RegionCapabilities& region_capabilities()
 {
@@ -123,6 +130,7 @@ ToolDescriptor blob_descriptor()
     tool.inputs = {input("binary", DataType::image(), {BindingSourceKind::RunOutput, BindingSourceKind::PublicInput}, pixels)};
     tool.outputs = {output("count", integer), output("components", DataType::list(blob_component_type())),
         output("total_area_pixels", integer), output("largest_area_pixels", DataType::optional(integer))};
+    tool.outputs[1].display_items = {key<SchemaId>("bounds"), key<SchemaId>("centroids")};
     tool.resources = {{key<SchemaId>("mask"), ResourceKind::Mask, false}};
     tool.region_capabilities = region_capabilities();
     tool.image_formats = {mono8};
@@ -189,7 +197,7 @@ ToolDescriptor locate_descriptor()
     tool.outputs = {output("matched", DataType::boolean()), output("score", DataType::real()),
         std::move(position), std::move(transform)};
     tool.control_outputs = {{key<ControlOutputId>("matched"), "Matched"}, {key<ControlOutputId>("unmatched"), "Unmatched"}};
-    tool.image_formats = {mono8, {PixelDepth::UInt8, ChannelOrder::BGR}};
+    tool.image_formats = {mono8, {PixelDepth::UInt8, ChannelOrder::BGR}, {PixelDepth::UInt8, ChannelOrder::RGB}};
     return tool;
 }
 
@@ -205,7 +213,7 @@ ToolDescriptor color_mean_descriptor()
     tool.resources = {{key<SchemaId>("mask"), ResourceKind::Mask, false}};
     tool.region_capabilities = region_capabilities();
     tool.region_capabilities->valid_empty_output = false;
-    tool.image_formats = {{PixelDepth::UInt8, ChannelOrder::BGR}};
+    tool.image_formats = {{PixelDepth::UInt8, ChannelOrder::BGR}, {PixelDepth::UInt8, ChannelOrder::RGB}};
     return tool;
 }
 } // namespace
@@ -214,7 +222,7 @@ std::span<const core::ToolDescriptor> tool_descriptors()
 {
     static const std::array descriptors{read_file_descriptor(), threshold_descriptor(), blob_descriptor(), integer_range_descriptor(),
         fit_descriptor(), map_point_descriptor(), distance_descriptor(), locate_descriptor(), color_mean_descriptor(),
-        float_range_descriptor(), class_map_descriptor()};
+        float_range_descriptor(), class_map_descriptor(), image_output_descriptor()};
     return descriptors;
 }
 
@@ -224,7 +232,8 @@ std::vector<core::ToolRegistration> registrations()
         blob_registration(blob_descriptor()), integer_range_registration(integer_range_descriptor()),
         fit_registration(fit_descriptor()), map_point_registration(map_point_descriptor()), distance_registration(distance_descriptor()),
         locate_registration(locate_descriptor()), color_mean_registration(color_mean_descriptor()),
-        float_range_registration(float_range_descriptor()), class_map_registration(class_map_descriptor())};
+        float_range_registration(float_range_descriptor()), class_map_registration(class_map_descriptor()),
+        image_output_registration(image_output_descriptor())};
 }
 
 core::Result<std::monostate> validate_file_frame_origin(const core::Point2D& origin)

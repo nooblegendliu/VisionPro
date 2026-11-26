@@ -122,7 +122,7 @@ bool ControlSchedule::has_error_route(std::size_t index) const
 }
 
 void ControlSchedule::complete(std::size_t index, std::span<const core::ControlOutputId> selected,
-    std::optional<ControlCloseReason> failure)
+    std::optional<ControlCloseReason> failure, bool close_branch)
 {
     auto& source = states_[index];
     if (stopped_ || source.phase != Phase::Dispatched) { return; }
@@ -133,7 +133,7 @@ void ControlSchedule::complete(std::size_t index, std::span<const core::ControlO
     for (const auto edge : source.outgoing) {
         const auto& outlet = routes_[edge].outlet;
         const bool arrives = failure ? (source.error_output && source.error_output == outlet)
-            : (!outlet || std::ranges::find(selected, *outlet) != selected.end());
+            : (!close_branch && (!outlet || std::ranges::find(selected, *outlet) != selected.end()));
         settle_link(edge, arrives ? std::nullopt : std::optional{failure.value_or(ControlCloseReason::NotSelected)}, determined);
     }
     propagate(determined);

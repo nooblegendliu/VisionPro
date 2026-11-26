@@ -395,7 +395,27 @@ const ResourceReference* BasicValue<Domain>::as_resource_reference() const noexc
 template <ValueDomain Domain>
 Result<BasicValue<Domain>> BasicValue<Domain>::image(ImageFrame value) requires (Domain == ValueDomain::Data)
 {
-    return BasicValue{std::make_shared<const Node>(Node{DataType::image(), std::move(value)})};
+    if (value.acquisition && (!value.frame || value.acquisition->tick_frequency_hz == 0
+        || value.acquisition->strobe_channels.size() > 3 || !is_valid_utf8(value.acquisition->serial)
+        || !is_valid_utf8(value.acquisition->timestamp_source))) {
+        return failure(ErrorCode::InvalidImage, "Image acquisition metadata contains invalid source, text, clock or strobe data.");
+    }
+    if (value.acquisition) {
+        for (const auto& channel : value.acquisition->strobe_channels) {
+            const auto format = channel.format();
+            if (format.depth != PixelDepth::UInt8 || (format.order != ChannelOrder::Mono
+                && format.order != ChannelOrder::RGB && format.order != ChannelOrder::BGR)) {
+                return failure(ErrorCode::UnsupportedPixelFormat, "A strobe exposure requires an 8-bit Mono, RGB or BGR image.");
+            }
+            if (channel.coordinate_frame() != value.image.coordinate_frame() || channel.root_frame() != value.image.root_frame()
+                || channel.origin_x() != value.image.origin_x() || channel.origin_y() != value.image.origin_y()) {
+                return failure(ErrorCode::CoordinateMismatch, "Strobe exposures must use the sensor coordinate system and origin of this capture.");
+            }
+        }
+    }
+    // Copy the metadata containers before publication, including when a caller moved
+    // an ImageFrame but retained writable iterators into its strobe channel vector.
+    return BasicValue{std::make_shared<const Node>(Node{DataType::image(), value})};
 }
 
 template <ValueDomain Domain>

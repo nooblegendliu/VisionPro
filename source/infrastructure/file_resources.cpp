@@ -1,5 +1,6 @@
 #include "windows_path.hpp"
 #include <visionpro/infrastructure/file_resources.hpp>
+#include <visionpro/infrastructure/image_archive.hpp>
 #include <visionpro/infrastructure/camera.hpp>
 #include <visionpro/infrastructure/communication.hpp>
 #include <visionpro/workflow/execution_plan.hpp>
@@ -26,7 +27,8 @@ using namespace workflow;
 using Check = Result<std::monostate>;
 
 constexpr std::array resource_kinds{ResourceKind::Image, ResourceKind::Mask, ResourceKind::Template,
-    ResourceKind::Calibration, ResourceKind::Binary, ResourceKind::Device};
+    ResourceKind::Calibration, ResourceKind::Binary, ResourceKind::Device, ResourceKind::DirectorySequence,
+    ResourceKind::OutputPath};
 
 Diagnostic error(ErrorCode code, std::string message)
 { return {code, Severity::Error, {}, std::move(message)}; }
@@ -312,6 +314,29 @@ Result<std::vector<fs::path>> detail::sequence_files(const fs::path& directory, 
     return files;
 }
 
+Result<std::vector<fs::path>> image_directory_files(const fs::path& directory)
+{
+    if (!directory.is_absolute()) { return error(ErrorCode::InvalidPath, "Subscribed image directory must be an absolute path."); }
+    std::error_code io;
+    if (!fs::is_directory(detail::windows_access_path(directory), io) || io) {
+        return error(ErrorCode::ResourceNotFound, "Subscribed image directory is unavailable.");
+    }
+    auto listed = detail::sequence_files(directory, "*");
+    if (auto* failure = std::get_if<Diagnostic>(&listed)) { return *failure; }
+    auto files = std::get<std::vector<fs::path>>(std::move(listed));
+    std::erase_if(files, [](const fs::path& file) {
+        auto extension = file.extension().wstring();
+        std::ranges::transform(extension, extension.begin(), [](wchar_t ch) {
+            return ch >= L'A' && ch <= L'Z' ? static_cast<wchar_t>(ch - L'A' + L'a') : ch;
+        });
+        return extension != L".bmp" && extension != L".png" && extension != L".jpg" && extension != L".jpeg"
+            && extension != L".tif" && extension != L".tiff" && extension != L".pgm"
+            && extension != L".ppm" && extension != L".webp";
+    });
+    std::ranges::sort(files);
+    return files;
+}
+
 Check detail::copy_resource_file(const fs::path& source, const fs::path& destination, std::optional<std::string_view> digest)
 {
     const auto spelling = source.generic_u8string();
@@ -523,6 +548,21 @@ Check verify_selected_resource(const ResourceReference& ref, const Solution& sna
         return std::monostate{};
     }
     const auto captured_file = file_declaration(entry.definition);
+    if (ref.kind == ResourceKind::OutputPath) {
+        const auto* before = std::get_if<OutputPathResource>(&entry.definition.location);
+        const auto* now = std::get_if<OutputPathResource>(&current->location);
+        if (!before || !now || *before != *now) {
+            return error(ErrorCode::ResourceVersionMismatch, "Output directory differs from the captured declaration.");
+        }
+        if (snapshot.image_archive) { return std::monostate{}; }
+    }
+    if (ref.kind == ResourceKind::DirectorySequence) {
+        const auto* before = std::get_if<ImageSequenceResource>(&entry.definition.location);
+        const auto* now = std::get_if<ImageSequenceResource>(&current->location);
+        if (!before || !now || *before != *now) {
+            return error(ErrorCode::ResourceVersionMismatch, "Image sequence differs from the captured declaration.");
+        }
+    }
     const auto current_file = file_declaration(*current);
     if (current->kind != ref.kind || captured_file.has_value() != current_file.has_value()
         || (captured_file && !same_file(*captured_file, *current_file))) {
@@ -717,7 +757,7 @@ template<class Inspect> Check inspect_node(const Node& node, const PreparedTool*
     node_location.workflow = workflow;
     node_location.node = node.id;
     if (tool) { node_location.tool = tool->id; }
-    if (prepared) {
+    if (prepared && !tool->message_filter) {
         for (const auto& slot : prepared->configuration().data().resources) {
             if (auto checked = inspect(slot.resource, node_location); std::holds_alternative<Diagnostic>(checked)) { return checked; }
         }
@@ -774,6 +814,8 @@ struct FileResourceProvider::Storage {
     ResourcePaths paths;
     ResourceEntries entries;
     std::vector<Diagnostic> diagnostics;
+    std::shared_ptr<ImageArchive> archive;
+    std::optional<ImageArchivePolicy> archive_policy;
 };
 
 struct FileResourceLease::FilePin {
@@ -798,12 +840,12 @@ FileResourceLease::FileResourceLease(core::ResourceReference reference, fs::path
 
 FileResourceProvider::FileResourceProvider(std::shared_ptr<const Storage> storage) : storage_(std::move(storage)) {}
 
-Result<std::shared_ptr<const std::vector<std::byte>>> read_file_bytes(const fs::path& absolute_file)
+Result<std::shared_ptr<const std::vector<std::byte>>> read_file_bytes(const fs::path& absolute_file, std::optional<std::string_view> digest)
 {
     try {
         const auto spelling = absolute_file.u8string();
         const ResourcePath path{PathBase::Absolute, std::string(spelling.begin(), spelling.end()), {}};
-        auto contents = read_file({path, {}, {}, false, false}, {});
+        auto contents = read_file({path, digest, {}, false, false}, {});
         if (auto* failure = std::get_if<Diagnostic>(&contents)) { return std::move(*failure); }
         return std::get<FileContents>(std::move(contents)).bytes;
     } catch (const fs::filesystem_error&) {
@@ -842,8 +884,53 @@ Result<std::shared_ptr<const FileResourceLease>> FileResourceProvider::read_reso
     }
 }
 
+namespace {
+std::optional<unsigned> image_retention_days(const Node& node)
+{
+    const auto retention = std::ranges::find_if(node.bindings, [](const Binding& binding) {
+        const auto* parameter = std::get_if<ParameterId>(&binding.target);
+        return parameter && parameter->text() == "retention_days";
+    });
+    if (retention == node.bindings.end()) { return 0; }
+    if (retention->sources.size() == 1) {
+        const auto* value = std::get_if<ConfigValue>(&retention->sources.front());
+        const auto* count = value ? value->as_int64() : nullptr;
+        if (count && *count >= 0 && *count <= 500) { return static_cast<unsigned>(*count); }
+    }
+    return {}; // A bound runtime value is recovered from the last successful local save.
+}
+
+void configure_image_maintenance(const Solution& solution, const ResourcePaths& paths, ImageArchive& archive)
+{
+    std::map<ResourceId, fs::path> directories;
+    for (const auto& resource : solution.resources) {
+        const auto* output = std::get_if<OutputPathResource>(&resource.location);
+        if (!output) { continue; }
+        auto resolved = absolute_path(output->directory, paths, false);
+        if (const auto* directory = std::get_if<fs::path>(&resolved)) {
+            directories.emplace(resource.id, *directory);
+            archive.register_output_directory(*directory);
+        }
+    }
+    std::vector<ImageRetentionLocation> locations;
+    for (const auto& flow : solution.workflows) {
+        for (const auto& node : flow.nodes) {
+            const auto* tool = std::get_if<ToolConfiguration>(&node.configuration);
+            if (!tool || tool->type.text() != "visionpro.image.output") { continue; }
+            archive.register_output_node(node.id, image_retention_days(node));
+            for (const auto& binding : node.resources) {
+                const auto directory = directories.find(binding.resource.id);
+                if (directory != directories.end()) { locations.push_back({node.id, directory->second}); }
+            }
+        }
+    }
+    archive.set_retention_locations(locations);
+}
+} // namespace
+
 Result<std::shared_ptr<FileResourceProvider>> FileResourceProvider::create(const Solution& solution,
-    const std::optional<fs::path>& solution_directory, std::span<const NamedResourceRoot> roots)
+    const std::optional<fs::path>& solution_directory, std::span<const NamedResourceRoot> roots,
+    std::shared_ptr<ImageArchivePool> archives)
 {
     const auto fail = [&](Diagnostic diagnostic) -> Result<std::shared_ptr<FileResourceProvider>> {
         diagnostic.location.solution = solution.id;
@@ -854,7 +941,15 @@ Result<std::shared_ptr<FileResourceProvider>> FileResourceProvider::create(const
             const auto* invalid = std::get_if<Diagnostic>(&checked)) { return fail(*invalid); }
         auto paths = resource_paths(solution_directory, roots);
         if (auto* invalid = std::get_if<Diagnostic>(&paths)) { return fail(std::move(*invalid)); }
-        auto storage = std::make_shared<Storage>(Storage{solution.id, std::get<ResourcePaths>(std::move(paths)), {}, {}});
+        auto storage = std::make_shared<Storage>(Storage{solution.id, std::get<ResourcePaths>(std::move(paths)), {}, {}, {}, solution.image_archive});
+        std::optional<ArchivePackagePolicy> policy;
+        if (solution.image_archive) {
+            auto dir = absolute_path(solution.image_archive->directory, storage->paths, false);
+            if (auto* failure = std::get_if<Diagnostic>(&dir)) { return fail(*failure); }
+            policy = ArchivePackagePolicy{std::get<fs::path>(std::move(dir)), solution.image_archive->images_per_file};
+        }
+        storage->archive = archives ? archives->writer(policy) : std::make_shared<ImageArchive>(std::move(policy));
+        if (!solution.image_archive) { configure_image_maintenance(solution, storage->paths, *storage->archive); }
         const auto report = [&](Diagnostic failure, const ResourceId& resource) {
             failure.location.solution = solution.id;
             failure.location.resource = resource;
@@ -862,6 +957,7 @@ Result<std::shared_ptr<FileResourceProvider>> FileResourceProvider::create(const
         };
         for (const auto& resource : solution.resources) {
             auto& entry = storage->entries.emplace(resource.id, Entry{resource, {}}).first->second;
+            if (resource.kind == ResourceKind::OutputPath && solution.image_archive) { continue; }
             const auto* device = std::get_if<DeviceResource>(&resource.location);
             if (device && is_communication_adapter(device->adapter)) {
                 entry.communication = open_communication(resource);
@@ -887,10 +983,22 @@ std::span<const Diagnostic> FileResourceProvider::diagnostics() const noexcept {
 
 std::span<const ResourceKind> FileResourceProvider::kinds() const noexcept { return resource_kinds; }
 
+std::shared_ptr<core::ImageArchiveWriter> FileResourceProvider::image_archive_writer() const
+{ return storage_->archive_policy ? storage_->archive : nullptr; }
+
+std::shared_ptr<core::ImageArchiveWriter> FileResourceProvider::image_storage_writer() const
+{ return storage_->archive; }
+
+Check FileResourceProvider::flush_image_archive() const
+{ return storage_->archive->flush(); }
+
 Check FileResourceProvider::preflight(const ExecutionPlan& plan) const
 {
     const auto& request = plan.request();
     const auto& solution = request.snapshot().solution();
+    if (solution.image_archive != storage_->archive_policy) {
+        return error(ErrorCode::ResourceVersionMismatch, "Image archive policy differs from the captured snapshot.");
+    }
     if (solution.id != storage_->solution) {
         auto failure = error(ErrorCode::InvalidResource, "File resource provider belongs to another solution.");
         failure.location.solution = solution.id;
@@ -957,6 +1065,43 @@ Result<std::shared_ptr<const ResourceLease>> FileResourceProvider::acquire(
         const auto found = find_entry(storage_->entries, binding.resource);
         if (const auto* invalid = std::get_if<Diagnostic>(&found)) { return fail(*invalid); }
         const auto& entry = *std::get<const Entry*>(found);
+        if (const auto* out = std::get_if<OutputPathResource>(&entry.definition.location)) {
+            fs::path directory;
+            if (!storage_->archive_policy) {
+                auto resolved = absolute_path(out->directory, storage_->paths, false);
+                if (auto* failure = std::get_if<Diagnostic>(&resolved)) { return fail(*failure); }
+                directory = std::get<fs::path>(std::move(resolved));
+            }
+            return std::shared_ptr<const ResourceLease>(std::make_shared<ImageOutputLease>(
+                binding.resource, std::move(directory), storage_->archive, out->capacity_bytes));
+        }
+        if (const auto* sequence = std::get_if<ImageSequenceResource>(&entry.definition.location)) {
+            std::vector<fs::path> files;
+            std::vector<std::string> digests;
+            if (const auto* dir = std::get_if<DirectorySelection>(&sequence->selection)) {
+                auto directory = existing_path(dir->directory, storage_->paths, false, true);
+                if (auto* issue = std::get_if<Diagnostic>(&directory)) { return fail(*issue); }
+                auto listed = detail::sequence_files(std::get<fs::path>(directory), dir->filename_pattern);
+                if (auto* issue = std::get_if<Diagnostic>(&listed)) { return fail(*issue); }
+                files = std::get<std::vector<fs::path>>(std::move(listed));
+                std::ranges::sort(files);
+                if (sequence->sort == SequenceSort::NameDescending) { std::ranges::reverse(files); }
+            } else {
+                const auto& paths = std::get<std::vector<ResourcePath>>(sequence->selection);
+                const bool embedded = !sequence->embedded_sha256.empty();
+                for (std::size_t i = 0; i < paths.size(); ++i) {
+                    auto selected = existing_path(paths[i], storage_->paths, embedded);
+                    if (auto* issue = std::get_if<Diagnostic>(&selected)) {
+                        if (!embedded && sequence->missing == SequenceMissing::Skip && issue->code == ErrorCode::ResourceNotFound) { continue; }
+                        return fail(*issue);
+                    }
+                    files.push_back(std::get<fs::path>(std::move(selected)));
+                    if (embedded) { digests.push_back(sequence->embedded_sha256.at(i)); }
+                }
+            }
+            return std::shared_ptr<const ResourceLease>(std::make_shared<FileSequenceLease>(
+                binding.resource, std::move(files), sequence->initial_index, std::move(digests)));
+        }
         if (binding.resource.kind == ResourceKind::Device) {
             if (entry.communication) {
                 if (const auto* failure = std::get_if<Diagnostic>(&*entry.communication)) { return fail(*failure); }

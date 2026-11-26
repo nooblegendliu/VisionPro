@@ -11,6 +11,10 @@ VisionPro 是一个采用 C++20、Qt、OpenCV 和 CMake 的桌面视觉算法软
 
 ## 当前状态
 
+采集工具箱使用「图像源」统一读取本地图像、采集相机帧或接收 SDK 图像。双击节点设置来源，单击节点后在工作台右上导入本地图片、查看当前图和模块结果，右下可回看历史。结果表可将本轮输出绑定到全局或局部变量，运行详情记录作用域和尝试次数。早期方案中的三个采集工具会在加载时迁移，保存后写入新工具类型。[参数与工作台设计](docs/design/image-origin-node.md)
+
+「输出图像」可将图像源或处理模块的图像与前序检测标记合成，发布给下游和工作台，并按 OK／NG 分别保存原图和渲染图。可选择本地目录、带断线补传的 FTP，或启用全方案的多节点 `.dat` 存图。工作台和 CLI 均可找回包内图像。[输出图像设计与逐项验收](docs/design/image-output-node.md#8-功能验收与版本核对)
+
 工作台顶栏运行或取消整方案，流程页使用 `F5` 单次运行，模块配置窗口可单独调试所显示的模块。方案总览可定位最近一次方案运行的子流程。右侧可切换模块图像、流程图像和完整输出，锁定历史后可在同一迭代内比较不同模块。[工作台操作](docs/architecture.md#42-参考-visionmaster-的桌面工作区改版方案) · [工作台验收](docs/ui-workbench-acceptance.md)
 
 方案编排支持从显式入口运行多条流程，并追溯每条跨流程端口映射。可用 `run-solution` 运行磁盘样例，核对上游输出 6、9 以及失败时下游的启动记录。[A→B 样例](samples/f3-solution-graph/solution.json) · [复现命令](docs/development.md#1-当前阶段)
@@ -199,6 +203,7 @@ S3.9 在 Windows x64、MSVC 19.51、CMake/CTest 4.4.0 环境完成 Release 验�
 - [需求与阶段验收](docs/requirements.md)
 - [VisionPro 框架与流程设计修复方案](docs/visionmaster-alignment-plan.md)（方案级编排、运行生命周期、事件分派和旧方案迁移）
 - [架构设计](docs/architecture.md)
+- [图像源节点设计与交互原型](docs/design/image-origin-node.md)（三个采集入口的替换方案、配置界面、输出与迁移验收）
 - [参考 VisionMaster 的桌面工作区改版方案](docs/architecture.md#42-参考-visionmaster-的桌面工作区改版方案)
 - [VisionMaster 模块使用参考](docs/Manual/VisionMaster-模块使用参考.md)（按官方 15 组整理 164 个节点，含输入输出、配置、行为和重开发验证样例）
 - 海康 VisionMaster 2D 节点配置手册（V4.4.0，2026 年 5 月维护版，15 类、164 个模块）：[可检索网页版](docs/Manual/VisionMaster-2D-节点配置手册.html) · [打印版 PDF](docs/Manual/VisionMaster-2D-节点配置手册.pdf)

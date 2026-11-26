@@ -1,6 +1,8 @@
 #include "run_image.hpp"
 
 #include "image_panel.hpp"
+#include "image_source_fields.hpp"
+#include "toolbox_catalog.hpp"
 #include "class_palette.hpp"
 
 #include <visionpro/core/schema_id_factory.hpp>
@@ -219,8 +221,9 @@ const OutputSlot* display_output(const NodeResult& result)
 Result<QImage> sample_thumbnail(const ImageHandle& image, const RasterMask* mask, const ClassPalette* palette)
 {
     const bool mono = image.format() == PixelFormat{PixelDepth::UInt8, ChannelOrder::Mono};
-    if (!mono && image.format() != PixelFormat{PixelDepth::UInt8, ChannelOrder::BGR}) {
-        return issue(ErrorCode::UnsupportedPixelFormat, "Preview supports Mono8 and BGR8 images.");
+    const bool rgb = image.format() == PixelFormat{PixelDepth::UInt8, ChannelOrder::RGB};
+    if (!mono && !rgb && image.format() != PixelFormat{PixelDepth::UInt8, ChannelOrder::BGR}) {
+        return issue(ErrorCode::UnsupportedPixelFormat, "Preview supports Mono8, BGR8 and RGB24 images.");
     }
     if (image.width() > (std::numeric_limits<int>::max)() || image.height() > (std::numeric_limits<int>::max)()) {
         return issue(ErrorCode::SizeOverflow, "Preview dimensions exceed the display range.");
@@ -255,8 +258,8 @@ Result<QImage> sample_thumbnail(const ImageHandle& image, const RasterMask* mask
                 const auto gray = std::to_integer<std::uint8_t>(pixels[sx]);
                 color = palette ? class_color(*palette, gray).rgb() : qRgb(gray, gray, gray);
             } else {
-                const auto* bgr = pixels.data() + sx * 3;
-                color = qRgb(std::to_integer<int>(bgr[2]), std::to_integer<int>(bgr[1]), std::to_integer<int>(bgr[0]));
+                const auto* channels = pixels.data() + sx * 3;
+                color = qRgb(std::to_integer<int>(channels[rgb ? 0 : 2]), std::to_integer<int>(channels[1]), std::to_integer<int>(channels[rgb ? 2 : 0]));
             }
             if (mask) {
                 const auto value = std::to_integer<std::uint8_t>(members[sx]);
@@ -293,11 +296,21 @@ std::vector<WorkspaceImageSource> workspace_image_sources(const RunHandle& run, 
             if (referenced && &slot != referenced) { continue; }
             const auto* value = std::get_if<DataValue>(&slot.content);
             if (value && (value->as_image() || value->as_raster_mask() || value->type() == class_map_type())) {
-                sources.push_back({result.identity, slot.id, name + QStringLiteral(" · ") + QString::fromUtf8(slot.id.text()), upstream});
+                auto channel = QString::fromUtf8(slot.id.text());
+                if (is_image_source(node)) {
+                    channel = display_field(channel);
+                    const auto* filename = record.output(source_key<OutputId>("file_name"));
+                    const auto* file_value = filename ? std::get_if<DataValue>(&filename->content) : nullptr;
+                    if (source_flag(*node, "show_name", true) && file_value && file_value->as_string()) {
+                        channel += QStringLiteral(" · ") + QString::fromUtf8(*file_value->as_string());
+                    }
+                }
+                sources.push_back({result.identity, slot.id, name + QStringLiteral(" · ") + channel, upstream});
             }
         }
     };
     append(selected, nullptr, false);
+    if (is_image_output(find_node(*flow, identity.invocation.node))) { return sources; }
     if (!sources.empty()) { return sources; }
     const auto inspected = run.inspect();
     const auto* progress = std::get_if<RunProgress>(&inspected);

@@ -1,20 +1,27 @@
 #include "background_result.hpp"
 #include "camera_editor.hpp"
 #include "control_scene.hpp"
+#include "data_type_text.hpp"
 #include "editor_inspector.hpp"
 #include "editor_window.hpp"
+#include "image_source_fields.hpp"
 #include "endpoint_editor.hpp"
 #include "run_controller.hpp"
 #include "run_panel.hpp"
 
 #include <visionpro/core/shared_data.hpp>
+#include <visionpro/core/id_factory.hpp>
 #include <visionpro/infrastructure/camera.hpp>
 
+#include <QComboBox>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QLabel>
+#include <QFormLayout>
+#include <QLineEdit>
 #include <QMenu>
 #include <QPushButton>
+#include <QSignalBlocker>
 #include <QTreeWidget>
 #include <QVBoxLayout>
 
@@ -59,11 +66,11 @@ public:
 class ResourceDialog final : public QDialog {
 public:
     ResourceDialog(QWidget* parent, ControlGraphModel& model, ControlScene& scene, EditorInspector& inspector,
-        RunController& controller, bool editable)
-        : QDialog(parent), model_(model), scene_(scene), inspector_(inspector), controller_(controller), editable_(editable)
+        RunController& controller, bool editable, bool cameras_only)
+        : QDialog(parent), model_(model), scene_(scene), inspector_(inspector), controller_(controller), editable_(editable), cameras_only_(cameras_only)
     {
-        setObjectName(QStringLiteral("solutionResourcesDialog"));
-        setWindowTitle(tr("方案资源 · %1").arg(text(model_.draft().name)));
+        setObjectName(cameras_only ? QStringLiteral("cameraManagementDialog") : QStringLiteral("solutionResourcesDialog"));
+        setWindowTitle((cameras_only ? tr("全局相机管理 · %1") : tr("方案资源 · %1")).arg(text(model_.draft().name)));
         setWindowModality(Qt::WindowModal);
         setAttribute(Qt::WA_DeleteOnClose);
         auto* layout = new QVBoxLayout(this);
@@ -92,7 +99,11 @@ public:
         menu->addAction(tr("相机…"), this, [this] { save_device(edit_camera_device(this)); });
         menu->addAction(tr("TCP 连接…"), this, [this] { save_device(edit_endpoint(this, "visionpro.tcp", nullptr)); });
         menu->addAction(tr("Modbus TCP 连接…"), this, [this] { save_device(edit_endpoint(this, "visionpro.modbus.tcp", nullptr)); });
-        create->setMenu(menu);
+        if (cameras_only) {
+            create->setText(tr("添加相机…"));
+            create->setObjectName(QStringLiteral("addManagedCamera"));
+            connect(create, &QPushButton::clicked, this, [this] { save_device(edit_camera_device(this)); });
+        } else { create->setMenu(menu); }
         create->setEnabled(editable_);
         edit_ = buttons->addButton(tr("编辑定义…"), QDialogButtonBox::ActionRole);
         edit_->setObjectName(QStringLiteral("editResourceDefinition"));
@@ -129,6 +140,9 @@ private:
             }
             for (const auto& node : flow.nodes) {
                 const auto path = flow_name + QStringLiteral(" / ") + text(node.name);
+                for (const auto& mapping : node.result_variables) {
+                    if (mapping.scope == VariableScope::Global) { references[mapping.variable] << path; }
+                }
                 for (const auto& slot : node.resources) { references[slot.resource.id] << path; }
                 if (const auto* tool = std::get_if<ToolConfiguration>(&node.configuration)) {
                     for (const auto& id : tool->shared_targets) { std::visit([&](auto key) { references[key] << path; }, id); }
@@ -171,6 +185,7 @@ private:
         auto* queues = group(tr("数据队列"));
         auto* triggers = group(tr("流程触发"));
         auto* files = group(tr("其他方案资源"));
+        if (cameras_only_) { for (auto* item : {endpoints, variables, queues, triggers, files}) { item->setHidden(true); } }
         for (const auto& resource : draft.resources) {
             const bool endpoint = matches_endpoint(resource, "visionpro.tcp") || matches_endpoint(resource, "visionpro.modbus.tcp");
             auto* section = is_camera_device(resource) ? cameras : endpoint ? endpoints : files;
@@ -285,6 +300,7 @@ private:
     EditorInspector& inspector_;
     RunController& controller_;
     bool editable_;
+    bool cameras_only_;
     QLabel* session_{};
     QLabel* capability_{};
     QTreeWidget* tree_{};
@@ -294,14 +310,146 @@ private:
 };
 } // namespace
 
-void EditorWindow::show_solution_resources()
+void EditorWindow::show_solution_resources(bool cameras_only)
 {
-    if (auto* dialog = findChild<QDialog*>(QStringLiteral("solutionResourcesDialog")); dialog && dialog->isVisible()) {
+    const auto name = cameras_only ? QStringLiteral("cameraManagementDialog") : QStringLiteral("solutionResourcesDialog");
+    if (auto* dialog = findChild<QDialog*>(name); dialog && dialog->isVisible()) {
         dialog->raise();
         dialog->activateWindow();
         return;
     }
-    auto* dialog = new ResourceDialog(this, *model_, *scene_, *inspector_, *run_controller_, writable());
+    auto* dialog = new ResourceDialog(this, *model_, *scene_, *inspector_, *run_controller_, writable(), cameras_only);
     dialog->show();
+}
+
+namespace {
+ConfigValue variable_initial_value(const DataType& type)
+{
+    switch (type.kind()) {
+    case TypeKind::Bool: return ConfigValue::boolean(false);
+    case TypeKind::Int64: return ConfigValue::integer(0);
+    case TypeKind::Float64: return std::get<ConfigValue>(ConfigValue::real(0));
+    case TypeKind::String: return std::get<ConfigValue>(ConfigValue::string(""));
+    case TypeKind::Optional: return ConfigValue::none(*type.element_type());
+    default: return ConfigValue::none(type);
+    }
+}
+} // namespace
+
+void EditorWindow::map_source_variable(WorkflowId flow_id, NodeId source_id, OutputId port, QString field_name)
+{
+    if (!writable() || busy_) { return; }
+    const auto* flow = find_workflow(draft(), flow_id);
+    const auto* source = flow ? find_node(*flow, source_id) : nullptr;
+    if (!is_image_source(source) && !is_image_output(source)) { show_status(tr("当前草稿中没有对应的图像节点")); return; }
+    const auto* descriptor = registry_.find_descriptor(std::get<ToolConfiguration>(source->configuration).type);
+    if (!descriptor) { show_status(tr("图像工具描述缺失")); return; }
+    const auto projected = specialize_tool(*descriptor, *source);
+    const auto field = std::ranges::find(projected.outputs, port, &OutputDescriptor::id);
+    if (field == projected.outputs.end()) { show_status(tr("当前模块未声明此输出")); return; }
+
+    const auto mappings = source->result_variables;
+    const auto existing = std::ranges::find(mappings, port, &ResultVariableBinding::output);
+    const auto globals = draft().variables;
+    const auto locals = local_variable_definitions(*flow, source_id);
+    const auto containment = std::ranges::find(flow->containment, source_id, &Containment::child);
+    const auto* group = containment == flow->containment.end() ? nullptr : find_node(*flow, containment->parent);
+    QDialog dialog(this);
+    dialog.setObjectName(QStringLiteral("resultVariableDialog"));
+    dialog.setWindowTitle(tr("结果变量映射"));
+    auto* form = new QFormLayout(&dialog);
+    auto* result_label = new QLabel(tr("%1 · %2").arg(field_name, type_text(field->type)), &dialog);
+    result_label->setObjectName(QStringLiteral("resultVariableField"));
+    result_label->setTextFormat(Qt::PlainText);
+    form->addRow(tr("结果"), result_label);
+    auto* scope = new QComboBox(&dialog);
+    scope->setObjectName(QStringLiteral("resultVariableScope"));
+    scope->addItem(tr("全局变量 · %1").arg(text(draft().name)), static_cast<int>(VariableScope::Global));
+    scope->addItem(group ? tr("组局部变量 · %1").arg(text(group->name)) : tr("流程局部变量 · %1").arg(text(flow->name)),
+        static_cast<int>(VariableScope::Local));
+    if (existing != mappings.end()) { scope->setCurrentIndex(scope->findData(static_cast<int>(existing->scope))); }
+    form->addRow(tr("写入范围"), scope);
+    auto* target = new QComboBox(&dialog);
+    target->setObjectName(QStringLiteral("resultVariableTarget"));
+    form->addRow(tr("目标变量"), target);
+    auto* name = new QLineEdit(field_name, &dialog);
+    name->setObjectName(QStringLiteral("resultVariableName"));
+    form->addRow(tr("变量名称"), name);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    form->addRow(buttons);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    const auto create = QStringLiteral("new");
+    const auto update_name = [&] {
+        const bool creating = target->currentData().toString() == create;
+        form->setRowVisible(name, creating);
+        buttons->button(QDialogButtonBox::Ok)->setEnabled(!creating || !name->text().trimmed().isEmpty());
+    };
+    const auto selected_scope = [&] { return static_cast<VariableScope>(scope->currentData().toInt()); };
+    const auto populate = [&] {
+        const QSignalBlocker guard(target);
+        target->clear();
+        target->addItem(tr("不绑定"), QString{});
+        const auto chosen_scope = selected_scope();
+        const auto& candidates = chosen_scope == VariableScope::Global ? globals : locals;
+        for (const auto& variable : candidates) {
+            const bool occupied = std::ranges::any_of(mappings, [&](const auto& binding) {
+                return binding.output != port && binding.scope == chosen_scope && binding.variable == variable.id;
+            });
+            if (!occupied && result_variable_compatible(field->type, variable.type)) {
+                const auto id = text(variable.id.to_string());
+                target->addItem(tr("%1 · %2").arg(text(variable.name), type_text(variable.type)), id);
+                target->setItemData(target->count()-1, id, Qt::ToolTipRole);
+            }
+        }
+        target->addItem(tr("新建变量…"), create);
+        if (existing != mappings.end() && existing->scope == chosen_scope) {
+            target->setCurrentIndex(std::max(0, target->findData(text(existing->variable.to_string()))));
+        }
+        update_name();
+    };
+    connect(scope, &QComboBox::currentIndexChanged, &dialog, populate);
+    connect(target, &QComboBox::currentIndexChanged, &dialog, update_name);
+    connect(name, &QLineEdit::textChanged, &dialog, update_name);
+    populate();
+    if (dialog.exec() != QDialog::Accepted) { return; }
+    const auto choice = target->currentData().toString();
+    const auto variable_scope = selected_scope();
+    if ((choice.isEmpty() && existing == mappings.end()) || (existing != mappings.end()
+        && variable_scope == existing->scope && choice == text(existing->variable.to_string()))) { return; }
+
+    scene_->edit_draft(tr("配置图像结果变量映射"), [&](Solution& candidate) -> Result<std::monostate> {
+        auto current_flow = std::ranges::find(candidate.workflows, flow_id, &Workflow::id);
+        if (current_flow == candidate.workflows.end()) { return Diagnostic{ErrorCode::UnknownTarget, Severity::Error, {}, "流程不存在。"}; }
+        auto current = std::ranges::find(current_flow->nodes, source_id, &Node::id);
+        if (current == current_flow->nodes.end()) { return Diagnostic{ErrorCode::UnknownTarget, Severity::Error, {}, "图像源不存在。"}; }
+        std::erase_if(current->result_variables, [&](const auto& binding) { return binding.output == port; });
+        if (choice.isEmpty()) { return std::monostate{}; }
+        auto* definitions = &candidate.variables;
+        if (variable_scope == VariableScope::Local) {
+            definitions = &current_flow->local_variables;
+            const auto parent = std::ranges::find(current_flow->containment, source_id, &Containment::child);
+            if (parent != current_flow->containment.end()) {
+                const auto owner = std::ranges::find(current_flow->nodes, parent->parent, &Node::id);
+                auto* container = owner == current_flow->nodes.end() ? nullptr : std::get_if<GroupConfiguration>(&owner->configuration);
+                if (!container) { return Diagnostic{ErrorCode::UnknownTarget, Severity::Error, {}, "所属组不存在。"}; }
+                definitions = &container->local_variables;
+            }
+        }
+        auto id = choice == create ? IdFactory::generate<VariableId>() : IdFactory::parse<VariableId>(choice.toStdString());
+        if (const auto* issue = std::get_if<Diagnostic>(&id)) { return *issue; }
+        const auto variable = std::get<VariableId>(id);
+        if (choice == create) {
+            const auto initial = variable_initial_value(field->type);
+            definitions->push_back({variable, name->text().trimmed().toStdString(), initial.type(), initial});
+        } else {
+            const auto definition = std::ranges::find(*definitions, variable, &GlobalVariableDefinition::id);
+            if (definition == definitions->end() || !result_variable_compatible(field->type, definition->type)) {
+                return Diagnostic{ErrorCode::UnknownTarget, Severity::Error, {}, "目标变量已更改，请重新选择。"};
+            }
+        }
+        current->result_variables.push_back({port, variable_scope, variable});
+        return std::monostate{};
+    });
 }
 } // namespace visionpro::ui

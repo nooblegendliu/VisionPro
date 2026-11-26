@@ -43,6 +43,22 @@ template<class Target> const BindingSource* single_source(const Node& node, std:
     return source;
 }
 
+bool is_local_image_source(const Node& node)
+{
+    if (is_tool(node, "visionpro.image.read_file")) { return true; }
+    if (!is_tool(node, "visionpro.image.source")) { return false; }
+    const auto source = single_source<ParameterId>(node, "source_type");
+    if (!source) {
+        // Local is the descriptor default when there is no explicit selection.
+        return std::ranges::none_of(node.bindings, [](const Binding& binding) {
+            const auto* id = std::get_if<ParameterId>(&binding.target);
+            return id && id->text() == "source_type";
+        });
+    }
+    const auto* value = std::get_if<ConfigValue>(source);
+    return value && value->as_enum() && value->as_enum()->text() == "Local";
+}
+
 Result<std::optional<NodeId>> scope_of(const Workflow& flow, const Node& node)
 {
     std::optional<NodeId> scope;
@@ -94,7 +110,7 @@ Result<NodeId> image_reader(const Solution& solution, const Workflow& flow, cons
             consumer = producer;
             continue;
         }
-        if (port->text() != "image" || !is_tool(*producer, "visionpro.image.read_file")) { break; }
+        if (port->text() != "image" || !is_local_image_source(*producer)) { break; }
         const auto* origin_source = single_source<ParameterId>(*producer, "frame_origin");
         const auto* origin_value = origin_source ? std::get_if<ConfigValue>(origin_source) : nullptr;
         const auto* origin = origin_value ? origin_value->as_point2d() : nullptr;
@@ -105,11 +121,15 @@ Result<NodeId> image_reader(const Solution& solution, const Workflow& flow, cons
         if (origin->coordinate_frame != frame) {
             return error(ErrorCode::CoordinateMismatch, "Configured image origin does not match the selected preview image frame.");
         }
-        const auto slot_name = [](const NodeResourceBinding& binding) { return binding.slot.text(); };
-        if (std::ranges::count(producer->resources, "source", slot_name) != 1) { break; }
-        const auto& resource = std::ranges::find(producer->resources, "source", slot_name)->resource;
-        if (resource.kind != ResourceKind::Image) {
-            auto failure = error(ErrorCode::ResourceKindMismatch, "Configured file-image input must use an Image resource.");
+        const auto local = [](const NodeResourceBinding& binding) {
+            return binding.slot.text() == "source" || binding.slot.text() == "sequence";
+        };
+        if (std::ranges::count_if(producer->resources, local) != 1) { break; }
+        const auto& slot = *std::ranges::find_if(producer->resources, local);
+        const auto& resource = slot.resource;
+        const auto expected = slot.slot.text() == "source" ? ResourceKind::Image : ResourceKind::DirectorySequence;
+        if (resource.kind != expected) {
+            auto failure = error(ErrorCode::ResourceKindMismatch, "The local image preview resource does not match its source slot.");
             failure.location.resource = resource.id;
             return failure;
         }

@@ -2,6 +2,35 @@
 
 ## 1. 当前阶段
 
+输出图像的专项测试在启用 OpenCV、Qt 和 Python 3 的 Windows 构建中运行。FTP 用例会启动临时回环服务器。以仓库根目录为当前目录，可执行下列命令。[逐项验收与运行约定](design/image-output-node.md#8-功能验收与版本核对)
+
+```powershell
+$buildDir = "out/build/s67-gui"
+cmake --build $buildDir --config Release
+ctest --test-dir $buildDir -C Release --output-on-failure -R 'image_output|image_archive|app.image_source_entries|visionpro_inspector_tests|visionpro_workspace_tests|infrastructure.solution_transfer'
+```
+
+使用构建产物中的 `visionpro_cli.exe archive-list <包.dat>` 可读取条目的名称、来源和字节数。`visionpro_cli.exe archive-extract <包.dat 或目录> --same-name-folder` 会校验图像内容，按包名建子目录解压。省略该选项时图像直接写入包所在目录。文件名相同时保留两份。
+
+`app.image_output_local` 使用显式错误分支订阅失败节点的整数状态并归档现场图。`app.image_output_package` 分别按一张和两张每包归档原图与渲染图，使用各自输出路径及条目名称解压，逐字节对照原产物。`app.image_output_ftp` 覆盖无本地目录、目录不可写、离线回退和重新连接后的补传。
+
+图像源的专项回归可在已经配置 Qt 与 OpenCV 的构建目录中执行。以下用 `$buildDir` 表示该目录。
+
+```powershell
+cmake --build $buildDir --config Release
+ctest --test-dir $buildDir -C Release --output-on-failure -R 'tools.image_source|app.image_source_entries|app.cli_camera|app.vision_roundtrip|visionpro_workspace_tests'
+```
+
+无 GUI 宿主用 `TriggerControl::start_sdk` 绑定已发布快照、流程、公共图像输入和发送方，再向返回的订阅调用 `sdk_frame`。借用缓冲区重载会在返回前复制像素，传入只读 `ImageFrame` 时复用其所有权。投递号在同一订阅内递增，被拒的投递可修正后重试。目录事件由 `ImageDirectoryTrigger::open` 建立基线，宿主周期调用 `poll()`，两次稳定扫描后提交本批变更；停止时先撤销受理，再排空或取消在途调用。桌面共用这两个宿主层与正式执行器。
+
+CLI 的 `run --input` 和 `replay` 支持把 Image 公共输入写为 JSON 文本，例如 `{"width":2,"height":1,"stride":2,"format":"Mono8","coordinates":"sensor","pixels":"00ff"}`。坐标系需在目标方案中声明。另可用 `trigger --advance-ms 100` 驱动本地图像连续取图，每次重复该选项表示推进一次时钟。
+
+2026-11-26 的相机与 SDK 改版在启用 Qt、OpenCV、MVS 的 Windows x64 Release 上验证，最终 180 项 CTest 一次全量通过。运行全套测试的环境需允许本机 TCP/PLC 回环通信。模拟设备测试覆盖全局主动采集参数优先于旧节点参数，MVS 原生帧夹具核对 RGB24 的通道顺序与缓冲区复制。150% 缩放另在 1920×1080 虚拟屏上运行了工作台的 19 项检查。Qt 默认 800×800 虚拟屏在该缩放下只有约 533 个逻辑像素宽，小于主工作台的最小宽度，布局恢复用例需指定桌面尺寸。[相机与 SDK 桌面实测](design/image-source-camera-sdk-audit.md)
+
+2026-11-26 在 Windows 桌面版打开图像源，用 `samples/s4/图像/双区域 输入.png` 连续执行两次，得到 12 × 10、Mono8，SN 从 1 到 2。第二次执行前通过结果表将宽度绑定至方案全局变量「图宽」，将文件名绑定至流程局部变量「图名」。执行后在方案资源中读到 12，在运行详情中读到「双区域 输入.png」（修订 1）、作用域 0、调用 1、尝试次数 1。Qt、OpenCV 和 MVS 启用的 Windows x64 Release 全量 CTest 通过 180/180 项。[参数窗口和模块结果实测截图](design/image-origin-node.md#2-参数图像和结果分别在哪里)
+
+2026-11-25 的 Windows x64 Release 验证启用 Qt、OpenCV 和 MVS，全量 CTest 通过 180/180 项。`app.image_source_entries` 用同一个节点和下游绑定依次核对本地 PNG、模拟相机帧、SDK 本轮图像，并覆盖目录变更、序列停止和 SDK 缓冲区复用。Qt 工作台另以 150% 缩放执行图像源交互用例。关闭 MVS 时，相机、宿主和属性窗口的四项专项通过。关闭 Qt、OpenCV 和 MVS 后，节点、相机 CLI 与相机流生命周期三项专项通过。实机枚举时 MVS 4.7.1.4 返回零台设备，物理触发、链路统计与分时频闪仍待目标相机验证。
+
 桌面工作台的两组固定样例、原生 Windows 布局检查及 Release 负载比较见[工作台验收记录](ui-workbench-acceptance.md)。改动运行入口或结果浏览时，请同时运行 `visionpro_workspace_tests`、`visionpro_editor_run_tests` 和 `visionpro_run_lifecycle_tests`。
 
 方案级编排的磁盘样例在 `samples/f3-solution-graph`。将下列命令的索引依次设为 0、1、2，可分别复现 6、9 和上游越界。最后一种以非零状态退出，JSON 中只有 A 的运行记录。单流程调试仍用 `run --workflow`。
@@ -2580,7 +2609,7 @@ ctest --test-dir $guiBuild -C Release -R 'camera|mvs_' --output-on-failure --no-
 ctest --test-dir $headlessBuild -C Release -R 'camera' --output-on-failure --no-tests=error
 ```
 
-现场目前没有工业相机。实机验收需记录型号、序列号、驱动与固件版本，选用设备支持的原生 Mono8 或 BGR8Packed 格式，逐项验证 Single、Continuous、Software 和 Line0 硬触发。记录每种模式的帧号、时间来源、收帧与受理计数、缺帧与拒绝、停止状态，并在拔插重连后核对首帧保留及新订阅的触发次数。
+现场目前没有工业相机。实机验收需记录型号、序列号、驱动与固件版本，选用设备支持的原生 Mono8、RGB8Packed 或 BGR8Packed 格式，逐项验证 Single、Continuous、Software 和 Line0 硬触发。记录每种模式的帧号、时间来源、收帧与受理计数、缺帧与拒绝、停止状态，并在拔插重连后核对首帧保留及新订阅的触发次数。
 
 ### 10.11 S6.11 TCP 与 Modbus 通信
 

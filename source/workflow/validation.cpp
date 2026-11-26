@@ -172,6 +172,7 @@ private:
     const Workflow* flow_{nullptr};
     const RunRequest* request_{nullptr};
     std::map<ToolTypeId, const ToolDescriptor*> tools_by_id_;
+    mutable std::map<NodeId, ToolDescriptor> specialized_;
     Schemas schemas_;
     std::map<std::pair<SchemaId, std::uint32_t>, PortSchema> port_schemas_;
     ValidationIndex index_;
@@ -213,7 +214,13 @@ const ToolDescriptor* Validator::descriptor(const Node& node) const
     const auto* tool = std::get_if<ToolConfiguration>(&node.configuration);
     if (!tool) { return nullptr; }
     const auto it = tools_by_id_.find(tool->type);
-    return it == tools_by_id_.end() ? nullptr : it->second;
+    if (it == tools_by_id_.end()) { return nullptr; }
+    if (!it->second->specialize) { return it->second; }
+    auto selected = specialized_.find(node.id);
+    if (selected == specialized_.end()) {
+        selected = specialized_.emplace(node.id, specialize_tool(*it->second, node)).first;
+    }
+    return &selected->second;
 }
 std::span<const InputDescriptor> Validator::inputs(const Node& node) const
 {
@@ -319,12 +326,28 @@ Check Validator::initialize()
                 const auto* failure = std::get_if<Diagnostic>(&checked)) { return *failure; }
         }
     }
-    for (const auto& variable : solution_.variables) {
+    const auto check_variable = [&](const GlobalVariableDefinition& variable) -> Check {
         auto where = location(); where.variable = variable.id;
         for (auto checked : {register_type(variable.type, schemas_, where),
             config(variable.initial_value, nullptr, nullptr, 0, nullptr, true)}) {
             if (auto contextual = contextualize(checked, where); const auto* failure = std::get_if<Diagnostic>(&contextual)) {
                 auto result = *failure; result.location.variable = variable.id; return result;
+            }
+        }
+        return std::monostate{};
+    };
+    for (const auto& variable : solution_.variables) {
+        if (auto checked = check_variable(variable); failed(checked)) { return checked; }
+    }
+    for (const auto& flow : solution_.workflows) {
+        for (const auto& variable : flow.local_variables) {
+            if (auto checked = check_variable(variable); failed(checked)) { return checked; }
+        }
+        for (const auto& node : flow.nodes) {
+            if (const auto* group = std::get_if<GroupConfiguration>(&node.configuration)) {
+                for (const auto& variable : group->local_variables) {
+                    if (auto checked = check_variable(variable); failed(checked)) { return checked; }
+                }
             }
         }
     }
@@ -406,6 +429,51 @@ void Validator::add_scope(Scope scope)
 
 Check Validator::node_metadata(const Node& node)
 {
+    for (auto row = node.display_styles.begin(); row != node.display_styles.end(); ++row) {
+        auto where = location(node.id);
+        where.input = row->item;
+        if (!row->style.valid()) {
+            return error(ErrorCode::ConstraintViolation, "Display styles require #RRGGBB colors, opacity 0..100 and thickness 1..64.", where);
+        }
+        if (std::find_if(node.display_styles.begin(), row, [&](const auto& previous) {
+            return previous.item == row->item && previous.source == row->source;
+        }) != row) {
+            return error(ErrorCode::DuplicateIdentity, "A source display item can have only one style.", where);
+        }
+        const auto* tool = descriptor(node);
+        const auto* producer = find_node(*flow_, row->source.node);
+        if (!tool || !tool->uses_display_item_styles || row->source.workflow != flow_->id || !producer
+            || parent(producer->id) != parent(node.id)) {
+            return error(ErrorCode::UnknownTarget, "Display style must identify a producer in the drawing node's scope.", where);
+        }
+        const auto& declared = tools_by_id_.at(tool->id)->inputs;
+        const auto port = std::ranges::find(declared, row->item, &InputDescriptor::id);
+        if (port == declared.end() || port->binding.cardinality != BindingCardinality::MultipleSources) {
+            return error(ErrorCode::UnknownTarget, "Display style must target a declared layer collection.", where);
+        }
+    }
+    if (!node.result_variables.empty() && (std::holds_alternative<GroupConfiguration>(node.configuration) || descriptor(node))) {
+        std::set<OutputId> sources;
+        std::set<VariableId> destinations;
+        const auto ports = outputs(node);
+        for (const auto& mapping : node.result_variables) {
+            auto where = location(node.id);
+            where.output = mapping.output; where.variable = mapping.variable;
+            if (!sources.insert(mapping.output).second || !destinations.insert(mapping.variable).second) {
+                return error(ErrorCode::DuplicateIdentity, "A node must map distinct results to distinct variables.", where);
+            }
+            if (mapping.scope != VariableScope::Global && mapping.scope != VariableScope::Local) {
+                return error(ErrorCode::InvalidEnumValue, "Unknown result variable scope.", where);
+            }
+            const auto output = std::ranges::find(ports, mapping.output, &OutputDescriptor::id);
+            if (output == ports.end()) { return error(ErrorCode::UnknownTarget, "Mapped result output is not declared.", where); }
+            const auto* variable = find(mapping.scope == VariableScope::Local ? local_variable_definitions(*flow_, node.id) : solution_.variables, mapping.variable);
+            if (!variable) { return error(ErrorCode::UnknownTarget, "Result variable is not declared in the selected scope.", where); }
+            if (!result_variable_compatible(output->type, variable->type)) {
+                return error(ErrorCode::TypeMismatch, "Mapped result and variable require compatible types.", where);
+            }
+        }
+    }
     if (const auto* group = std::get_if<GroupConfiguration>(&node.configuration)) {
         return public_interface(group->interface, location(node.id));
     }
@@ -478,7 +546,8 @@ Check Validator::workflow(const Workflow& flow)
         auto where = location();
         where.resource = camera.device;
         for (auto check : {validate_resource_reference({camera.device, ResourceKind::Device, {}}, solution_.resources),
-                register_semantics({MeasurementUnit::Pixel, camera.coordinate_frame})}) {
+                register_semantics({MeasurementUnit::Pixel, camera.coordinate_frame}),
+                validate_camera_trigger_ownership(solution_, flow, tools_)}) {
             if (failed(check)) { return contextualize(check, where); }
         }
     }
@@ -538,6 +607,7 @@ Result<ValidationIndex> Validator::selected(const RunRequest& request)
 Check Validator::selected_workflow(const detail::Parents& ownership)
 {
     const auto& flow = *flow_;
+    if (auto checked = validate_camera_trigger_ownership(solution_, flow, tools_); failed(checked)) { return checked; }
     add_scope({});
     if (auto checked = contextualize(detail::validate_workflow_interface_shape(flow, ownership), location());
         failed(checked)) { return checked; }
@@ -692,12 +762,14 @@ Result<SourceType> Validator::source_type(const BindingSource& source, Scope sco
             if (auto checked = validate_resource_reference(value, solution_.resources); const auto* failure = std::get_if<Diagnostic>(&checked)) { return *failure; }
             return SourceType{DataType::resource_reference(), {}};
         } else {
-            const auto* variable = find(solution_.variables, value.variable);
+            const auto& locals = scope ? std::get<GroupConfiguration>(find_node(*flow_, *scope)->configuration).local_variables : flow_->local_variables;
+            const auto* local = find(locals, value.variable);
+            const auto* variable = local ? local : find(solution_.variables, value.variable);
             if (!variable) {
                 auto where = DiagnosticLocation{}; where.variable = value.variable;
                 return error(ErrorCode::UnknownTarget, "Referenced global variable is not declared.", where);
             }
-            if (const auto* target = independent_target(); target &&
+            if (const auto* target = independent_target(); !local && target &&
                 std::holds_alternative<GroupConfiguration>(find_node(*flow_, target->node)->configuration)) {
                 const auto current = std::ranges::find(request_->globals(), value.variable, &GlobalVariableEntry::variable);
                 if (current == request_->globals().end() || (value.required_revision && current->revision != *value.required_revision)) {
@@ -862,15 +934,17 @@ Check Validator::node(const Node& value)
 {
     const auto* tool = descriptor(value);
     const bool injected = independent_target() && independent_target()->node == value.id;
+    const auto* catalog = tool && tool->specialize ? tools_by_id_.at(tool->id) : tool;
     for (const auto& binding : value.bindings) {
         if (injected && std::holds_alternative<InputId>(binding.target)) { continue; }
         bool known = false;
         auto where = location(value.id);
         if (const auto* id = std::get_if<InputId>(&binding.target)) {
-            known = std::ranges::find(inputs(value), *id, &InputDescriptor::id) != inputs(value).end(); where.input = *id;
+            const std::span<const InputDescriptor> declared = catalog ? std::span<const InputDescriptor>{catalog->inputs} : inputs(value);
+            known = std::ranges::find(declared, *id, &InputDescriptor::id) != declared.end(); where.input = *id;
         } else {
             const auto parameter_id = std::get<ParameterId>(binding.target); where.parameter = parameter_id;
-            known = tool && find(tool->parameters, parameter_id);
+            known = catalog && find(catalog->parameters, parameter_id);
         }
         if (!known) { return error(ErrorCode::UnknownTarget, "Binding target is not declared by this node.", where); }
     }
@@ -891,9 +965,10 @@ Check Validator::node(const Node& value)
         if (auto checked = contextualize(register_semantics(output.semantics), where); failed(checked)) { return checked; }
     }
     for (const auto& bound : value.resources) {
-        const auto requirement = tool ? std::ranges::find(tool->resources, bound.slot, &ResourceRequirement::slot)
+        const auto requirement = catalog ? std::ranges::find(catalog->resources, bound.slot, &ResourceRequirement::slot)
             : std::vector<ResourceRequirement>::const_iterator{};
-        if (!tool || requirement == tool->resources.end()) { return error(ErrorCode::UnknownTarget, "Resource slot is not declared by this node."); }
+        if (!catalog || requirement == catalog->resources.end()) { return error(ErrorCode::UnknownTarget, "Resource slot is not declared by this node."); }
+        if (catalog != tool && std::ranges::find(tool->resources, bound.slot, &ResourceRequirement::slot) == tool->resources.end()) { continue; }
         if (bound.resource.kind != requirement->kind) { return error(ErrorCode::ResourceKindMismatch, "Resource does not match the slot's required kind."); }
         if (auto checked = validate_resource_reference(bound.resource, solution_.resources); failed(checked)) { return checked; }
     }
@@ -1095,6 +1170,61 @@ core::Result<core::DataType> system_field_type(SystemField field)
 core::Result<ValidationIndex> validate_solution(const Solution& solution,
     std::span<const core::ToolDescriptor> tools, std::span<const core::SchemaSupport> support)
 { return Validator(solution, tools, support).run(); }
+
+core::Result<std::monostate> validate_camera_trigger_ownership(const Solution& solution,
+    const Workflow& flow, std::span<const core::ToolDescriptor> tools)
+{
+    if (!flow.trigger || !flow.trigger->camera) { return std::monostate{}; }
+    const auto device_id = flow.trigger->camera->device;
+    const auto* source = find(solution.resources, device_id);
+    const auto* device = source ? std::get_if<core::DeviceResource>(&source->location) : nullptr;
+    const auto same_camera = [&](const core::ResourceReference& bound) {
+        if (bound.id == device_id) { return true; }
+        const auto* definition = find(solution.resources, bound.id);
+        const auto* other = definition ? std::get_if<core::DeviceResource>(&definition->location) : nullptr;
+        if (!device || !other || device->adapter != other->adapter) { return false; }
+        static const auto serial = key<core::FieldId>("serial");
+        const auto* left = device->configuration.field(serial);
+        const auto* right = other->configuration.field(serial);
+        return left && right && left->as_string() && !left->as_string()->empty() && *left == *right;
+    };
+    std::vector<core::NodeId> pending = flow.entries;
+    std::set<core::NodeId> visited;
+    Graph successors;
+    for (const auto& link : flow.control_links) { successors[link.source].push_back(link.target); }
+    while (!pending.empty()) {
+        const auto id = pending.back();
+        pending.pop_back();
+        if (!visited.insert(id).second) { continue; }
+        const auto* node = find_node(flow, id);
+        if (!node) { continue; }
+        if (const auto next = successors.find(id); next != successors.end()) {
+            pending.insert(pending.end(), next->second.begin(), next->second.end());
+        }
+        if (!node->enabled) { continue; }
+        if (const auto* group = std::get_if<GroupConfiguration>(&node->configuration)) {
+            pending.insert(pending.end(), group->entries.begin(), group->entries.end());
+            continue;
+        }
+        if (std::ranges::none_of(node->resources, [](const auto& binding) {
+            return binding.resource.kind == core::ResourceKind::Device;
+        })) { continue; }
+        const auto* configured = std::get_if<ToolConfiguration>(&node->configuration);
+        if (!configured) { continue; }
+        const auto declared = std::ranges::find(tools, configured->type, &core::ToolDescriptor::id);
+        if (declared == tools.end()) { continue; }
+        const auto active = specialize_tool(*declared, *node);
+        for (const auto& binding : node->resources) {
+            if (binding.resource.kind != core::ResourceKind::Device || !same_camera(binding.resource)) { continue; }
+            if (std::ranges::find(active.resources, binding.slot, &core::ResourceRequirement::slot) == active.resources.end()) { continue; }
+            core::DiagnosticLocation where;
+            where.solution = solution.id; where.workflow = flow.id; where.node = id; where.resource = binding.resource.id;
+            return error(core::ErrorCode::InvalidResource, "Camera trigger and node '" + node->name
+                + "' both acquire the same device. Bind the delivered workflow image or select a different camera.", where);
+        }
+    }
+    return std::monostate{};
+}
 
 core::Result<std::vector<core::Diagnostic>> diagnose_solution(const Solution& solution,
     std::span<const core::ToolDescriptor> tools)

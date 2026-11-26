@@ -279,12 +279,42 @@ void result_store()
         == std::vector{std::byte{7}, std::byte{8}, std::byte{9}, std::byte{10}},
         "retained image result remains readable after store, snapshot and original handles are destroyed");
 }
+void module_completion_outputs()
+{
+    auto setup = fixture();
+    setup.tools.front().module_status_output = value_id();
+    const auto snapshot = capture(setup);
+    ResultStore store(snapshot.identity().session);
+    for (const auto status : {ExecutionStatus::Failed, ExecutionStatus::TimedOut, ExecutionStatus::Cancelled}) {
+        const auto id = identity(snapshot, static_cast<unsigned>(status) + 1);
+        const auto record = take(NodeResult::create({id, status, Judgement::NotEvaluated, {}, {explanation()}}));
+        take(store.insert(snapshot, record));
+        const auto published = take(store.lookup(id.run, id.invocation));
+        const auto* slot = published->output(value_id());
+        if (status == ExecutionStatus::Cancelled) {
+            check(!slot, "cancelled calls do not publish a numerical completion");
+        } else {
+            check(slot && slot->module_completion && *std::get<DataValue>(slot->content).as_int64() == 0,
+                "a failed or timed-out call exposes only its declared completion code");
+            check(!published->output(optional_id()), "business output stays unavailable");
+        }
+    }
+    const auto id = identity(snapshot, 50);
+    rejected(store.insert(snapshot, take(NodeResult::create(success(id, 0)))), ErrorCode::InvalidNodeResult,
+        "a successful tool cannot report failed completion");
+    auto ordinary = fixture();
+    const auto regular = capture(ordinary, 2);
+    const auto forged = take(NodeResult::create({identity(regular, 51), ExecutionStatus::Failed,
+        Judgement::NotEvaluated, {{value_id(), DataType::integer(), DataValue::integer(0), true}}, {explanation()}}));
+    rejected(store.insert(regular, forged), ErrorCode::InvalidNodeResult,
+        "failure cannot publish a business value by tagging it as completion");
+}
 } // namespace
 
 int main(int argc, char** argv)
 {
     if (argc != 2 || std::string_view(argv[1]) != "result_store") { return 2; }
-    try { result_store(); }
+    try { result_store(); module_completion_outputs(); }
     catch (const std::exception& error) { std::cerr << "Unexpected exception: " << error.what() << '\n'; return 1; }
     catch (...) { std::cerr << "Unexpected non-standard exception\n"; return 1; }
     std::cout << "result_store: " << checks << " checks, " << failures << " failures\n";

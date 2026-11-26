@@ -22,6 +22,11 @@ struct ScopeDependencies {
 // Detached, derived IDs only. This is not a schedule or proof of runtime availability.
 struct ValidationIndex { std::vector<ScopeDependencies> scopes; };
 
+// A camera entry owns its device while delivering frames. Reachable active device
+// slots cannot acquire that same camera during the triggered run.
+[[nodiscard]] core::Result<std::monostate> validate_camera_trigger_ownership(const Solution& solution,
+    const Workflow& workflow, std::span<const core::ToolDescriptor> tools);
+
 // Checks all configured nodes, including disconnected drafts. Reachability comes
 // only from each scope's explicit entries; bindings never activate producers.
 // Nonempty support enables backend Schema/capability checks. Empty support means

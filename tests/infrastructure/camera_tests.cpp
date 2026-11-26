@@ -115,6 +115,16 @@ void camera_lease()
     take(next->finish());
 
     rejects(camera_device_config(std::string("bad\0serial", 10)), ErrorCode::InvalidResource);
+    check(!take(camera_acquisition_settings(resource)), "A v1 camera must preserve per-node acquisition settings.");
+    auto configured = device();
+    auto& config = std::get<DeviceResource>(configured.location).configuration;
+    config = take(camera_device_config("SIM-001", 2));
+    check(!take(camera_acquisition_settings(configured)), "A v2 strobe resource also inherits per-node acquisition settings.");
+    const CameraAcquisitionSettings settings{CameraMode::Software, 1200ms};
+    config = take(camera_device_config("SIM-001", 2, settings));
+    check(take(camera_acquisition_settings(configured)) == settings && take(camera_strobe_channels(configured)) == 2,
+        "Global acquisition settings must round-trip without losing the strobe mapping.");
+    rejects(camera_device_config("SIM-001", 0, CameraAcquisitionSettings{CameraMode::Single, 0ms}), ErrorCode::ConstraintViolation);
     auto wrong = device();
     auto& saved = std::get<DeviceResource>(wrong.location);
     const auto unsupported = take(DataType::record(key<SchemaId>("visionpro.camera.device"), 2, {{key<FieldId>("serial"), DataType::string()}}));

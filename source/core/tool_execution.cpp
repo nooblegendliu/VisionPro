@@ -120,6 +120,12 @@ Check completion_check(const InvocationContext& context, const ToolCompletion& r
         return error(ErrorCode::InvalidValue, "Completion status and judgement must be recognized terminal values.");
     }
     const bool success = result.status == ToolCompletionStatus::Succeeded;
+    if ((result.flow != InvocationFlow::Continue && !success)
+        || (result.flow == InvocationFlow::CloseBranch && !result.selected_control_outputs.empty())
+        || (result.flow != InvocationFlow::Continue && result.flow != InvocationFlow::CloseBranch
+            && result.flow != InvocationFlow::EndContinuous)) {
+        return error(ErrorCode::InvalidValue, "Completion flow must agree with its terminal status and selected outlets.");
+    }
     bool has_error = false;
     for (const auto& diagnostic : result.diagnostics) {
         if (!is_valid_diagnostic(diagnostic)) {
@@ -258,6 +264,17 @@ Result<ToolExecutionConfiguration> ToolExecutionConfiguration::create(const Tool
     return ToolExecutionConfiguration{std::make_shared<const Storage>(Storage{data, std::move(state)})};
 }
 
+bool message_filtered(const ToolDescriptor& descriptor, std::span<const FixedInvocationParameter> parameters)
+{
+    if (!descriptor.message_filter) { return false; }
+    const auto input = std::ranges::find(parameters, descriptor.message_filter->input, &FixedInvocationParameter::id);
+    const auto expected = std::ranges::find(parameters, descriptor.message_filter->expected, &FixedInvocationParameter::id);
+    if (input == parameters.end() || expected == parameters.end() || !expected->value.as_string()) { return false; }
+    const auto* value = input->value.optional_value();
+    const auto& text = *expected->value.as_string();
+    return !value || !value->as_string() || (!text.empty() && text != *value->as_string());
+}
+
 Result<InvocationContext> InvocationContext::create(const InvocationContextData& data)
 {
     const auto& configuration = data.configuration.data();
@@ -284,6 +301,24 @@ Result<InvocationContext> InvocationContext::create(const InvocationContextData&
     for (auto checked : {values(configuration.tool.inputs, data.inputs), values(configuration.tool.parameters, data.parameters)}) {
         if (const auto* failure = std::get_if<Diagnostic>(&checked)) { return fail(*failure); }
     }
+    std::set<std::pair<ToolValueTarget, std::size_t>> display_entries;
+    for (const auto& entry : data.display_items) {
+        const auto* value = std::visit([&](const auto& id) -> const DataValue* {
+            if constexpr (std::same_as<std::decay_t<decltype(id)>, InputId>) {
+                const auto* input = find(data.inputs, id);
+                return input ? &input->value : nullptr;
+            } else {
+                const auto* parameter = find(data.parameters, id);
+                return parameter ? &parameter->value : nullptr;
+            }
+        }, entry.target);
+        if (!configuration.tool.uses_display_item_styles || !value ||
+            entry.element_index >= (value->elements() ? value->elements()->size() : 1u) ||
+            !display_entries.emplace(entry.target, entry.element_index).second ||
+            (entry.style && !entry.style->valid())) {
+            return fail(error(ErrorCode::InvalidValue, "A display style must identify a unique resolved source element and have valid colors, opacity and thickness."));
+        }
+    }
     for (const auto& fixed : configuration.parameters) {
         if (!same_constant(find(data.parameters, fixed.id)->value, fixed.value)) {
             return fail(error(ErrorCode::InvalidValue, "Invocation cannot replace a parameter fixed in the configuration snapshot."));
@@ -297,7 +332,9 @@ Result<InvocationContext> InvocationContext::create(const InvocationContextData&
             return fail(error(ErrorCode::InvalidResource, "Invocation leases must uniquely match the exact fixed resource references."));
         }
     }
-    if (leases.size() != configuration.resources.size()) { return fail(error(ErrorCode::MissingRequiredValue, "Every configured resource requires a typed lease for this invocation.")); }
+    if (leases.size() != configuration.resources.size() && !message_filtered(configuration.tool, data.parameters)) {
+        return fail(error(ErrorCode::MissingRequiredValue, "Every configured resource requires a typed lease for this invocation."));
+    }
     for (std::size_t i = 0; i < data.regions.size(); ++i) {
         const auto& region = data.regions[i];
         const bool known = std::visit([&](auto target) {

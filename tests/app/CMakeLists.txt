@@ -7,7 +7,7 @@ target_compile_definitions(visionpro_cli_tests PRIVATE WIN32_LEAN_AND_MEAN NOMIN
     VISIONPRO_TRIGGER_SAMPLE="${PROJECT_SOURCE_DIR}/samples/s6-trigger/solution.json"
     VISIONPRO_RECOVERY_SAMPLE="${PROJECT_SOURCE_DIR}/samples/s6-recovery/solution.json")
 target_include_directories(visionpro_cli_tests SYSTEM PRIVATE "${PROJECT_SOURCE_DIR}/third_party/nlohmann_json/include")
-target_link_libraries(visionpro_cli_tests PRIVATE visionpro_infrastructure visionpro_build_options)
+target_link_libraries(visionpro_cli_tests PRIVATE visionpro_app_tools visionpro_infrastructure visionpro_build_options)
 if(MINGW)
     target_link_options(visionpro_cli_tests PRIVATE -municode)
 endif()
@@ -22,6 +22,15 @@ set_tests_properties(app.cli_camera app.camera_stream_lifecycle PROPERTIES TIMEO
 
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_Interpreter_FOUND)
+    if(VISIONPRO_WITH_OPENCV)
+        foreach(mode IN ITEMS local package ftp)
+            add_test(NAME app.image_output_${mode} COMMAND "${Python3_EXECUTABLE}" -B
+                "${CMAKE_CURRENT_SOURCE_DIR}/image_output_cli_tests.py" ${mode}
+                $<TARGET_FILE:visionpro_cli> "${PROJECT_SOURCE_DIR}/samples/s4")
+            set_tests_properties(app.image_output_${mode} PROPERTIES TIMEOUT 100
+                ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:opencv_core>")
+        endforeach()
+    endif()
     foreach(protocol IN ITEMS tcp plc)
         add_test(NAME app.cli_${protocol}_communication COMMAND "${Python3_EXECUTABLE}" -B
             "${CMAKE_CURRENT_SOURCE_DIR}/communication_cli_tests.py" ${protocol}
@@ -64,9 +73,14 @@ set_tests_properties(app.cli_roundtrip app.cli_diagnostics app.cli_external_roun
     PROPERTIES TIMEOUT 60)
 
 if(VISIONPRO_WITH_OPENCV)
+    add_executable(visionpro_image_entry_tests image_entry_tests.cpp)
+    target_link_libraries(visionpro_image_entry_tests PRIVATE visionpro_app_tools visionpro_infrastructure visionpro_build_options)
+    add_test(NAME app.image_source_entries COMMAND visionpro_image_entry_tests)
+    set_tests_properties(app.image_source_entries PROPERTIES TIMEOUT 30
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:opencv_core>")
     target_compile_definitions(visionpro_cli_tests PRIVATE VISIONPRO_WITH_OPENCV
         VISIONPRO_INSPECTION_DIRECTORY="${PROJECT_SOURCE_DIR}/samples/s6-inspection")
-    target_link_libraries(visionpro_cli_tests PRIVATE visionpro_vision_tools visionpro_simulation_tools)
+    target_link_libraries(visionpro_cli_tests PRIVATE visionpro_vision_tools)
     add_test(NAME app.vision_roundtrip COMMAND visionpro_cli_tests $<TARGET_FILE:visionpro_cli> vision-roundtrip)
     add_test(NAME app.vision_diagnostics COMMAND visionpro_cli_tests $<TARGET_FILE:visionpro_cli> vision-diagnostics)
     add_test(NAME app.cli_inspection COMMAND visionpro_cli_tests $<TARGET_FILE:visionpro_cli> inspection)

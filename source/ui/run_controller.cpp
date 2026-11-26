@@ -1,4 +1,5 @@
 #include "run_controller.hpp"
+#include "background_result.hpp"
 #include <visionpro/core/schema_id_factory.hpp>
 
 #ifdef VISIONPRO_WITH_OPENCV
@@ -90,9 +91,9 @@ Admission prepare_run(WorkflowSession& session, const Solution& draft, const Run
         if (auto* observer = std::get_if<RunObservation>(&subscribed)) { observation.emplace(std::move(*observer)); }
     }
     if (document.source) {
-        return {publish_solution_run(session, *base, *document.source, draft, arguments), std::move(observation)};
+        return {publish_solution_run(session, *base, *document.source, draft, arguments, document.archives), std::move(observation)};
     }
-    auto provider = FileResourceProvider::create(draft, document.directory, document.roots);
+    auto provider = FileResourceProvider::create(draft, document.directory, document.roots, document.archives);
     if (auto* failure = std::get_if<Diagnostic>(&provider)) {
         return {RunRejected{std::move(*failure)}, std::move(observation)};
     }
@@ -117,8 +118,8 @@ Result<SolutionRunReport> execute_solution(WorkflowSession& session, const Solut
         }
         inputs.push_back({workflow, std::move(entered.values)});
     }
-    auto provider = document.source ? FileResourceProvider::create(draft, document.source->directory(), document.source->resource_roots())
-                                    : FileResourceProvider::create(draft, document.directory, document.roots);
+    auto provider = document.source ? FileResourceProvider::create(draft, document.source->directory(), document.source->resource_roots(), document.archives)
+                                    : FileResourceProvider::create(draft, document.directory, document.roots, document.archives);
     if (auto* failure = std::get_if<Diagnostic>(&provider)) { return std::move(*failure); }
     const auto base = session.inspect().active;
     const RunTrigger trigger{TriggerKind::Manual, std::get<SchemaId>(SchemaIdFactory::parse<SchemaId>("visionpro.editor.solution"))};
@@ -199,6 +200,9 @@ bool RunController::ensure_session()
             [](WorkflowSession* session) {
                 QThreadPool::globalInstance()->start([owner = std::unique_ptr<WorkflowSession>(session)] {});
             });
+        archives_ = std::shared_ptr<ImageArchivePool>(new ImageArchivePool, [](ImageArchivePool* pool) {
+            QThreadPool::globalInstance()->start([owner = std::unique_ptr<ImageArchivePool>(pool)] {});
+        });
     }
     return true;
 }
@@ -206,6 +210,7 @@ bool RunController::ensure_session()
 void RunController::start(Solution draft, RunDocument document, RunArguments arguments, std::vector<RunImageInput> images)
 {
     if (preparing_ || retiring_ || !ensure_session()) { return; }
+    document.archives = archives_;
     auto outcome = std::make_shared<std::optional<Admission>>();
     const auto subscribe_capacity = observing_ && !observation_ ? observation_capacity_ : 0;
     const auto generation = observation_generation_;
@@ -248,6 +253,7 @@ void RunController::start(Solution draft, RunDocument document, RunArguments arg
 void RunController::start_solution(Solution draft, RunDocument document, std::vector<SolutionEntryInputs> inputs)
 {
     if (!can_start() || !ensure_session()) { return; }
+    document.archives = archives_;
     solution_report_.reset();
     solution_stop_.emplace();
     auto outcome = std::make_shared<std::optional<Result<SolutionRunReport>>>();
@@ -364,6 +370,19 @@ Result<std::monostate> RunController::reset_state(const NodeTarget& target)
     return session_->reset_node_state(target);
 }
 
+void RunController::flush_archive()
+{
+    if (!can_flush_archive()) { return; }
+    preparing_ = true;
+    emit changed();
+    on_worker(this,[pool=archives_] { return pool->flush(); },[this](infrastructure::ArchiveCheck result) {
+        preparing_ = false;
+        if (const auto* failure = std::get_if<Diagnostic>(&result)) { emit operation_failed(*failure); }
+        else { emit trigger_notice(tr("存图队列已完成写入。")); }
+        if (retiring_) { close_session(); } else { emit changed(); }
+    });
+}
+
 void RunController::reset_document()
 {
     if (retiring_) { return; }
@@ -397,7 +416,7 @@ void RunController::close_session()
     }
     triggers_.clear(); // Timers are GUI-thread objects.
     auto failure = std::make_shared<std::optional<Diagnostic>>();
-    auto* worker = QThread::create([session = std::exchange(session_, {}), retired = std::move(retired),
+    auto* worker = QThread::create([session = std::exchange(session_, {}), archives = std::exchange(archives_, {}), retired = std::move(retired),
             cameras = std::move(cameras), failure] {
         for (const auto& camera : cameras) {
             auto released = camera->close();
@@ -411,10 +430,14 @@ void RunController::close_session()
             auto stopped = source->stop(TriggerStopMode::Drain, std::chrono::steady_clock::time_point::max());
             if (auto* diagnostic = std::get_if<Diagnostic>(&stopped)) { *failure = std::move(*diagnostic); }
         }
+        if (archives) {
+            auto flushed = archives->flush();
+            if (auto* error = std::get_if<Diagnostic>(&flushed)) { *failure = std::move(*error); }
+        }
     });
     connect(worker, &QThread::finished, this, [this, failure] {
         retiring_ = false;
-        if (*failure) { emit trigger_notice(tr("前一运行会话清理失败 · %1").arg(QString::fromStdString((*failure)->message))); }
+        if (*failure) { emit operation_failed(**failure); }
         emit changed();
     });
     connect(worker, &QThread::finished, worker, &QObject::deleteLater);

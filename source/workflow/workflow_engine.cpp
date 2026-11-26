@@ -3,6 +3,7 @@
 #include <visionpro/workflow/correlation_join.hpp>
 #include <visionpro/core/id_factory.hpp>
 #include <visionpro/core/runtime_id_factory.hpp>
+#include <visionpro/core/schema_id_factory.hpp>
 #include <visionpro/workflow/execution_plan.hpp>
 #include "scoped_schedule.hpp"
 #include "runtime_values.hpp"
@@ -225,18 +226,62 @@ OutputContent project_export(const NodeResult& record, const OutputReference& re
     return std::get<DataValue>(std::move(value));
 }
 
+using LocalInitialValues = std::map<std::optional<NodeId>, std::vector<GlobalVariableEntry>>;
+Result<LocalInitialValues> local_initial_values(const RunRequest& request, const Workflow& flow)
+{
+    LocalInitialValues initial;
+    const auto origin = ExternalUpdateOrigin{request.snapshot().identity().session,
+        std::get<SchemaId>(SchemaIdFactory::parse<SchemaId>("visionpro.local.initial"))};
+    const auto add = [&](std::optional<NodeId> owner, const std::vector<GlobalVariableDefinition>& definitions) -> Result<std::monostate> {
+        if (definitions.empty()) { return std::monostate{}; }
+        auto& entries = initial[owner];
+        for (const auto& def : definitions) {
+            auto value = detail::materialize_config_value(def.initial_value);
+            if (auto* failure = std::get_if<Diagnostic>(&value)) { failure->location.variable = def.id; return *failure; }
+            auto& data = std::get<DataValue>(value);
+            auto checked = detail::validate_runtime_domain(data, request.snapshot().solution(), {});
+            if (auto* failure = std::get_if<Diagnostic>(&checked)) { failure->location.variable = def.id; return *failure; }
+            entries.push_back({def.id, std::move(data), 0, origin});
+        }
+        return std::monostate{};
+    };
+    auto root = add({}, flow.local_variables);
+    if (auto* failure = std::get_if<Diagnostic>(&root)) { return *failure; }
+    for (const auto& node : flow.nodes) {
+        if (const auto* group = std::get_if<GroupConfiguration>(&node.configuration)) {
+            auto body = add(node.id, group->local_variables);
+            if (auto* failure = std::get_if<Diagnostic>(&body)) { return *failure; }
+        }
+    }
+    return initial;
+}
+
 class EngineRun final : public RunControl {
 public:
     EngineRun(const RunRequest& request, WorkflowRunId id, detail::ControlSchedule schedule,
         const std::shared_ptr<SchedulerEvents>& events, const std::shared_ptr<detail::ObservationHub>& observers,
-        RunAdmission admission, std::shared_ptr<detail::SolutionWake> solution_wake)
+        RunAdmission admission, std::shared_ptr<detail::SolutionWake> solution_wake,
+        LocalInitialValues locals, const std::shared_ptr<SharedDataService>& shared)
         : RunControl(request, id, admission), wakeup_(std::make_shared<RunWakeup>(events)), observers_(observers),
           solution_wake_(std::move(solution_wake)), schedule_(std::move(schedule)),
-          remaining_(schedule_.nodes().size()), eligible_(remaining_), results_(identity().snapshot.session)
+          remaining_(schedule_.nodes().size()), eligible_(remaining_), results_(identity().snapshot.session),
+          local_initial_(std::move(locals)), shared_(shared)
     {
         progress_.nodes.reserve(remaining_);
         progress_.call_order.reserve(remaining_);
         for (const auto& node : schedule_.nodes()) { progress_.nodes.push_back({node}); }
+        if (const auto initial = local_initial_.find(std::nullopt); initial != local_initial_.end()) {
+            progress_.local_variables = std::move(initial->second);
+            local_initial_.erase(initial);
+        }
+        if (const auto* target = std::get_if<NodeTarget>(&request.target())) {
+            const auto& flow = *find_workflow(request.snapshot().solution(), target->workflow);
+            const auto parent = std::ranges::find(flow.containment, target->node, &Containment::child);
+            if (parent != flow.containment.end()) {
+                debug_parent_ = parent->parent;
+                open_group_locals(*debug_parent_, schedule_.scope(0).id);
+            }
+        }
         apply_skips();
     }
 
@@ -287,6 +332,15 @@ public:
     const std::shared_ptr<RunWakeup>& wakeup() const noexcept { return wakeup_; }
     std::span<const NodeId> nodes() const noexcept { return schedule_.nodes(); }
 
+    bool state_order_finished(std::span<const NodeId> anchors) const
+    {
+        const std::lock_guard lock(mutex_);
+        if (stopping_ || terminal(progress_.status)) { return true; }
+        return std::ranges::any_of(progress_.nodes, [&](const RunNodeProgress& node) {
+            return terminal(node.status) && std::ranges::find(anchors, node.node) != anchors.end();
+        });
+    }
+
     void begin_step()
     {
         const std::lock_guard lock(mutex_);
@@ -335,6 +389,9 @@ public:
         const std::lock_guard lock(mutex_);
         const auto globals = request().globals();
         ResolutionContext context{identity(), key, schedule_.ancestry(schedule_.frame_of(index)), {}, {}, {globals.begin(), globals.end()}};
+        if (const auto* local = visible_locals(progress_, key.scope)) {
+            context.globals.insert(context.globals.end(), local->begin(), local->end());
+        }
         for (const auto producer : schedule_.producers(index)) {
             const auto& source = progress_.nodes[producer];
             if (const auto absent = schedule_.source_absence(producer)) {
@@ -364,6 +421,7 @@ public:
         if (stopping_) { return {}; }
         const auto previous_size = progress_.nodes.size();
         const auto frame = schedule_.enter(std::move(control), {id, call.scope, call.node, std::move(inputs)}, schedule_.frame_of(slot));
+        open_group_locals(call.node, id);
         for (const auto node : schedule_.nodes().subspan(previous_size)) {
             RunNodeProgress progress{node};
             progress.scope = id;
@@ -503,7 +561,7 @@ public:
                 Judgement::NotEvaluated, {}, {diagnostic}});
             if (auto* bad = std::get_if<Diagnostic>(&record)) { fail_step(index, std::move(*bad)); return; }
             const auto& result = std::get<NodeResult>(record);
-            auto stored = results_.insert(request().snapshot(), result);
+            auto stored = store_result(result);
             if (auto* bad = std::get_if<Diagnostic>(&stored)) { fail_step(index, std::move(*bad)); return; }
             auto& node = progress_.nodes[index];
             node.invocation = *invocation;
@@ -574,15 +632,16 @@ public:
             const bool mapped = std::ranges::none_of(diagnostics, [](const Diagnostic& diagnostic) {
                 return diagnostic.external && diagnostic.external->mapping == ExternalCodeMapping::Unmapped;
             });
-            const bool safe = tool.retry == ToolRetry::ProtocolDeduplicated || (tool.retry == ToolRetry::Idempotent
-                && tool.effects == ToolEffects::None && std::ranges::none_of(diagnostics, unknown_effect));
+            const bool safe = tool.retry == ToolRetry::ProtocolDeduplicated
+                || ((tool.retry == ToolRetry::Idempotent || tool.retry == ToolRetry::StagedState)
+                    && std::ranges::none_of(diagnostics, unknown_effect));
             if (mapped && safe && call.attempt.value() < policy.max_retries) {
                 if (state) { state->settle(false); }
                 return CallDecision::Retry;
             }
         }
         progress_.diagnostics.reserve(progress_.diagnostics.size() + diagnostics.size());
-        if (auto committed = results_.insert(request().snapshot(), result);
+        if (auto committed = store_result(result);
             auto* failure = std::get_if<Diagnostic>(&committed)) {
             if (state) { state->settle(false); }
             fail_step(index, std::move(*failure));
@@ -616,7 +675,8 @@ public:
         auto& node = progress_.nodes[index];
         node.error_handled = recoverable(index, final.status);
         const auto failure = node.error_handled ? std::optional{close_reason(final.status)} : std::nullopt;
-        schedule_.complete(index, final.selected_control_outputs, failure);
+        if (final.flow == InvocationFlow::EndContinuous) { progress_.end_continuous = true; }
+        schedule_.complete(index, final.selected_control_outputs, failure, final.flow == InvocationFlow::CloseBranch);
         apply_skips();
         finish_if_done();
     }
@@ -683,7 +743,7 @@ private:
             std::move(outputs), std::move(diagnostics), {}, std::move(outlets)});
         if (auto* bad = std::get_if<Diagnostic>(&result)) { return std::move(*bad); }
         const auto& record = std::get<NodeResult>(result);
-        auto inserted = results_.insert(request().snapshot(), record);
+        auto inserted = store_result(record);
         if (auto* bad = std::get_if<Diagnostic>(&inserted)) { return std::move(*bad); }
         node.status = status;
         active_regions_.erase(slot);
@@ -825,6 +885,68 @@ private:
         if (const auto observers = observers_.lock()) { observers->publish(identity(), kind, status, result); }
     }
 
+    void open_group_locals(NodeId group, ExecutionScopeId scope)
+    {
+        if (const auto initial = local_initial_.find(group); initial != local_initial_.end()) {
+            progress_.group_local_variables.push_back({scope, group, initial->second});
+        }
+    }
+
+    template<class Progress> auto visible_locals(Progress& progress, ExecutionScopeId scope) const -> decltype(&progress.local_variables)
+    {
+        if (scope == schedule_.scope(0).id && !debug_parent_) { return &progress.local_variables; }
+        auto& groups = progress.group_local_variables;
+        const auto group = std::ranges::find(groups, scope, &GroupLocalVariables::scope);
+        return group == groups.end() ? nullptr : &group->variables;
+    }
+
+    Result<std::monostate> store_result(const NodeResult& result)
+    {
+        const auto& data = result.data();
+        const auto& call = data.identity.invocation;
+        const auto& flow = *find_workflow(request().snapshot().solution(), identity().workflow);
+        const auto& bindings = find_node(flow, call.node)->result_variables;
+        if (bindings.empty() || !module_completion_code(data.status) || data.flow == InvocationFlow::CloseBranch) {
+            return results_.insert(request().snapshot(), result);
+        }
+        return results_.insert(request().snapshot(), result, [&]() -> Result<std::monostate> {
+            // The accepted record includes engine-derived status even when preparation or I/O failed.
+            auto lookup = results_.lookup(data.identity.run, call);
+            if (auto* bad = std::get_if<Diagnostic>(&lookup)) { return *bad; }
+            const auto& accepted = *std::get<std::optional<NodeResult>>(lookup);
+            std::vector<GlobalWrite> globals;
+            const auto origin = SessionInvocationKey{identity().snapshot.session, call};
+            std::optional<std::vector<GlobalVariableEntry>> local_updates;
+            auto* locals = visible_locals(progress_, call.scope);
+            const auto shared = shared_.lock();
+            for (const auto& binding : bindings) {
+                const auto* slot = accepted.output(binding.output);
+                const auto* value = slot ? std::get_if<DataValue>(&slot->content) : nullptr;
+                if (!value) { continue; }
+                if (binding.scope == VariableScope::Global) {
+                    const auto* def = shared ? shared->variable_definition(binding.variable) : nullptr;
+                    if (!def) { return error(ErrorCode::UnknownTarget, "The mapped global variable is unavailable.", request(), call.node); }
+                    globals.push_back({binding.variable, def->type == value->type() ? *value : DataValue::some(*value)});
+                } else {
+                    if (!locals) { return error(ErrorCode::ScopeViolation, "The mapped local scope is unavailable.", request(), call.node); }
+                    if (!local_updates) { local_updates = *locals; }
+                    auto item = std::ranges::find(*local_updates, binding.variable, &GlobalVariableEntry::variable);
+                    if (item == local_updates->end()) { return error(ErrorCode::UnknownTarget, "The mapped local variable is unavailable.", request(), call.node); }
+                    if (item->revision == UINT64_MAX) { return error(ErrorCode::IdentityExhausted, "The local variable revision cannot wrap.", request(), call.node); }
+                    item->current_value = item->current_value.type() == value->type() ? *value : DataValue::some(*value);
+                    ++item->revision;
+                    item->update_origin = origin;
+                }
+            }
+            if (!globals.empty()) {
+                auto written = shared->write_many(globals, origin);
+                if (auto* bad = std::get_if<Diagnostic>(&written)) { return *bad; }
+            }
+            if (local_updates) { locals->swap(*local_updates); }
+            return std::monostate{};
+        });
+    }
+
     mutable std::mutex mutex_;
     std::condition_variable changed_;
     const std::shared_ptr<RunWakeup> wakeup_;
@@ -841,6 +963,9 @@ private:
     std::size_t remaining_;
     std::vector<std::optional<ToolInvocationIdentity>> eligible_;
     ResultStore results_;
+    LocalInitialValues local_initial_;
+    std::optional<NodeId> debug_parent_;
+    std::weak_ptr<SharedDataService> shared_;
 };
 
 void record_numeric_value(RunBindingTrace& trace, const DataValue& value)
@@ -1099,6 +1224,8 @@ void settle_notified(Work& work)
         if (call.decision == CallDecision::Retry) {
             auto fixed = call.invocation.context.data();
             fixed.resources.clear();
+            fixed.image_archive_writer.reset();
+            fixed.image_storage_writer.reset();
             fixed.state.reset();
             fixed.shared_data.reset();
             fixed.correlation_join.reset();
@@ -1119,9 +1246,12 @@ Result<InvocationOperation> launch_call(ActiveCall& call, std::shared_ptr<ToolIn
     auto acquired = states.acquire(invocation.context, *instance, work.state_bindings, work.run_states);
     if (auto* failure = std::get_if<Diagnostic>(&acquired)) { return std::move(*failure); }
     call.state = std::get<std::shared_ptr<detail::InvocationStateLease>>(std::move(acquired));
-    if (call.state || configuration.tool.shared_target || configuration.tool.requires_correlation_join) {
+    const auto& changes = work.plan.request().trigger().directories;
+    const auto change = std::ranges::find(changes, configuration.node, &DirectoryChange::node);
+    if (call.state || configuration.tool.shared_target || configuration.tool.requires_correlation_join || change != changes.end()) {
         auto data = invocation.context.data();
         data.state = call.state;
+        if (change != changes.end()) { data.changed_image_files = change->changed_files; }
         if (configuration.tool.shared_target) { data.shared_data = work.services->data; }
         if (configuration.tool.requires_correlation_join) { data.correlation_join = work.services->joins; }
         auto fixed = InvocationContext::create(data);
@@ -1331,7 +1461,8 @@ void finish_pending_retry(Work& work, std::size_t index, std::optional<Diagnosti
     }
 }
 
-void start_node(Work& work, std::size_t index, detail::NodeStateService& states, CallArbiter& arbitration)
+void start_node(Work& work, std::size_t index, detail::NodeStateService& states, CallArbiter& arbitration,
+    const auto& state_turn)
 {
     auto& run = *work.run;
     const auto& request = work.plan.request();
@@ -1358,6 +1489,7 @@ void start_node(Work& work, std::size_t index, detail::NodeStateService& states,
     auto waiting = work.waiting_access.extract(index);
     auto access = waiting.empty() ? std::shared_ptr<CallArbiter::Ticket>{} : std::move(waiting.mapped());
     const auto reserve = [&] {
+        if (tool.configuration().data().tool.state_in_admission_order && !state_turn(node)) { return false; }
         if (!access) { access = arbitration.request(tool.configuration(), work.state_bindings, run.identity().run, run.wakeup()); }
         return !access || access->granted();
     };
@@ -1432,19 +1564,24 @@ void start_node(Work& work, std::size_t index, detail::NodeStateService& states,
     }
 }
 
-WorkStep execute_step(Work& work, detail::NodeStateService& states, CallArbiter& arbitration)
+WorkStep execute_step(Work& work, detail::NodeStateService& states, CallArbiter& arbitration,
+    const auto& state_turn, const auto& release_state_turns)
 {
     auto& run = *work.run;
     run.begin_step();
     settle_notified(work);
     const bool group_progress = finish_groups(work);
     const bool loop_progress = advance_loops(work);
-    const auto granted = [](const auto& entry) { return !entry.second || entry.second->granted(); };
+    // Downstream begin() may block. Publish released turns before entering it.
+    release_state_turns();
+    const auto granted = [&](const auto& entry) {
+        return entry.second ? entry.second->granted() : state_turn(run.nodes()[entry.first]);
+    };
     std::optional<std::size_t> ready;
     if (run.can_continue()) {
         const auto retry = std::ranges::find_if(work.waiting_access, granted);
         ready = retry != work.waiting_access.end() ? std::optional{retry->first} : run.take_ready();
-        if (ready) { start_node(work, *ready, states, arbitration); }
+        if (ready) { start_node(work, *ready, states, arbitration, state_turn); }
     }
     if (run.stopping()) {
         work.waiting_access.clear();
@@ -1482,6 +1619,7 @@ struct WorkflowEngine::PreparedSubmission {
     const std::shared_ptr<InvocationResourceProvider> resources;
     detail::ControlSchedule schedule;
     std::shared_ptr<SharedServices> previous_services, candidate_services, run_services;
+    LocalInitialValues locals;
     bool consumed{false}; // Protected by the originating engine's scheduler mutex.
     std::shared_ptr<SolutionCapture> pinned{};
 };
@@ -1550,7 +1688,7 @@ struct WorkflowEngine::Impl {
             if (auto* bad = std::get_if<Diagnostic>(&proposed)) { return RunRejected{std::move(*bad)}; }
             auto candidate = std::get<std::shared_ptr<SharedServices>>(std::move(proposed));
             auto scoped = candidate;
-            const bool isolated = request.debug_state() == DebugStatePolicy::Isolated;
+            const bool isolated = request.debug_state() && request.debug_state() != DebugStatePolicy::Active;
             if (isolated) {
                 auto separate = shared_services(request.snapshot(), {});
                 if (auto* bad = std::get_if<Diagnostic>(&separate)) { return RunRejected{std::move(*bad)}; }
@@ -1575,6 +1713,9 @@ struct WorkflowEngine::Impl {
                 if (auto* failure = std::get_if<Diagnostic>(&checked)) { return RunRejected{std::move(*failure)}; }
             }
             auto prepared = std::make_shared<PreparedSubmission>(plan, workflow, std::move(provider));
+            auto locals = local_initial_values(fixed, *find_workflow(fixed.snapshot().solution(), workflow));
+            if (auto* bad = std::get_if<Diagnostic>(&locals)) { return RunRejected{std::move(*bad)}; }
+            prepared->locals = std::get<LocalInitialValues>(std::move(locals));
             prepared->previous_services = std::move(previous);
             prepared->candidate_services = std::move(candidate);
             prepared->run_services = std::move(scoped);
@@ -1618,7 +1759,8 @@ struct WorkflowEngine::Impl {
             const auto ahead = occupied.waiting - occupied.cleaning;
             const auto admission = ahead < free ? RunAdmission::Immediate : RunAdmission::Queued;
             auto run = std::make_shared<EngineRun>(request, std::get<WorkflowRunId>(next),
-                std::move(prepared.schedule), events, observers, admission, prepared.pinned ? prepared.pinned->wake : nullptr);
+                std::move(prepared.schedule), events, observers, admission, prepared.pinned ? prepared.pinned->wake : nullptr,
+                std::move(prepared.locals), prepared.run_services->data);
             auto handle = RunHandle::from_accepted(run);
             if (auto* failure = std::get_if<Diagnostic>(&handle)) { return RunRejected{std::move(*failure)}; }
             auto accepted = std::get<RunHandle>(std::move(handle));
@@ -1641,6 +1783,7 @@ struct WorkflowEngine::Impl {
                     return RunRejected{std::move(*failure)};
                 }
                 staged.back().work->state_bindings = std::get<detail::RunStateBindings>(std::move(bound));
+                register_ordered_states(staged.back());
             } catch (...) {
                 if (inserted) { slots.erase(slot); }
                 throw;
@@ -1755,13 +1898,77 @@ struct WorkflowEngine::Impl {
     }
 
 private:
+    struct OrderedState {
+        std::uint64_t generation;
+        std::vector<NodeId> anchors;
+    };
     struct Entry {
         std::shared_ptr<EngineRun> run;
         std::unique_ptr<Work> work;
         bool has_slot{};
         bool executing{};
+        std::map<NodeId, OrderedState> ordered;
+        std::set<std::uint64_t> waiting_for_state;
     };
     using WorkList = std::list<Entry>;
+
+    static void register_ordered_states(Entry& entry)
+    {
+        const auto& work = *entry.work;
+        const auto& flow = *find_workflow(work.plan.request().snapshot().solution(), entry.run->identity().workflow);
+        const auto roots = entry.run->nodes();
+        for (const auto& tool : work.plan.tools()) {
+            const auto& config = tool.configuration();
+            const auto node = config.data().node;
+            if (!config.data().tool.state_in_admission_order || config.effective_state()->scope != StateScope::SolutionSession) { continue; }
+            const auto generation = detail::serialized_state_generation(work.state_bindings, node);
+            if (!generation) { continue; }
+            OrderedState order{*generation, {node}};
+            auto current = node;
+            while (std::ranges::find(roots, current) == roots.end()) {
+                const auto parent = std::ranges::find(flow.containment, current, &Containment::child);
+                if (parent == flow.containment.end()) { break; }
+                current = parent->parent;
+                const auto& group = std::get<GroupConfiguration>(find_node(flow, current)->configuration);
+                // A loop may still reach this node in a later iteration. Only its own
+                // completion (or a skipped ancestor) ends this run's turn.
+                if (group.loop) { order.anchors.clear(); }
+                order.anchors.push_back(current);
+            }
+            entry.ordered.emplace(node, std::move(order));
+        }
+    }
+
+    bool has_state_turn(WorkList::iterator entry, NodeId node)
+    {
+        const auto current = entry->ordered.find(node);
+        if (current == entry->ordered.end()) { return true; }
+        const auto generation = current->second.generation;
+        const std::lock_guard lock(events->mutex);
+        for (auto earlier = admitted.begin(); earlier != entry; ++earlier) {
+            const auto other = earlier->ordered.find(node);
+            if (other != earlier->ordered.end() && other->second.generation == generation) {
+                entry->waiting_for_state.insert(generation);
+                return false;
+            }
+        }
+        return true;
+    }
+
+    void release_finished_state_turns(WorkList::iterator entry, bool retiring)
+    {
+        for (auto next = entry->ordered.begin(); next != entry->ordered.end();) {
+            const auto state = next++;
+            if (!retiring && !entry->run->state_order_finished(state->second.anchors)) { continue; }
+            const auto generation = state->second.generation;
+            const std::lock_guard lock(events->mutex);
+            entry->ordered.erase(state);
+            for (auto later = std::next(entry); later != admitted.end(); ++later) {
+                if (later->waiting_for_state.erase(generation)) { later->run->wakeup()->schedule(); }
+            }
+            events->changed.notify_all();
+        }
+    }
     struct WorkflowSlots {
         WorkflowAdmission policy;
         std::size_t in_flight{};
@@ -1906,7 +2113,9 @@ private:
             const auto entry = *ready;
             auto& work = *entry->work;
             auto next = WorkStep::Finished;
-            try { next = execute_step(work, states, arbitration); }
+            const auto state_turn = [&](NodeId node) { return has_state_turn(entry, node); };
+            const auto release_turns = [&] { release_finished_state_turns(entry, false); };
+            try { next = execute_step(work, states, arbitration, state_turn, release_turns); }
             catch (...) {
                 work.run->unexpected_failure();
                 if (!work.active_calls.empty()) {
@@ -1919,6 +2128,7 @@ private:
                     next = WorkStep::Ready;
                 }
             }
+            release_finished_state_turns(entry, next == WorkStep::Finished);
             if (next == WorkStep::Finished) { retire(entry); }
             else {
                 const std::lock_guard lock(events->mutex);

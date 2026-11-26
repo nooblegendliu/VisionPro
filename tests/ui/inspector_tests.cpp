@@ -2,22 +2,32 @@
 #include "control_scene.hpp"
 #include "editor_inspector.hpp"
 #include "editor_window.hpp"
+#include "image_archive_dialogs.hpp"
+#include "image_source_fields.hpp"
+#include "image_source_fields.hpp"
 #include "run_controller.hpp"
 #include "tool_catalog.hpp"
 
 #include <simulation.hpp>
 #include <visionpro/core/id_factory.hpp>
+#include <visionpro/core/runtime_id_factory.hpp>
 #include <visionpro/core/schema_id_factory.hpp>
+#include <visionpro/infrastructure/camera.hpp>
+#include <visionpro/infrastructure/camera_trigger.hpp>
+#include <visionpro/infrastructure/image_archive.hpp>
 #include <visionpro/workflow/validation.hpp>
 
 #include <QtNodes/internal/NodeGraphicsObject.hpp>
 #include <QAction>
 #include <QApplication>
+#include <QBuffer>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDockWidget>
+#include <QDragEnterEvent>
+#include <QDropEvent>
 #include <QGraphicsView>
 #include <QInputDialog>
 #include <QJsonArray>
@@ -27,11 +37,13 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMessageBox>
+#include <QMimeData>
 #include <QPlainTextEdit>
 #include <QPointer>
 #include <QProcess>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QScrollBar>
 #include <QSignalSpy>
 #include <QSpinBox>
 #include <QStatusBar>
@@ -191,7 +203,10 @@ private Q_SLOTS:
     void resets_only_the_selected_session_accumulator();
     void edits_shared_targets_and_previews_without_consuming();
     void edits_and_reloads_workflow_admission();
+    void binds_camera_trigger_and_frame_as_one_edit();
     void edits_connects_and_reopens_error_policy();
+    void configures_image_output_and_selects_upstream_marks();
+    void browses_and_extracts_image_package();
 };
 
 ControlScene& scene(EditorWindow& window)
@@ -217,6 +232,211 @@ NodeResult result_for(const RunHandle& run, const NodeId& node)
     const auto found = std::ranges::find(progress.nodes, node, &RunNodeProgress::node);
     if (found == progress.nodes.end() || !found->invocation) { throw std::runtime_error("Missing invocation"); }
     return take(run.lookup(*found->invocation)).value();
+}
+
+void InspectorTests::configures_image_output_and_selects_upstream_marks()
+{
+    const auto tools = take(app::make_tool_registry());
+    const auto type = key<ToolTypeId>("visionpro.image.output");
+    if (!tools.find_descriptor(type)) { QSKIP("The output image renderer requires OpenCV."); }
+    auto draft = canvas_example();
+    const auto integer_trigger = take(IdFactory::generate<VariableId>());
+    const auto string_trigger = take(IdFactory::generate<VariableId>());
+    draft.variables.push_back({integer_trigger,"计数判定",DataType::integer(),ConfigValue::integer(1)});
+    draft.variables.push_back({string_trigger,"文字判定",DataType::string(),take(ConfigValue::string("NG"))});
+    auto& flow = draft.workflows.front();
+    auto target = std::ranges::find(flow.nodes,std::string("Merge"),&Node::name);
+    const auto sink = target->id;
+    target->configuration = ToolConfiguration{type,1};
+    target->bindings.clear();
+    const auto edge = std::ranges::find(flow.control_links,sink,&ControlLink::target);
+    QVERIFY(edge != flow.control_links.end());
+    const auto blob = std::ranges::find(flow.nodes,edge->source,&Node::id);
+    blob->configuration = ToolConfiguration{key<ToolTypeId>("visionpro.image.blob"),1};
+    ControlGraphModel model(draft,flow.id,tools);
+    ControlScene canvas(model);
+    EditorInspector inspector(model,canvas,tools);
+    inspector.resize(470,600);
+    inspector.show();
+    inspector.pin(NodeTarget{flow.id,sink});
+    auto* tabs = inspector.findChild<QTabBar*>("moduleConfigTabs");
+    QVERIFY(tabs);
+    QTRY_COMPARE(tabs->tabText(2),QStringLiteral("渲染设置"));
+    QCOMPARE(tabs->tabText(1),QStringLiteral("渲染参数"));
+    const auto control = [&](const char* id) -> QCheckBox* {
+        for (auto* box : inspector.findChildren<QCheckBox*>(QLatin1String(id))) {
+            if (box->isVisible()) { return box; }
+        }
+        return nullptr;
+    };
+    QTRY_VERIFY(control("output_save_enabled"));
+    QVERIFY(!control("output_save_enabled")->isChecked());
+    QVERIFY(!control("output_save_original"));
+    control("output_save_enabled")->click();
+    QTRY_VERIFY(control("output_save_original"));
+    control("output_save_original")->click();
+    QTRY_VERIFY(inspector.findChild<QPushButton*>("chooseImageOutputDirectory"));
+    QTRY_VERIFY(control("output_ftp_enabled"));
+    control("output_ftp_enabled")->click();
+    const auto button = [&](const char* name) -> QPushButton* {
+        for (auto* item : inspector.findChildren<QPushButton*>(QLatin1String(name))) {
+            if (item->isVisible()) { return item; }
+        }
+        return nullptr;
+    };
+    QTRY_VERIFY(button("outputFtpCheck") && button("outputFtpPassword"));
+    bool masked = false;
+    QTimer::singleShot(0, [&] {
+        if (auto* dialog = qobject_cast<QInputDialog*>(QApplication::activeModalWidget())) {
+            masked = dialog->textEchoMode() == QLineEdit::Password;
+            dialog->reject();
+        }
+    });
+    button("outputFtpPassword")->click();
+    QVERIFY(masked);
+    button("outputFtpCheck")->click();
+    QTRY_VERIFY(button("outputFtpCheck")->isEnabled());
+    auto* ftp_status = inspector.findChild<QLabel*>("outputFtpStatus");
+    QVERIFY(ftp_status && ftp_status->text().contains(QStringLiteral("Invalid FTP")));
+    QTRY_VERIFY(control("output_trigger_enabled"));
+    control("output_trigger_enabled")->click();
+    const auto target_node = [&] { return find_node(model.draft().workflows.front(),sink); };
+    const auto trigger_type = [&] {
+        for (auto* item : inspector.findChildren<QComboBox*>("output_trigger_source_type")) { if (item->isVisible()) { return item; } }
+        return static_cast<QComboBox*>(nullptr);
+    };
+    QTRY_VERIFY(trigger_type());
+    trigger_type()->setCurrentIndex(trigger_type()->findData("Integer"));
+    QTRY_VERIFY(source_enum(*target_node(),"trigger_source_type","Judgement") == "Integer");
+    QTRY_VERIFY(binding_button(inspector,"trigger") && binding_button(inspector,"trigger")->toolTip().contains("Int64"));
+    QTRY_VERIFY(trigger_type() && trigger_type()->currentData() == "Integer");
+    trigger_type()->setCurrentIndex(trigger_type()->findData("String"));
+    QTRY_VERIFY(binding_button(inspector,"trigger") && binding_button(inspector,"trigger")->toolTip().contains("String"));
+    const auto quick_source = [&] {
+        for (auto* item : inspector.findChildren<QComboBox*>("outputTriggerSource")) { if (item->isVisible()) { return item; } }
+        return static_cast<QComboBox*>(nullptr);
+    };
+    for (const auto& [name, variable] : {std::pair{QStringLiteral("计数判定"),integer_trigger},
+        std::pair{QStringLiteral("文字判定"),string_trigger}}) {
+        QTRY_VERIFY(quick_source() && quick_source()->findText(name,Qt::MatchContains)>0);
+        auto* choices = quick_source();
+        const int index = choices->findText(name,Qt::MatchContains);
+        choices->setCurrentIndex(index);
+        choices->activated(index);
+        const auto* assignment = binding_for(model,sink,key<InputId>("trigger"));
+        QVERIFY(assignment && std::get<GlobalReference>(assignment->sources.front()).variable == variable);
+        QCOMPARE(source_enum(*target_node(),"trigger_source_type","Judgement"), variable == integer_trigger ? "Integer" : "String");
+        QApplication::processEvents();
+    }
+    const auto has_ordinary_directory = [&] {
+        for (auto* item : inspector.findChildren<QPushButton*>("chooseImageOutputDirectory")) {
+            if (item->isVisible() && item->property("slot").toString() == "original_path") { return true; }
+        }
+        return false;
+    };
+    QTRY_VERIFY(has_ordinary_directory());
+    tabs->setCurrentIndex(2);
+    QTRY_VERIFY(button("outputMultilineText"));
+    QTimer::singleShot(0,[] {
+        if (auto* dialog = qobject_cast<QInputDialog*>(QApplication::activeModalWidget())) {
+            dialog->setTextValue(QStringLiteral("第一行\n第二行"));
+            dialog->accept();
+        }
+    });
+    button("outputMultilineText")->click();
+    QVERIFY(source_value(*target_node(),"text") && *source_value(*target_node(),"text")->as_string() == "第一行\n第二行");
+    const QString prefix = QStringLiteral("layer.") + QString::fromStdString(blob->id.to_string()) + ".components.";
+    auto mark = [&] {
+        for (auto* item : inspector.findChildren<QCheckBox*>(prefix + "centroids")) { if (item->isVisible()) { return item; } }
+        return static_cast<QCheckBox*>(nullptr);
+    };
+    QTRY_VERIFY(mark());
+    mark()->click();
+    const auto* binding = binding_for(model,sink,key<InputId>("centroids"));
+    QVERIFY(binding && binding->sources.size() == 1);
+    QVERIFY(binding->cardinality == BindingCardinality::MultipleSources);
+    QCOMPARE(std::get<OutputReference>(binding->sources.front()).node, blob->id);
+    const auto style_button = [&] {
+        for (auto* item : inspector.findChildren<QPushButton*>(prefix+"centroids.style")) { if (item->isVisible()) { return item; } }
+        return static_cast<QPushButton*>(nullptr);
+    };
+    QTRY_VERIFY(style_button());
+    QTimer::singleShot(0,[] {
+        if (auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget())) {
+            dialog->findChild<QLineEdit*>("layerOkColor")->setText("#00ff00");
+            dialog->findChild<QLineEdit*>("layerNgColor")->setText("#ff0000");
+            dialog->findChild<QSpinBox*>("layerOpacity")->setValue(46);
+            dialog->findChild<QSpinBox*>("layerThickness")->setValue(3);
+            dialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Ok)->click();
+        }
+    });
+    style_button()->click();
+    QCOMPARE(target_node()->display_styles.size(),1U);
+    const auto style = target_node()->display_styles.front();
+    QCOMPARE(style.source.node,blob->id);
+    QVERIFY(style.style.ok_color == "#00ff00" && style.style.ng_color == "#ff0000" && style.style.opacity == 46 && style.style.thickness == 3);
+    canvas.undoStack().undo();
+    QVERIFY(target_node()->display_styles.empty());
+    canvas.undoStack().undo();
+    QVERIFY(!binding_for(model,sink,key<InputId>("centroids")));
+}
+
+void InspectorTests::browses_and_extracts_image_package()
+{
+    using namespace infrastructure;
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const auto native = std::filesystem::path(root.path().toStdU16String());
+    ImageArchive archive(ArchivePackagePolicy{native,1});
+    QByteArray encoded;
+    QBuffer buffer(&encoded);
+    QVERIFY(buffer.open(QIODevice::WriteOnly));
+    QImage source(9,5,QImage::Format_RGB32);
+    source.fill(Qt::red);
+    QVERIFY(source.save(&buffer,"PNG"));
+    const auto* bytes = reinterpret_cast<const std::uint8_t*>(encoded.constData());
+    ToolInvocationIdentity call{take(IdFactory::generate<SolutionSessionId>()),take(RuntimeIdFactory::from_value<ConfigSnapshotId>(1)),
+        {take(RuntimeIdFactory::from_value<WorkflowRunId>(1)),take(IdFactory::generate<NodeId>()),
+            take(RuntimeIdFactory::from_value<ExecutionScopeId>(1)),take(RuntimeIdFactory::from_value<InvocationId>(1))},
+        take(RuntimeIdFactory::from_value<AttemptId>(0))};
+    auto receipt = archive.save(call,{},{{ArchiveKind::Rendered,native,"工件",ArchiveSuffix::Sequence,"png",
+        std::vector<std::uint8_t>(bytes,bytes+encoded.size())}});
+    QVERIFY2(!receipt.failure,receipt.failure ? receipt.failure->message.c_str() : "");
+    take(archive.flush());
+    QVERIFY(receipt.images.size() == 1 && receipt.images.front().package);
+    const auto path = QString::fromStdU16String(receipt.images.front().package->u16string());
+    std::unique_ptr<QDialog> dialog(open_image_packages(nullptr));
+    auto* tree = dialog->findChild<QTreeWidget*>("packageEntries");
+    auto* extract = dialog->findChild<QPushButton*>("extractImagePackages");
+    QVERIFY(tree && extract);
+    QMimeData mime;
+    mime.setUrls({QUrl::fromLocalFile(path)});
+    QDragEnterEvent enter(QPoint(5,5),Qt::CopyAction,&mime,Qt::LeftButton,Qt::NoModifier);
+    QApplication::sendEvent(dialog.get(),&enter);
+    QVERIFY(enter.isAccepted());
+    QDropEvent drop(QPointF(5,5),Qt::CopyAction,&mime,Qt::LeftButton,Qt::NoModifier);
+    QApplication::sendEvent(dialog.get(),&drop);
+    QTRY_COMPARE(tree->topLevelItemCount(),1);
+    QCOMPARE(tree->topLevelItem(0)->childCount(),1);
+    QTRY_VERIFY(std::ranges::any_of(dialog->findChildren<QLabel*>(),[](QLabel* label){ return !label->pixmap().isNull(); }));
+    const auto saved = QDir(root.path()).filePath(QFileInfo(path).completeBaseName() + "/" + tree->topLevelItem(0)->child(0)->text(0));
+    QTRY_VERIFY(QFileInfo::exists(saved));
+    const QImage recovered(saved);
+    QCOMPARE(recovered.pixelColor(0,0),QColor(Qt::red));
+    call.invocation.invocation = take(RuntimeIdFactory::from_value<InvocationId>(2));
+    receipt = archive.save(call,{},{{ArchiveKind::Original,native,"第二件",ArchiveSuffix::Sequence,"png",
+        std::vector<std::uint8_t>(bytes,bytes+encoded.size())}});
+    QVERIFY(!receipt.failure);
+    take(archive.flush());
+    mime.setUrls({QUrl::fromLocalFile(root.path())});
+    QDragEnterEvent batch_enter(QPoint(5,5),Qt::CopyAction,&mime,Qt::LeftButton,Qt::NoModifier);
+    QApplication::sendEvent(dialog.get(),&batch_enter);
+    QDropEvent batch_drop(QPointF(5,5),Qt::CopyAction,&mime,Qt::LeftButton,Qt::NoModifier);
+    QApplication::sendEvent(dialog.get(),&batch_drop);
+    QTRY_COMPARE(tree->topLevelItemCount(),2);
+    dialog->findChild<QCheckBox*>()->setChecked(false);
+    extract->click();
+    QTRY_COMPARE(QDir(root.path()).entryList({"*.png"}, QDir::Files).size(),2);
 }
 
 void InspectorTests::locates_diagnostic_field_data()
@@ -467,6 +687,141 @@ void InspectorTests::locates_workflow_input_from_inside_group()
     QTRY_VERIFY(ports->hasFocus());
     QCOMPARE(ports->currentItem()->data(Qt::UserRole).toString(), QStringLiteral("batch"));
     QVERIFY(scene(window).selected_nodes().empty());
+}
+
+void InspectorTests::binds_camera_trigger_and_frame_as_one_edit()
+{
+    const auto catalog = take(app::make_tool_registry());
+    const auto saved = take(infrastructure::load_solution(VISIONPRO_CAMERA_DIRECTORY, catalog));
+    const auto& original = saved.solution().workflows.front();
+    const auto id = original.nodes.front().id;
+    EditorWindow window(saved.solution(), catalog);
+    window.show();
+    auto& canvas = scene(window);
+    QVERIFY(canvas.reveal_node(id));
+    auto& inspector = properties(window);
+    auto* tabs = inspector.findChild<QTabBar*>("moduleConfigTabs");
+    QVERIFY(tabs && tabs->isVisible());
+    QCOMPARE(tabs->tabText(1), QStringLiteral("相机接入"));
+    auto* devices = inspector.findChild<QComboBox*>("selectNodeResource");
+    auto* manager = inspector.findChild<QToolButton*>("openSourceCameraManager");
+    QVERIFY(devices && devices->isVisible() && devices->currentIndex() > 0);
+    QVERIFY(manager && manager->isVisible() && !manager->icon().isNull());
+    QCOMPARE(devices->itemText(0), QStringLiteral("未关联"));
+    auto* scroll = inspector.findChild<QScrollArea*>();
+    QTRY_COMPARE(scroll->horizontalScrollBar()->maximum(), 0);
+    QVERIFY(scroll->viewport()->rect().contains(manager->mapTo(scroll->viewport(), manager->rect().bottomRight())));
+    QVERIFY(!inspector.findChild<QComboBox*>("source_camera_input")->isVisible());
+    tabs->setCurrentIndex(1);
+    QPushButton* entry{};
+    QTRY_VERIFY((entry = inspector.findChild<QPushButton*>("configureSourceCameraTrigger")) && entry->isVisible());
+    const auto baseline = canvas.undoStack().count();
+    const auto clicked = exercise_dialog(inspector, *entry, {[](QDialog& dialog) -> QPushButton* {
+        auto* camera = dialog.findChild<QComboBox*>("triggerCameraDevice");
+        auto* frame = dialog.findChild<QComboBox*>("sourceTriggerFrameInput");
+        auto* image = dialog.findChild<QComboBox*>("triggerCameraImage");
+        if (!camera || !frame || !image || !camera->currentText().contains("SIM-001")
+            || frame->currentData() != "frame" || image->currentIndex() < 0) { return nullptr; }
+        return accept_button(dialog);
+    }});
+    QVERIFY2(clicked.isEmpty(), qPrintable(clicked));
+    const auto& flow = window.draft().workflows.front();
+    QVERIFY(flow.trigger && flow.trigger->camera && flow.trigger->camera->device == saved.solution().resources.front().id);
+    QCOMPARE(flow.interface.inputs.size(), 2u);
+    QCOMPARE(flow.interface.version, original.interface.version + 1);
+    const auto input = key<InputId>("image");
+    const auto* bound = binding_for(static_cast<const ControlGraphModel&>(canvas.graphModel()), id, input);
+    QVERIFY(bound && bound->sources.size() == 1);
+    const auto* scoped = std::get_if<ScopedInputReference>(&bound->sources.front());
+    QVERIFY(scoped && scoped->workflow == flow.id && scoped->input == flow.trigger->camera->image_input);
+    const auto& source = flow.nodes.front();
+    const auto mode = std::ranges::find(source.bindings, BindingTarget{key<ParameterId>("camera_input")}, &Binding::target);
+    QVERIFY(mode != source.bindings.end() && std::get<ConfigValue>(mode->sources.front()).as_enum()->text() == "Delivered");
+    {
+        std::shared_ptr<WorkflowSession> session = take(WorkflowSession::create(catalog));
+        take(session->activate(window.draft()));
+        auto control = take(TriggerControl::start(session, flow.id));
+        auto camera = take(infrastructure::CameraTriggerStream::open(window.draft(), flow.id, control));
+        const auto received = take(camera->next());
+        const auto* run = std::get_if<RunHandle>(&received.submission);
+        QVERIFY(run);
+        const auto deadline = TriggerControl::Clock::now() + std::chrono::seconds(5);
+        const auto complete = take(run->wait(RunWaitTarget::Quiescence, deadline));
+        QCOMPARE(complete.progress.status, ExecutionStatus::Succeeded);
+        const auto result = result_for(*run, id);
+        const auto* pixels = result.output(key<OutputId>("image"));
+        QVERIFY(pixels && std::holds_alternative<DataValue>(pixels->content));
+        const auto* delivered = run->request().input(flow.trigger->camera->image_input);
+        QVERIFY(delivered && std::get<DataValue>(pixels->content).as_image()->frame == delivered->value.as_image()->frame);
+        QCOMPARE(camera->statistics().accepted, 1u);
+        take(camera->close());
+        take(control->stop(TriggerStopMode::Drain, deadline));
+    }
+    QCOMPARE(canvas.undoStack().count(), baseline + 1);
+    canvas.undoStack().undo();
+    QVERIFY(!window.draft().workflows.front().trigger && window.draft().workflows.front().interface.inputs.empty());
+    canvas.undoStack().redo();
+    QVERIFY(window.draft().workflows.front().trigger->camera);
+    QTRY_VERIFY(inspector.findChild<QLabel*>("sourceCameraTriggerSummary"));
+
+    // A flow may change its camera independently after the node starts using delivered frames.
+    auto delivered = window.draft();
+    auto& delivered_flow = delivered.workflows.front();
+    auto replacement = delivered.resources.front();
+    replacement.id = take(IdFactory::generate<ResourceId>());
+    replacement.name = "流程触发相机 B";
+    std::get<DeviceResource>(replacement.location).configuration = take(infrastructure::camera_device_config("SIM-002"));
+    delivered.resources.push_back(replacement);
+    delivered_flow.trigger->camera->device = replacement.id;
+    EditorWindow linked_window(delivered, catalog);
+    linked_window.show();
+    QVERIFY(scene(linked_window).reveal_node(id));
+    auto& linked_panel = properties(linked_window);
+    auto* origin = linked_panel.findChild<QLabel*>("sourceDeliveredCamera");
+    QVERIFY(origin && origin->text().contains(QStringLiteral("流程触发相机 B")));
+    QVERIFY(!linked_panel.findChild<QComboBox*>("selectNodeResource"));
+    linked_panel.findChild<QTabBar*>("moduleConfigTabs")->setCurrentIndex(1);
+    auto* linked_edit = linked_panel.findChild<QPushButton*>("configureSourceCameraTrigger");
+    QVERIFY(linked_edit && linked_edit->isEnabled());
+    QVERIFY(exercise_dialog(linked_panel, *linked_edit, {[](QDialog& dialog) { return accept_button(dialog); }}).isEmpty());
+    QVERIFY(linked_window.draft().workflows.front().nodes.front().resources.front().resource.id == saved.solution().resources.front().id);
+
+    auto& public_inputs = delivered_flow.interface.inputs;
+    const auto other_input = key<InputId>("other_image");
+    public_inputs.push_back({other_input, "SDK 图像", DataType::image()});
+    auto& bindings = delivered_flow.nodes.front().bindings;
+    const auto image_binding = std::ranges::find(bindings, BindingTarget{input}, &Binding::target);
+    image_binding->sources = {ScopedInputReference{delivered_flow.id, {}, other_input, {}}};
+    EditorWindow input_window(std::move(delivered), catalog);
+    input_window.show();
+    QVERIFY(scene(input_window).reveal_node(id));
+    auto& input_panel = properties(input_window);
+    auto* generic = input_panel.findChild<QLabel*>("sourceDeliveredCamera");
+    QVERIFY(generic && generic->text() == QStringLiteral("由本轮图像输入提供"));
+    QVERIFY(!input_panel.findChild<QComboBox*>("selectNodeResource"));
+    input_panel.findChild<QTabBar*>("moduleConfigTabs")->setCurrentIndex(1);
+    auto* intake = input_panel.findChild<QComboBox*>("source_camera_input");
+    const auto acquire = intake->findData("Acquire");
+    QVERIFY(acquire >= 0);
+    intake->setCurrentIndex(acquire);
+    emit intake->activated(acquire);
+    QTRY_VERIFY(input_panel.findChild<QComboBox*>("selectNodeResource"));
+    QCOMPARE(input_panel.findChild<QComboBox*>("selectNodeResource")->currentData().toString(),
+        QString::fromStdString(saved.solution().resources.front().id.to_string()));
+
+    auto automatic = saved.solution();
+    auto& other = automatic.workflows.front();
+    const auto count = key<InputId>("tick");
+    other.interface.inputs.push_back({count, "Clock", DataType::integer()});
+    other.trigger = WorkflowTrigger{TriggerMode::Continuous, key<SchemaId>("other.clock"), count, 100};
+    EditorWindow protected_window(std::move(automatic), catalog);
+    protected_window.show();
+    QVERIFY(scene(protected_window).reveal_node(id));
+    auto& protected_panel = properties(protected_window);
+    protected_panel.findChild<QTabBar*>("moduleConfigTabs")->setCurrentIndex(1);
+    QTRY_VERIFY((entry = protected_panel.findChild<QPushButton*>("configureSourceCameraTrigger")) && !entry->isEnabled());
+    QVERIFY(protected_window.draft().workflows.front().trigger->source == key<SchemaId>("other.clock"));
+    QVERIFY(protected_panel.findChild<QPushButton*>("openSourceWorkflowTrigger")->isEnabled());
 }
 
 void InspectorTests::edits_and_reloads_workflow_admission()

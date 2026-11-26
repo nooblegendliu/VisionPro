@@ -102,10 +102,10 @@ bool ScopedSchedule::has_error_route(std::size_t slot) const
     return frame.schedule.has_error_route(slot - frame.offset);
 }
 void ScopedSchedule::complete(std::size_t slot, std::span<const core::ControlOutputId> outputs,
-    std::optional<ControlCloseReason> failure)
+    std::optional<ControlCloseReason> failure, bool close_branch)
 {
     auto& frame = frames_[frame_of(slot)];
-    frame.schedule.complete(slot - frame.offset, outputs, failure);
+    frame.schedule.complete(slot - frame.offset, outputs, failure, close_branch);
 }
 void ScopedSchedule::stop(ControlCloseReason reason)
 { for (auto i : active_) { frames_[i].schedule.stop(reason); } }

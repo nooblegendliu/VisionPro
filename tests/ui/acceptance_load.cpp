@@ -106,7 +106,7 @@ Solution workload(const ToolRegistry& registry)
     const auto frame = key<CoordinateSystemId>("s56.load.camera");
     const auto flow_id = id<WorkflowId>(2);
     const auto resource = id<ResourceId>(3);
-    const auto reader = key<ToolTypeId>("visionpro.image.read_file");
+    const auto reader = key<ToolTypeId>("visionpro.image.source");
     const auto threshold = key<ToolTypeId>("visionpro.image.threshold");
     const auto blob = key<ToolTypeId>("visionpro.image.blob");
     const auto adder = key<ToolTypeId>("visionpro.sim.add");

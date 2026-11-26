@@ -1,6 +1,7 @@
 #include "inspection.hpp"
 #include "opencv_image.hpp"
 #include "read_file.hpp"
+#include "../image_source_pixels.hpp"
 
 #include <visionpro/core/schema_id_factory.hpp>
 #include <visionpro/infrastructure/file_resources.hpp>
@@ -15,6 +16,15 @@ namespace {
 using namespace core;
 constexpr auto pixels = MeasurementUnit::Pixel;
 constexpr PixelFormat bgr8{PixelDepth::UInt8, ChannelOrder::BGR};
+constexpr PixelFormat rgb8{PixelDepth::UInt8, ChannelOrder::RGB};
+
+Result<cv::Mat> inspection_matrix(const ImageHandle& image)
+{
+    if (image.format() != rgb8) { return to_cv_mat(image); }
+    auto converted = image_source::convert(image, ChannelOrder::BGR);
+    if (const auto* issue = std::get_if<Diagnostic>(&converted)) { return *issue; }
+    return to_cv_mat(std::get<ImageHandle>(converted));
+}
 
 Diagnostic error(ErrorCode code, std::string message)
 { return {code, Severity::Error, {}, std::move(message)}; }
@@ -46,19 +56,20 @@ Result<TranslationMatch> locate_translation(const ImageHandle& scene, const Imag
     if (!std::isfinite(minimum_score) || minimum_score < 0 || minimum_score > 1) {
         return error(ErrorCode::ConstraintViolation, "Minimum correlation must be in [0, 1].");
     }
-    if (pattern.format() != scene.format()) {
-        return error(ErrorCode::UnsupportedPixelFormat, "Template and search image must have the same Mono8 or BGR8 format.");
+    const auto normalized = [](PixelFormat format) { return format == rgb8 ? bgr8 : format; };
+    if (normalized(pattern.format()) != normalized(scene.format())) {
+        return error(ErrorCode::UnsupportedPixelFormat, "Template and search image require matching monochrome or color formats.");
     }
     if (pattern.width() > scene.width() || pattern.height() > scene.height()) {
         return error(ErrorCode::ImageBounds, "Template dimensions exceed the search image.");
     }
-    auto templ = to_cv_mat(pattern);
+    auto templ = inspection_matrix(pattern);
     if (const auto* failure = std::get_if<Diagnostic>(&templ)) { return *failure; }
     const auto& patch = std::get<cv::Mat>(templ);
     if (constant_pattern(patch)) {
         return error(ErrorCode::InvalidImage, "Normalized correlation requires a spatially varying template.");
     }
-    auto source = to_cv_mat(scene);
+    auto source = inspection_matrix(scene);
     if (const auto* failure = std::get_if<Diagnostic>(&source)) { return *failure; }
     try {
         cv::Mat correlations;
@@ -91,14 +102,14 @@ Result<TranslationMatch> locate_translation(const ImageHandle& scene, const Imag
 
 Result<std::array<double, 3>> mean_bgr(const ImageHandle& image, const RasterMask& mask)
 {
-    if (image.format() != bgr8) { return error(ErrorCode::UnsupportedPixelFormat, "Color measurement requires UInt8 BGR."); }
+    if (image.format() != bgr8 && image.format() != rgb8) { return error(ErrorCode::UnsupportedPixelFormat, "Color measurement requires UInt8 RGB or BGR."); }
     if (auto checked = validate_raster_mask(mask, image); const auto* failure = std::get_if<Diagnostic>(&checked)) { return *failure; }
     // This operation consumes the direct nonzero membership mask produced by the ROI evaluator.
     if (mask.mapping.transform || mask.mapping.sampling != MaskSampling::None || mask.valid_pixels != MaskValueRule{}
         || mask.pixels.format() != PixelFormat{PixelDepth::UInt8, ChannelOrder::Mono}) {
         return error(ErrorCode::InvalidMask, "Color measurement requires the evaluated target-space membership mask.");
     }
-    auto source = to_cv_mat(image);
+    auto source = inspection_matrix(image);
     if (const auto* failure = std::get_if<Diagnostic>(&source)) { return *failure; }
     auto membership = to_cv_mat(mask.pixels);
     if (const auto* failure = std::get_if<Diagnostic>(&membership)) { return *failure; }
@@ -152,8 +163,8 @@ Result<ToolCompletion> locate(const InvocationContextData& call)
 Result<ToolCompletion> color_mean(const InvocationContextData& call)
 {
     const auto& image = input(call, "image").as_image()->image;
-    if (image.format() != bgr8) {
-        auto failure = error(ErrorCode::UnsupportedPixelFormat, "Color measurement requires UInt8 BGR.");
+    if (image.format() != bgr8 && image.format() != rgb8) {
+        auto failure = error(ErrorCode::UnsupportedPixelFormat, "Color measurement requires UInt8 RGB or BGR.");
         failure.location.input = key<InputId>("image");
         return failure;
     }

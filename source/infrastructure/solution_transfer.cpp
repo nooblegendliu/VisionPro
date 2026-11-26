@@ -6,6 +6,8 @@
 #include "managed_cleanup.hpp"
 #include "package_assets.hpp"
 #include "resource_files.hpp"
+#include "solution_image_source.hpp"
+#include "solution_images.hpp"
 
 #include <algorithm>
 #include <set>
@@ -59,6 +61,8 @@ std::optional<std::string> normalized_digest(std::optional<std::string_view> dig
     return value;
 }
 
+struct SequenceFilter { ResourceId resource; std::string_view pattern; };
+
 class TransferPlan {
 public:
     TransferPlan(const SolutionId& solution, detail::ResourcePaths paths, bool has_source, fs::path assets)
@@ -75,14 +79,16 @@ public:
                 return add_file(location.path, resource.id, false, location.expected_sha256);
             } else if constexpr (std::is_same_v<Location, ImageSequenceResource>) {
                 if (auto* selection = std::get_if<DirectorySelection>(&location.selection)) {
-                    return add_directory(selection->directory, resource.id, selection->filename_pattern);
+                    return add_directory(selection->directory, SequenceFilter{resource.id, selection->filename_pattern});
                 }
-                for (auto& path : std::get<std::vector<ResourcePath>>(location.selection)) {
-                    auto copied = add_file(path, resource.id, false, {});
+                auto& paths = std::get<std::vector<ResourcePath>>(location.selection);
+                for (std::size_t index = 0; index < paths.size(); ++index) {
+                    const auto digest = location.embedded_sha256.empty() ? std::optional<std::string_view>{} : location.embedded_sha256[index];
+                    auto copied = add_file(paths[index], resource.id, digest.has_value(), digest);
                     if (std::holds_alternative<Diagnostic>(copied)) { return copied; }
                 }
             } else if constexpr (std::is_same_v<Location, OutputPathResource>) {
-                return add_directory(location.directory, resource.id, {});
+                return add_directory(location.directory);
             }
             return std::monostate{};
         }, resource.location);
@@ -92,6 +98,8 @@ public:
         }
         return result;
     }
+
+    Check add_archive(ImageArchivePolicy& policy) { return add_directory(policy.directory); }
 
     Check stage(const fs::path& destination, PackageAssets& transaction) const
     {
@@ -176,28 +184,28 @@ private:
         return std::monostate{};
     }
 
-    Check add_directory(ResourcePath& path, ResourceId resource, std::optional<std::string_view> pattern)
+    Check add_directory(ResourcePath& path, std::optional<SequenceFilter> sequence = {})
     {
         auto ownership = local_path(path, false);
         if (auto* failure = std::get_if<Diagnostic>(&ownership)) { return std::move(*failure); }
         const auto& directory = std::get<std::optional<fs::path>>(ownership);
         if (!directory) { return std::monostate{}; }
         auto target = allocate_directory();
-        if (pattern) {
+        if (sequence) {
             auto located = detail::existing_path(path, paths_, false, true);
             if (auto* failure = std::get_if<Diagnostic>(&located)) { return std::move(*failure); }
             const auto& existing = std::get<fs::path>(located);
             if (!is_within(existing, paths_.directory)) {
                 return error(ErrorCode::InvalidPath, solution_, "The source sequence moved outside its package.");
             }
-            auto selected = detail::sequence_files(existing, *pattern);
+            auto selected = detail::sequence_files(existing, sequence->pattern);
             if (auto* failure = std::get_if<Diagnostic>(&selected)) { return std::move(*failure); }
             for (const auto& member : std::get<std::vector<fs::path>>(selected)) {
                 auto file = detail::windows_display_path(fs::canonical(detail::windows_access_path(member)));
                 if (!fs::is_regular_file(detail::windows_access_path(file)) || !is_within(file, paths_.directory)) {
                     return error(ErrorCode::InvalidPath, solution_, "A package sequence contains a member outside the package: " + utf8(member));
                 }
-                files_.push_back({std::move(file), target / member.filename(), {}, resource});
+                files_.push_back({std::move(file), target / member.filename(), {}, sequence->resource});
             }
         } else if (fs::exists(detail::windows_access_path(*directory)) && !fs::is_directory(detail::windows_access_path(*directory))) {
             return error(ErrorCode::InvalidPath, solution_, "The package output location is not a directory: " + path.path);
@@ -256,21 +264,30 @@ core::Result<SolutionTransferResult> transfer_solution(const fs::path& destinati
         } else if (operation != SolutionTransfer::SaveAs) {
             return error(ErrorCode::InvalidModel, draft.id, "The solution transfer operation is invalid.");
         }
+        detail::migrate_image_sources(model);
         auto assets = asset_directory();
         if (auto* failure = std::get_if<Diagnostic>(&assets)) { return std::move(*failure); }
         auto resolved = source ? detail::resource_paths(source->directory(), source->resource_roots())
                                : detail::resource_paths(target, roots, false);
         if (auto* failure = std::get_if<Diagnostic>(&resolved)) { return std::move(*failure); }
-        TransferPlan plan(model.id, std::get<detail::ResourcePaths>(std::move(resolved)), source != nullptr,
+        const auto& paths = std::get<detail::ResourcePaths>(resolved);
+        const auto embed = detail::embedded_image_resources(model);
+        PackageAssets transaction(model.id);
+        TransferPlan plan(model.id, paths, source != nullptr,
             std::get<fs::path>(std::move(assets)));
         for (auto& resource : model.resources) {
-            auto added = plan.add(resource);
+            auto added = embed.contains(resource.id)
+                ? detail::stage_image_resource(resource, paths, target, transaction, true)
+                : plan.add(resource);
             if (auto* failure = std::get_if<Diagnostic>(&added)) { return std::move(*failure); }
         }
 
+        if (model.image_archive) {
+            auto added = plan.add_archive(*model.image_archive);
+            if (auto* failure = std::get_if<Diagnostic>(&added)) { return std::move(*failure); }
+        }
         SolutionTransferResult result{std::move(model), {plan.external.begin(), plan.external.end()},
             {plan.unresolved_roots.begin(), plan.unresolved_roots.end()}};
-        PackageAssets transaction(result.solution.id);
         auto staged = plan.stage(target, transaction);
         if (auto* failure = std::get_if<Diagnostic>(&staged)) { return std::move(*failure); }
         auto published = write_new_solution(target, result.solution);

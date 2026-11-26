@@ -52,8 +52,11 @@ public:
     using ThumbnailProvider = std::function<core::Result<QImage>(int)>;
     void set_sources(const QStringList& labels, int selected, ThumbnailProvider thumbnail = {});
     int selected_source() const;
+    void select_source(int index);
     void set_manual_view(bool manual);
     void clear_overlays();
+    [[nodiscard]] core::Result<std::monostate> append_graphic(const workflow::NodeResult& source,
+        core::OutputId port, core::SchemaId item);
     void clear_frame(bool retain_view = false);
     void reset_view_source() { source_.reset(); }
 

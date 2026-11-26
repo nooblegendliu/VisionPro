@@ -2,6 +2,8 @@
 
 #include "control_scene.hpp"
 #include "image_panel.hpp"
+#include "image_source_strip.hpp"
+#include "image_source_fields.hpp"
 #include "module_history_panel.hpp"
 #include "workspace_results.hpp"
 #include "run_controller.hpp"
@@ -14,6 +16,7 @@
 #include <visionpro/core/shared_data.hpp>
 
 #include <QAction>
+#include <QComboBox>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDockWidget>
@@ -21,6 +24,7 @@
 #include <QInputDialog>
 #include <QLabel>
 #include <QMenuBar>
+#include <QMessageBox>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QSpinBox>
@@ -98,6 +102,54 @@ SchemaId trigger_id(bool independent)
 {
     return std::get<SchemaId>(SchemaIdFactory::parse<SchemaId>(
         independent ? "visionpro.editor.debug" : "visionpro.editor.run"));
+}
+
+std::optional<EnteredRunInputs> choose_delivered_frame(QWidget* parent, std::span<const RunHandle> runs,
+    const Workflow& workflow, InputId port)
+{
+    QStringList labels;
+    std::vector<DataValue> frames;
+    const auto add = [&](const RunHandle& run, const DataValue& value, const QString& origin) {
+        const auto* frame = value.as_image();
+        if (!frame || !frame->frame) { return; }
+        if (workflow.trigger && workflow.trigger->camera && workflow.trigger->camera->device != frame->frame->source) { return; }
+        labels.append(QObject::tr("运行 #%1 · %2 · 设备 %3 · 帧 %4 · %5 × %6")
+            .arg(run.identity().run.value()).arg(origin, QString::fromStdString(frame->frame->source.to_string()))
+            .arg(frame->frame->sequence).arg(frame->image.width()).arg(frame->image.height()));
+        frames.push_back(value);
+    };
+    for (auto it = runs.rbegin(); it != runs.rend(); ++it) {
+        for (const auto& input : it->request().inputs()) { add(*it, input.value, QObject::tr("流程输入")); }
+        auto inspected = it->inspect();
+        const auto* progress = std::get_if<RunProgress>(&inspected);
+        if (!progress) { continue; }
+        const auto* flow = find_workflow(it->request().snapshot().solution(), it->identity().workflow);
+        if (!flow) { continue; }
+        for (const auto& call : progress->nodes) {
+            if (!call.invocation || call.status != ExecutionStatus::Succeeded) { continue; }
+            const auto* node = find_node(*flow, call.node);
+            if (!is_image_source(node) || source_enum(*node, "source_type", "Local") != "Camera") { continue; }
+            auto record = it->lookup(*call.invocation);
+            const auto* result = std::get_if<std::optional<NodeResult>>(&record);
+            const auto* slot = result && *result ? (*result)->output(source_key<OutputId>("image")) : nullptr;
+            if (const auto* value = slot ? std::get_if<DataValue>(&slot->content) : nullptr) {
+                add(*it, *value, QString::fromStdString(node->name));
+            }
+        }
+    }
+    if (frames.empty()) {
+        QMessageBox::information(parent, QObject::tr("选择已交付帧"),
+            QObject::tr("历史中还没有带设备身份的图像。请先运行一次相机采集，或启动相机触发源取得调试帧。"));
+        return {};
+    }
+    QInputDialog dialog(parent);
+    dialog.setObjectName(QStringLiteral("deliveredDebugFrame"));
+    dialog.setWindowTitle(QObject::tr("选择已交付帧"));
+    dialog.setLabelText(QObject::tr("使用本次选定的历史帧独立执行"));
+    dialog.setComboBoxItems(labels);
+    if (dialog.exec() != QDialog::Accepted) { return {}; }
+    const auto selected = dialog.findChild<QComboBox*>()->currentIndex();
+    return EnteredRunInputs{{{port, frames.at(selected)}}, {}};
 }
 } // namespace
 
@@ -252,6 +304,7 @@ void EditorWindow::create_run_dock()
         }
     });
     connect(run_controller_, &RunController::operation_failed, this, [this](const Diagnostic& diagnostic) {
+        if (close_confirmed_) { close_confirmed_ = false; }
         run_error_ = diagnostic;
         render_diagnostics();
         show_status(QString::fromStdString(diagnostic.message));
@@ -304,6 +357,9 @@ void EditorWindow::refresh_workspace_selection()
     auto node = selected.size() == 1 ? std::optional{selected.front()} : std::nullopt;
     const auto* current_flow = flow ? find_workflow(draft(), *flow) : nullptr;
     const Node* current_node = current_flow && node ? find_node(*current_flow, *node) : nullptr;
+    image_source_strip_->set_selection(model_.get(), scene_.get(),
+        flow && node ? std::optional{NodeTarget{*flow, *node}} : std::nullopt,
+        directory_, roots_, writable() && !busy_);
     const auto pinned = module_history_->selected_run();
     if (selected.empty() && flow == display.workflow && current_flow && display.node
         && !find_node(*current_flow, *display.node) && !module_history_->following_latest() && pinned) {
@@ -327,6 +383,7 @@ void EditorWindow::refresh_workspace_selection()
 void EditorWindow::refresh_workspace_results()
 {
     if (!model_ || !module_history_ || close_confirmed_) { return; }
+    if (image_source_strip_) { image_source_strip_->refresh_bound_folder(); }
     module_history_->update_runs(run_controller_->runs());
     const auto selected = module_history_->selected_run();
     auto& display = *workspace_image_selection_;
@@ -362,7 +419,7 @@ void EditorWindow::refresh_workspace_statistics()
         source << (report && std::ranges::find(report->runs, run->identity(), &RunHandle::identity) != report->runs.end()
             ? tr("方案第 %1 轮").arg(report->sequence) : tr("无可用的所属方案报告"));
     }
-    results_->update(flow, node, registry_, display.edit_generation, source.join(QStringLiteral(" · ")));
+    results_->update(draft(), flow, node, registry_, display.edit_generation, source.join(QStringLiteral(" · ")), writable() && !busy_);
 }
 
 void EditorWindow::present_workspace_image()
@@ -475,6 +532,8 @@ void EditorWindow::start_run(std::optional<DebugStatePolicy> debug, std::optiona
     std::span<const PixelFormat> formats;
     const bool independent = debug.has_value();
     const bool isolated = debug == DebugStatePolicy::Isolated;
+    std::optional<ToolDescriptor> source_descriptor;
+    bool sdk_sample = false, delivered_frame = false;
     bool group_target = false;
     if (independent) {
         const auto selected = configured ? std::vector<NodeId>{configured->node} : scene_->selected_nodes();
@@ -491,13 +550,21 @@ void EditorWindow::start_run(std::optional<DebugStatePolicy> debug, std::optiona
                 report_error(QStringLiteral("The selected node requires an available tool and its exact configuration version."));
                 return;
             }
+            if (is_image_source(node)) {
+                source_descriptor = specialize_tool(*descriptor, *node);
+                descriptor = &*source_descriptor;
+                const auto source = source_enum(*node, "source_type", "Local");
+                sdk_sample = source == "SDK";
+                delivered_frame = source == "Camera" && source_enum(*node, "camera_input", "Acquire") == "Delivered";
+                if (isolated) { debug = DebugStatePolicy::IsolatedSession; }
+            }
             inputs = descriptor->inputs;
             formats = descriptor->image_formats;
         }
         target = NodeTarget{flow->id, node->id};
     }
-    auto entered = inputs.empty() ? std::optional{EnteredRunInputs{}}
-        : choose_run_inputs(this, draft(), inputs, isolated, formats, group_target);
+    auto entered = delivered_frame && !inputs.empty() ? choose_delivered_frame(this, run_controller_->runs(), *flow, inputs.front().id)
+        : choose_run_inputs(this, draft(), inputs, isolated, formats, group_target, sdk_sample);
     if (!entered) { return; }
     if (run_error_) {
         run_error_.reset();
@@ -507,6 +574,13 @@ void EditorWindow::start_run(std::optional<DebugStatePolicy> debug, std::optiona
         {independent ? TriggerKind::Debug : TriggerKind::Manual, trigger_id(independent)},
         {}, debug};
     if (independent) { run_dock_->show(); run_dock_->raise(); }
+    else if (module_history_->following_latest()) {
+        const auto selected = scene_->selected_nodes();
+        if (selected.size() == 1 && is_image_source(find_node(*flow, selected.front()))) {
+            workspace_image_selection_->mode = WorkspaceImageSelection::Mode::Follow;
+            images_->set_manual_view(false);
+        }
+    }
     statusBar()->clearMessage();
     run_controller_->start(draft(), {source_, directory_, roots_, workspace_image_selection_->edit_generation},
         std::move(arguments), std::move(entered->images));

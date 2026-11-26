@@ -259,7 +259,7 @@ Check Resolution::validate_context()
     for (auto group = owner; group; group = parent(*flow_, *group)) {
         if (!find_node(*flow_, *group)->enabled) { return error(ErrorCode::InvalidResolutionContext, "Consumer is inside a disabled Group."); }
     }
-    if (const auto* tool = std::get_if<ToolConfiguration>(&node_->configuration)) { tool_ = snapshot_.find_tool(tool->type); }
+    tool_ = snapshot_.find_tool(*node_);
     if (request_ && (independent() || !scope_->group)) {
         if (context_.scopes.size() != 1 || scope_->id.value() != 0 || scope_->parent
             || !scope_->inputs.empty() || !context_.visible_outer_scopes.empty()) {
@@ -272,7 +272,8 @@ Check Resolution::validate_context()
         return checked;
     }
     if (auto checked = validate_sources(*scope_index); failed(checked)) { return checked; }
-    return detail::validate_global_read_snapshot(snapshot_.solution(), context_.run.snapshot.session, context_.globals);
+    return detail::validate_global_read_snapshot(snapshot_.solution(), context_.run.snapshot.session, context_.globals,
+        local_variable_definitions(*flow_, node_->id), &context_.consumer);
 }
 
 Check Resolution::validate_scopes()
@@ -376,10 +377,14 @@ Evaluation Resolution::output(const OutputReference& reference, std::size_t inde
     const auto& result = std::get<std::optional<NodeResult>>(lookup);
     if (!result) { return {{}, true, {}, {}, {}}; }
     const auto& data = result->data();
-    std::get<ResultTrace>(traces_.at(trace_index).origin).attempt = data.identity.attempt;
+    auto& producer = std::get<ResultTrace>(traces_.at(trace_index).origin);
+    producer.attempt = data.identity.attempt;
+    producer.judgement = data.judgement;
     Evaluation evaluated;
     if (const auto* field = std::get_if<SystemField>(&reference.output)) {
         evaluated = available(system_value(data, *field));
+    } else if (const auto* slot = result->output(std::get<OutputId>(reference.output)); slot && slot->module_completion) {
+        evaluated.value = std::get<DataValue>(slot->content);
     } else if (data.status != ExecutionStatus::Succeeded) {
         auto causes = data.diagnostics;
         for (const auto& slot : data.outputs) {

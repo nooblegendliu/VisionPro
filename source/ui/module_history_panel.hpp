@@ -74,6 +74,7 @@ private:
     std::optional<core::NodeId> node_;
     QString node_name_;
     bool range_judge_{};
+    bool image_source_{};
     std::vector<workflow::RunHandle> retained_;
     std::optional<workflow::RunHandle> pinned_run_;
     std::optional<RowAddress> pinned_row_;

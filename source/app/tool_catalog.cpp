@@ -1,7 +1,7 @@
 #include "tool_catalog.hpp"
 
 #include "simulation.hpp"
-#include "camera_tools.hpp"
+#include "image_source.hpp"
 #include "communication_tools.hpp"
 #include "list_item.hpp"
 #include "logic_tools.hpp"
@@ -18,7 +18,7 @@ namespace visionpro::app {
 core::Result<core::ToolRegistry> make_tool_registry()
 {
     auto registrations = tools::simulation_registrations();
-    for (auto& registration : tools::camera_registrations()) { registrations.push_back(std::move(registration)); }
+    registrations.push_back(tools::image_source_registration());
     for (auto& registration : tools::communication_registrations()) { registrations.push_back(std::move(registration)); }
     for (auto& registration : tools::logic_registrations()) { registrations.push_back(std::move(registration)); }
     for (auto& registration : tools::shared_registrations()) { registrations.push_back(std::move(registration)); }
@@ -28,6 +28,7 @@ core::Result<core::ToolRegistry> make_tool_registry()
     registrations.push_back(tools::list_item_registration("visionpro.list.blob_at", "Blob component by index",
         tools::vision::blob_component_type()));
     for (auto& registration : tools::vision::registrations()) {
+        if (registration.descriptor.id.text() == "visionpro.image.read_file") { continue; }
         registrations.push_back(std::move(registration));
     }
 #else

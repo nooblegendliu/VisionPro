@@ -4,6 +4,8 @@
 
 #include <visionpro/infrastructure/solution_file.hpp>
 #include <visionpro/infrastructure/camera_trigger.hpp>
+#include <visionpro/infrastructure/image_directory_trigger.hpp>
+#include <visionpro/infrastructure/image_archive.hpp>
 #include <visionpro/workflow/trigger_control.hpp>
 
 #include <QChronoTimer>
@@ -19,6 +21,7 @@ struct RunDocument {
     std::optional<std::filesystem::path> directory;
     std::vector<infrastructure::NamedResourceRoot> roots;
     std::uint64_t edit_generation{};
+    std::shared_ptr<infrastructure::ImageArchivePool> archives{};
 };
 
 struct SessionSharedPreview {
@@ -62,6 +65,8 @@ public:
     bool can_reset_state(const workflow::NodeTarget& target) const;
     core::Result<std::monostate> reset_state(const workflow::NodeTarget& target);
     void reset_document();
+    void flush_archive();
+    bool can_flush_archive() const noexcept { return archives_ && can_start() && triggers_.empty(); }
     void set_observing(bool visible);
     void set_limits(std::size_t history, std::size_t notifications);
 
@@ -92,14 +97,18 @@ private:
     enum class RunOrigin { Manual, Trigger, Solution };
     void record_submission(const workflow::RunSubmission& submission, RunOrigin origin, std::string description = {});
     void dispatch_trigger(core::WorkflowId workflow, std::optional<std::int64_t> frame);
+    void poll_directory(core::WorkflowId workflow);
     void disarm_triggers();
 
     core::ToolRegistry registry_;
     std::shared_ptr<workflow::WorkflowSession> session_;
+    std::shared_ptr<infrastructure::ImageArchivePool> archives_;
     struct ArmedTrigger {
         std::shared_ptr<workflow::TriggerControl> control;
         std::shared_ptr<infrastructure::CameraTriggerStream> camera;
-        std::unique_ptr<QChronoTimer> timer; // Only continuous sources have timers.
+        std::shared_ptr<infrastructure::ImageDirectoryTrigger> directory;
+        std::unique_ptr<QChronoTimer> directory_timer;
+        std::unique_ptr<QChronoTimer> timer;
         QString camera_fault;
         QString camera_last_frame;
         bool dispatching{};

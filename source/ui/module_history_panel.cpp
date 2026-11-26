@@ -1,4 +1,6 @@
 #include "module_history_panel.hpp"
+#include "image_source_fields.hpp"
+#include <QDateTime>
 
 #include "run_panel.hpp"
 #include "workspace_appearance.hpp"
@@ -189,6 +191,7 @@ void ModuleHistoryPanel::clear()
     node_.reset();
     node_name_.clear();
     range_judge_ = false;
+    image_source_ = false;
     summaries_.clear();
     refresh();
 }
@@ -199,8 +202,9 @@ void ModuleHistoryPanel::set_selection(const Workflow* workflow, const Node* nod
     const auto node_id = node ? std::optional{node->id} : std::nullopt;
     const auto node_name = node ? QString::fromStdString(node->name) : QString{};
     const bool range_judge = node && is_range_judge(*node);
+    const bool source = is_image_source(node);
     if (workflow_ == flow_id && node_ == node_id && node_name_ == node_name
-        && range_judge_ == range_judge) { return; }
+        && range_judge_ == range_judge && image_source_ == source) { return; }
     if (workflow_ != flow_id) {
         pinned_run_.reset();
         pinned_row_.reset();
@@ -214,6 +218,7 @@ void ModuleHistoryPanel::set_selection(const Workflow* workflow, const Node* nod
     node_ = node_id;
     node_name_ = node_name;
     range_judge_ = range_judge;
+    image_source_ = source;
     refresh();
 }
 
@@ -282,6 +287,7 @@ ModuleHistoryPanel::RunSummary ModuleHistoryPanel::summarize(const RunHandle& ru
         const auto& call = *it;
         if (call.node != definition->id) { continue; }
         auto label = QStringLiteral("#%1").arg(run.identity().run.value());
+        if (is_image_source(definition) && std::holds_alternative<NodeTarget>(run.request().target())) { label += tr(" · 隔离调试"); }
         auto tooltip = QStringLiteral("快照 %1").arg(run.identity().snapshot.snapshot.value());
         if (call.scope) {
             tooltip += QStringLiteral(" · 作用域 %1").arg(call.scope->value());
@@ -307,6 +313,34 @@ ModuleHistoryPanel::RunSummary ModuleHistoryPanel::summarize(const RunHandle& ru
                         if (minimum != dash() || maximum != dash()) {
                             row.cells[Range] = QStringLiteral("[%1, %2]").arg(minimum, maximum);
                         }
+                    } else if (is_image_source(definition)) {
+                        const auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(published.recorded_at.time_since_epoch()).count();
+                        row.cells[Execution] = QDateTime::fromMSecsSinceEpoch(millis).toString(QStringLiteral("yyyy-MM-dd HH:mm:ss.zzz"));
+                        QStringList data;
+                        for (const auto& out : published.outputs) {
+                            const auto* v = std::get_if<DataValue>(&out.content);
+                            if (!v) { continue; }
+                            if (out.id.text() == "image" && v->as_image()) {
+                                const auto& img = v->as_image()->image;
+                                data << tr("%1 × %2 px").arg(img.width()).arg(img.height());
+                            } else if (out.id.text() == "sn" && v->as_int64()) { data << tr("SN %1").arg(*v->as_int64()); }
+                            else if (out.id.text() == "file_name" && v->as_string()) { data << QString::fromUtf8(*v->as_string()); }
+                        }
+                        row.cells[Summary] = data.isEmpty() ? execution_status_text(published.status) : data.join(QStringLiteral(" · "));
+                    } else if (is_image_output(definition)) {
+                        QStringList files;
+                        for (const auto& out : published.outputs) {
+                            const auto* value = std::get_if<DataValue>(&out.content);
+                            if (!value) { continue; }
+                            if (out.id.text() == "image" && value->as_image()) {
+                                const auto& image = value->as_image()->image;
+                                files << tr("输出图像 %1 × %2 px").arg(image.width()).arg(image.height());
+                            } else if ((out.id.text() == "original_name" || out.id.text() == "rendered_name" || out.id.text() == "big_file_path")
+                                       && value->as_string()) {
+                                files << QString::fromUtf8(*value->as_string());
+                            }
+                        }
+                        row.cells[Summary] = files.isEmpty() ? tr("本次未生成图像或文件") : files.join(QStringLiteral(" · "));
                     } else { row.cells[Summary] = result_summary(published); }
                     if (published.status == ExecutionStatus::Failed && !published.diagnostics.empty()) {
                         row.cells[Summary] = run_diagnostic_text(published.diagnostics.front());
@@ -440,6 +474,11 @@ void ModuleHistoryPanel::refresh()
     table_->setColumnHidden(Measured, !show_range);
     table_->setColumnHidden(Range, !show_range);
     table_->setColumnHidden(Elapsed, !show_elapsed);
+    table_->headerItem()->setText(Round, image_source_ ? tr("执行序号") : tr("轮次"));
+    table_->headerItem()->setText(Execution, image_source_ ? tr("时间") : tr("执行"));
+    table_->headerItem()->setText(Summary, image_source_ ? tr("模块数据") : tr("结果摘要"));
+    table_->setColumnHidden(Verdict, image_source_);
+    if (image_source_) { table_->setColumnHidden(Elapsed, true); }
     const auto mode = show_summary ? QHeaderView::ResizeToContents : QHeaderView::Stretch;
     for (const auto col : {Execution, Verdict, Measured}) {
         if (table_->header()->sectionResizeMode(col) != mode) {

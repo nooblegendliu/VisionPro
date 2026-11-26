@@ -6,6 +6,8 @@
 
 namespace visionpro::core {
 
+enum class InvocationFlow { Continue, CloseBranch, EndContinuous };
+
 enum class OutputAbsenceReason {
     NotSelected, Disabled, ToolDidNotProduce, Failed, Cancelled, TimedOut, ConditionNotMet
 };

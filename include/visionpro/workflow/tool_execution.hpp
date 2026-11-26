@@ -31,6 +31,10 @@ public:
     // resource identity before acquire; accesses to other resources may overlap.
     // Resource kinds available to the execution planner.
     [[nodiscard]] virtual std::span<const core::ResourceKind> kinds() const noexcept = 0;
+    // A solution-wide package writer supersedes the node's configured output directories.
+    [[nodiscard]] virtual std::shared_ptr<core::ImageArchiveWriter> image_archive_writer() const { return {}; }
+    // Ordinary image storage also serves FTP-only nodes without a bound local directory.
+    [[nodiscard]] virtual std::shared_ptr<core::ImageArchiveWriter> image_storage_writer() const { return {}; }
     // Read-only checks for the selected execution scope, before admission.
     [[nodiscard]] virtual core::Result<std::monostate> preflight(const ExecutionPlan&) const
     { return std::monostate{}; }

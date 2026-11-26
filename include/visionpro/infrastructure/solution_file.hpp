@@ -27,6 +27,7 @@ public:
     [[nodiscard]] bool matches_manifest(std::string_view text) const noexcept { return manifest_ == text; }
     [[nodiscard]] bool same_manifest(const SolutionDocument& other) const noexcept { return manifest_ == other.manifest_; }
     [[nodiscard]] std::span<const NamedResourceRoot> resource_roots() const noexcept { return roots_; }
+    [[nodiscard]] core::Result<std::monostate> flush_image_archive() const { return resources_->flush_image_archive(); }
 private:
     friend core::Result<SolutionDocument> load_solution(const std::filesystem::path&, const core::ToolRegistry&,
         std::span<const NamedResourceRoot>);
@@ -58,7 +59,8 @@ private:
 [[nodiscard]] core::Result<SolutionDocument> reload_saved_solution(const std::filesystem::path& directory,
     const workflow::Solution& saved, const core::ToolRegistry& registry, std::span<const NamedResourceRoot> roots = {});
 
-// Publishes a new manifest only. The caller supplies any package resources.
+// Publishes a new manifest. Local inputs with explicit image embedding are included;
+// the caller supplies other package resources. Relative paths use the destination base.
 // Use the provenance overload for a configuration edited from a loaded file.
 [[nodiscard]] core::Result<std::monostate> write_new_solution(const std::filesystem::path& directory,
     const workflow::Solution& solution);
@@ -120,7 +122,7 @@ struct SolutionSaveResult {
 // and named roots. The selected run and its capture are published together.
 [[nodiscard]] workflow::RunSubmission publish_solution_run(workflow::WorkflowSession& session,
     const workflow::ConfigSnapshot& base, const SolutionDocument& source, const workflow::Solution& draft,
-    const workflow::RunArguments& run);
+    const workflow::RunArguments& run, std::shared_ptr<ImageArchivePool> archives = {});
 
 // Activation requires a complete candidate and follows the session's strict
 // validation and drain protocol. Loading failure never changes the session.

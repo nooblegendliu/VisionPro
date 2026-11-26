@@ -1,6 +1,8 @@
 #include "control_scene.hpp"
 #include "editor_window.hpp"
 #include "image_panel.hpp"
+#include "image_source_fields.hpp"
+#include "image_source_strip.hpp"
 #include "module_history_panel.hpp"
 #include "run_controller.hpp"
 #include "run_image.hpp"
@@ -8,6 +10,7 @@
 #include "workspace_appearance.hpp"
 
 #include <visionpro/core/id_factory.hpp>
+#include <visionpro/core/shared_data.hpp>
 #include <visionpro/core/schema_id_factory.hpp>
 #include <QtNodes/internal/NodeGraphicsObject.hpp>
 
@@ -15,6 +18,7 @@
 #include <QAbstractButton>
 #include <QApplication>
 #include <QCheckBox>
+#include <QClipboard>
 #include <QComboBox>
 #include <QDialog>
 #include <QDialogButtonBox>
@@ -31,6 +35,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QListView>
+#include <QListWidget>
 #include <QMenu>
 #include <QPlainTextEdit>
 #include <QPointer>
@@ -265,10 +270,14 @@ private slots:
     void properties_dialog_reuses_selection_and_clears_on_replacement();
     void format_image_sources_data();
     void format_image_sources();
+    void image_source_workbench();
+    void image_output_keeps_exact_history_and_result_fields();
     void recovers_image_view_after_failed_measurement();
     void flow_image_remembers_skipped_source();
     void pages_large_output_collection();
     void loop_invocation_history();
+    void edits_image_result_variables();
+    void restricts_image_result_variables_to_direct_group();
 
 private:
     QTemporaryDir settings_directory_;
@@ -860,6 +869,34 @@ void WorkspaceTests::five_lane_selection_and_history()
     QVERIFY(source->currentText().contains(name) || control<QLabel>(*image, "imageProvenance")->text().contains(name));
     compare_view_with_run(*image, first);
     compare_cli(package, QStringLiteral("NG"));
+    auto* image_pages = control<QTabBar>(window,"workspaceOutputTabs");
+    image_pages->setCurrentIndex(1);
+    auto* compare = control<QCheckBox>(window,"flowImageComparison");
+    compare->click();
+    for (auto* base : {control<QComboBox>(window,"comparisonSource1"),control<QComboBox>(window,"comparisonSource2")}) {
+        const auto camera = base->findText("Read camera / ",Qt::MatchStartsWith);
+        QVERIFY(camera > 0);
+        base->setCurrentIndex(camera);
+    }
+    auto* menu = control<QToolButton>(window,"comparisonGraphics1")->menu();
+    for (const auto& lane : {QStringLiteral("Measure lane 1 / ROI 掩膜"),QStringLiteral("Measure lane 2 / ROI 掩膜")}) {
+        const auto options = menu->actions();
+        const auto found = std::ranges::find_if(options,[&](QAction* action){ return action->text() == lane; });
+        QVERIFY2(found != options.end(),qPrintable(lane));
+        (*found)->trigger();
+    }
+    const auto masks = [&](const char* id) {
+        auto* panel = control<ImagePanel>(window,id);
+        const auto items = panel->findChild<ImageView*>()->scene()->items();
+        return std::ranges::count_if(items,[](const QGraphicsItem* item) {
+            const auto* pixels = qgraphicsitem_cast<const QGraphicsPixmapItem*>(item);
+            return pixels && pixels->zValue() == 1 && !pixels->pixmap().isNull();
+        });
+    };
+    QCOMPARE(masks("comparisonImage1"),2);
+    QCOMPARE(masks("comparisonImage2"),0);
+    compare->click();
+    image_pages->setCurrentIndex(0);
 
     QTest::mouseClick(table->viewport(), Qt::LeftButton, Qt::NoModifier, table->visualItemRect(table->topLevelItem(0)).center());
     QTRY_VERIFY(!follow->isChecked());
@@ -1068,6 +1105,340 @@ void WorkspaceTests::five_lane_selection_and_history()
     QVERIFY(!history->selected_run() && !history->selected_invocation());
     qInfo().noquote() << "Six-region workspace at 1280x720 and 1440x800; GUI/CLI: lane 5 B=50; upper 40 -> NG, upper 50 -> OK."
         << "Both displayed runs use their own input buffer and the translated 2x2 ROI at (25,9).";
+}
+
+void WorkspaceTests::image_output_keeps_exact_history_and_result_fields()
+{
+    const auto registry = take(app::make_tool_registry());
+    Workflow flow{inspection_id,"成图流程",{source_key<SchemaId>("test.image.output"),1}};
+    Solution solution{fixture_id<SolutionId>("6271"),"输出图像",infrastructure::solution_format_version,1,{flow}};
+    EditorWindow window(std::move(solution),registry);
+    window.resize(1150,720);
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    auto& scene = dynamic_cast<ControlScene&>(*control<QGraphicsView>(window,"workflowCanvas")->scene());
+    QVERIFY(scene.add_tool(source_key<ToolTypeId>("visionpro.image.source"),QPointF(0,0)));
+    const auto source = scene.selected_nodes().front();
+    QTemporaryDir pictures;
+    QImage original(11,7,QImage::Format_RGB32);
+    original.fill(QColor(221, 23, 13));
+    const auto path = pictures.filePath("part.png");
+    QVERIFY(original.save(path));
+    control<ImageSourceStrip>(window,"imageSourceStrip")->add_files({path});
+    QVERIFY(scene.add_tool(source_key<ToolTypeId>("visionpro.image.output"),QPointF(220,0)));
+    const auto output = scene.selected_nodes().front();
+    const auto image = source_key<OutputId>("image");
+    QVERIFY(scene.edit_draft("订阅成图底图",[&](Solution& draft) -> Result<std::monostate> {
+        auto& f = draft.workflows.front();
+        f.entries = {source};
+        f.control_links.push_back({take(IdFactory::generate<ControlLinkId>()),source,{},output});
+        auto& node = *std::ranges::find(f.nodes,output,&Node::id);
+        node.bindings.push_back({source_key<InputId>("image"),{OutputReference{f.id,source,image,{}}}});
+        set_source_value(node,"text",take(ConfigValue::string("X")));
+        set_source_value(node,"font_size",ConfigValue::integer(7));
+        return std::monostate{};
+    }));
+    QVERIFY(scene.reveal_node(output));
+    auto* start = control<QAction>(window,"runWorkflow");
+    auto* history = window.findChild<ModuleHistoryPanel*>();
+    auto* controller = window.findChild<RunController*>();
+    auto* panel = control<ImagePanel>(window,"imagePanel");
+    QTRY_VERIFY(start->isEnabled());
+    start->trigger();
+    QTRY_VERIFY_WITH_TIMEOUT(controller->can_start() && history->selected_invocation() && panel->frame(),10000);
+    const auto first = *history->selected_run();
+    const auto record = take(first.lookup(*history->selected_invocation()));
+    QVERIFY(record && record->data().identity.invocation.node == output);
+    const auto pixels = std::get<DataValue>(record->output(image)->content).as_image()->image;
+    QVERIFY(pixels == *panel->frame());
+    auto* tabs = control<QTabBar>(window,"workspaceOutputTabs");
+    tabs->setCurrentIndex(2);
+    auto* tree = control<QTreeWidget>(window,"moduleOutputTree");
+    QTRY_VERIFY(tree->topLevelItemCount() == 1 && tree->topLevelItem(0)->text(0) == QStringLiteral("输出图像"));
+    const auto output_row = [&](QString id) -> QTreeWidgetItem* {
+        auto* root = tree->topLevelItem(0);
+        if (!root) { return nullptr; }
+        for (int i = 0; i < root->childCount(); ++i) {
+            auto* row = root->child(i);
+            if (row->data(0,Qt::UserRole) == id) { return row; }
+        }
+        return nullptr;
+    };
+    QVERIFY(output_row("image") && output_row("module_status") && output_row("original_path") && output_row("big_file_path"));
+    QCOMPARE(output_row("image")->childCount(),4);
+    QCOMPARE(output_row("image")->child(1)->text(2),QStringLiteral("11"));
+    QCOMPARE(output_row("image")->child(3)->text(2),QStringLiteral("35127316（RGB24）"));
+    QVERIFY(output_row("module_status")->text(2).startsWith("1"));
+    const auto canvas_output = static_cast<const ControlGraphModel&>(scene.graphModel()).canvas_id(output);
+    QTRY_VERIFY(scene.node_badge(canvas_output).completion == 1);
+    QCOMPARE(scene.node_badge(canvas_output).judgement,Judgement::NotEvaluated);
+    QVERIFY(window.findChild<QPushButton*>("mapResultVariable.rendered_path"));
+    QVERIFY(output_row("original_big_file_path") && output_row("original_big_file_path")->text(0) == QStringLiteral("原图大文件路径"));
+    QVERIFY(output_row("rendered_big_file_path") && output_row("rendered_big_file_path")->text(0) == QStringLiteral("渲染图大文件路径"));
+    tabs->setCurrentIndex(1);
+    auto* compare = control<QCheckBox>(window,"flowImageComparison");
+    compare->click();
+    auto* left = control<QComboBox>(window,"comparisonSource1");
+    auto* right = control<QComboBox>(window,"comparisonSource2");
+    const auto channel_index = [&](QComboBox* select,NodeId node) {
+        const auto label = QString::fromStdString(find_node(window.draft().workflows.front(),node)->name) + " / ";
+        return select->findText(label,Qt::MatchStartsWith);
+    };
+    QTRY_VERIFY(channel_index(left,source)>0 && channel_index(right,output)>0);
+    left->setCurrentIndex(channel_index(left,source));
+    right->setCurrentIndex(channel_index(right,output));
+    auto* left_view = control<ImagePanel>(window,"comparisonImage1");
+    auto* right_view = control<ImagePanel>(window,"comparisonImage2");
+    QTRY_VERIFY(left_view->frame() && right_view->frame() && *right_view->frame() == pixels);
+    const auto first_left = *left_view->frame();
+    QVERIFY(take(to_display_image(first_left)).convertToFormat(QImage::Format_RGB32)
+        != take(to_display_image(pixels)).convertToFormat(QImage::Format_RGB32));
+    tabs->setCurrentIndex(0);
+    QVERIFY(scene.edit_draft("关闭结果图输出",[&](Solution& draft) -> Result<std::monostate> {
+        auto& nodes = draft.workflows.front().nodes;
+        set_source_value(*std::ranges::find(nodes,output,&Node::id),"output_enabled",ConfigValue::boolean(false));
+        return std::monostate{};
+    }));
+    QTRY_VERIFY(start->isEnabled());
+    start->trigger();
+    QTRY_VERIFY_WITH_TIMEOUT(controller->can_start() && controller->runs().size() == 2 && !panel->frame(),10000);
+    tabs->setCurrentIndex(1);
+    QTRY_VERIFY(left_view->frame() && !right_view->frame());
+    QCOMPARE(left->currentIndex(),channel_index(left,source));
+    QCOMPARE(right->currentIndex(),channel_index(right,output));
+    history->browse_run(first);
+    QTRY_VERIFY(left_view->frame() && *left_view->frame() == first_left && right_view->frame() && *right_view->frame() == pixels);
+    QCOMPARE(controller->runs().size(),2U);
+    compare->click();
+    QVERIFY(control<QComboBox>(window,"flowImageChannel")->isVisible());
+    tabs->setCurrentIndex(0);
+    QTRY_VERIFY(panel->frame() && *panel->frame() == pixels);
+    QCOMPARE(QDir(pictures.path()).entryList(QDir::Files).size(),1);
+    const auto package_dir = pictures.filePath("packages");
+    QTimer::singleShot(0, [&] {
+        auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+        if (!dialog) { return; }
+        dialog->findChild<QCheckBox*>("archiveEnabled")->setChecked(true);
+        auto* base = dialog->findChild<QComboBox*>();
+        base->setCurrentIndex(base->findData(static_cast<int>(PathBase::Absolute)));
+        dialog->findChild<QLineEdit*>("archiveDirectory")->setText(package_dir);
+        dialog->findChild<QLineEdit*>("archivePackageSize")->setText("2");
+        dialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Ok)->click();
+    });
+    control<QAction>(window,"imageArchiveSettings")->trigger();
+    QVERIFY(window.draft().image_archive && window.draft().image_archive->images_per_file == 2);
+    QVERIFY(scene.edit_draft("启用原图归档",[&](Solution& draft) -> Result<std::monostate> {
+        auto& nodes = draft.workflows.front().nodes;
+        auto& target = *std::ranges::find(nodes,output,&Node::id);
+        set_source_value(target,"save_enabled",ConfigValue::boolean(true));
+        set_source_value(target,"save_original",ConfigValue::boolean(true));
+        set_source_value(target,"original_prefix",take(ConfigValue::string("工件")));
+        return std::monostate{};
+    }));
+    const auto packages = [&] { return QDir(package_dir).entryList({"*.dat"},QDir::Files); };
+    for (int cycle=1; cycle<=3; ++cycle) {
+        QTRY_VERIFY(start->isEnabled());
+        start->trigger();
+        QTRY_VERIFY_WITH_TIMEOUT(controller->can_start() && controller->runs().size() == static_cast<std::size_t>(cycle+2),10000);
+        QCOMPARE(packages().size(),cycle/2);
+    }
+    auto* flush = control<QAction>(window,"flushImageArchive");
+    QTRY_VERIFY(flush->isEnabled());
+    flush->trigger();
+    QTRY_COMPARE(packages().size(),2);
+    QVERIFY(scene.edit_draft("输入无效文字颜色",[&](Solution& draft)->Result<std::monostate> {
+        auto& nodes = draft.workflows.front().nodes;
+        auto& target = *std::ranges::find(nodes,output,&Node::id);
+        set_source_value(target,"output_enabled",ConfigValue::boolean(true));
+        set_source_value(target,"save_enabled",ConfigValue::boolean(false));
+        set_source_value(target,"text_color",take(ConfigValue::string("bad-color")));
+        return std::monostate{};
+    }));
+    QTRY_VERIFY(start->isEnabled());
+    start->trigger();
+    QTRY_VERIFY_WITH_TIMEOUT(controller->can_start() && controller->runs().size()==6,10000);
+    history->browse_run(controller->runs().back());
+    QTRY_VERIFY(scene.node_badge(canvas_output).completion == 0);
+    QCOMPARE(scene.node_badge(canvas_output).judgement,Judgement::NotEvaluated);
+}
+
+void WorkspaceTests::image_source_workbench()
+{
+    const auto registry = take(app::make_tool_registry());
+    Workflow flow{inspection_id, "取像流程", {source_key<SchemaId>("test.image.source"), 1}};
+    Solution solution{fixture_id<SolutionId>("6171"), "图像源", infrastructure::solution_format_version, 1, {std::move(flow)}};
+    EditorWindow window(std::move(solution), registry);
+    window.resize(1280, 760);
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    auto* canvas = control<QGraphicsView>(window, "workflowCanvas");
+    auto& scene = dynamic_cast<ControlScene&>(*canvas->scene());
+    QVERIFY(scene.add_tool(source_key<ToolTypeId>("visionpro.image.source"), QPointF(100, 90)));
+    QCOMPARE(scene.selected_nodes().size(), 1U);
+    const auto selected = scene.selected_nodes().front();
+    const auto* node = find_node(window.draft().workflows.front(), selected);
+    QVERIFY(is_image_source(node) && source_value(*node,"frame_origin"));
+    QCOMPARE(QString::fromStdString(node->name), QStringLiteral("图像源"));
+    auto* strip = control<ImageSourceStrip>(window, "imageSourceStrip");
+    auto* thumbs = control<QListWidget>(*strip, "imageSourceThumbnails");
+    auto* auto_next = control<QCheckBox>(*strip, "imageSourceAutoNext");
+    QTRY_VERIFY(strip->isVisible());
+    auto* add_images = control<QPushButton>(*strip, "addSourceImages");
+    auto* add_folder = control<QPushButton>(*strip, "addSourceFolder");
+    QVERIFY(add_images->isVisible() && add_folder->isVisible());
+    QCOMPARE(add_images->geometry().center().y(), add_folder->geometry().center().y());
+    QVERIFY(add_images->geometry().right() < add_folder->geometry().left());
+    QTemporaryDir pictures;
+    QVERIFY(pictures.isValid());
+    QStringList paths;
+    for (int i = 0; i < 2; ++i) {
+        QImage picture(9+i, 6, QImage::Format_RGB888);
+        picture.fill(i ? Qt::blue : Qt::red);
+        const auto path = pictures.filePath(QStringLiteral("sample-%1.png").arg(i));
+        QVERIFY(picture.save(path));
+        paths << path;
+    }
+    strip->add_files(paths);
+    QTRY_COMPARE(thumbs->count(), 2);
+    QTRY_VERIFY(!thumbs->item(0)->icon().isNull());
+    thumbs->item(0)->setCheckState(Qt::Unchecked);
+    auto* range = control<QComboBox>(*strip, "imageSourceRange");
+    range->setCurrentIndex(1);
+    emit range->activated(1);
+    QTest::mouseDClick(canvas->viewport(), Qt::LeftButton, {}, node_position(*canvas, selected));
+    QTRY_VERIFY(visible_properties(window));
+    auto* properties = visible_properties(window);
+    QCOMPARE(properties->windowModality(), Qt::NonModal);
+    auto* initial_sn = control<QWidget>(*properties, "source_sn_initial");
+    QPushButton* subscribe_sn = nullptr;
+    for (auto* button : properties->findChildren<QPushButton*>("editBinding")) {
+        if (button->property("bindingTarget").toString() == "sn_subscription") { subscribe_sn = button; break; }
+    }
+    QVERIFY(subscribe_sn && subscribe_sn->isVisible() && initial_sn->isVisible());
+    QCOMPARE(initial_sn->parentWidget(), subscribe_sn->parentWidget());
+    QVERIFY(initial_sn->geometry().right() < subscribe_sn->geometry().left());
+    QVERIFY(initial_sn->geometry().contains(QPoint(initial_sn->x(),subscribe_sn->geometry().center().y())));
+    auto active_check = [&] {
+        for (auto* box : properties->findChildren<QCheckBox*>("source_auto_next")) { if (box->isVisible()) { return box; } }
+        return static_cast<QCheckBox*>(nullptr);
+    };
+    QTRY_VERIFY(active_check());
+    QVERIFY(auto_next->isChecked() && active_check()->isChecked());
+    active_check()->click();
+    QTRY_VERIFY(!auto_next->isChecked());
+    auto_next->click();
+    QTRY_VERIFY(active_check() && active_check()->isChecked());
+    const auto properties_image = qEnvironmentVariable("VISIONPRO_IMAGE_SOURCE_PARAMETERS_SCREENSHOT");
+    if (!properties_image.isEmpty()) { QVERIFY(properties->grab().save(properties_image)); }
+    QVERIFY(properties->close());
+    QTRY_VERIFY(strip->isVisible() && !visible_properties(window));
+    control<QAction>(window, "runWorkflow")->trigger();
+    auto* history = window.findChild<ModuleHistoryPanel*>();
+    QTRY_VERIFY_WITH_TIMEOUT(history->selected_invocation(),10000);
+    const auto result = take(history->selected_run()->lookup(*history->selected_invocation()));
+    QVERIFY(result);
+    const auto* image = result->output(source_key<OutputId>("image"));
+    QVERIFY(image && std::holds_alternative<DataValue>(image->content));
+    QCOMPARE(std::get<DataValue>(image->content).as_image()->image.width(), 10);
+    auto* table = control<QTreeWidget>(window, "moduleHistoryTable");
+    QCOMPARE(table->headerItem()->text(0), QStringLiteral("执行序号"));
+    QVERIFY(table->topLevelItem(0)->text(1).contains(u'.'));
+    auto* tabs = control<QTabBar>(window, "workspaceOutputTabs");
+    QCOMPARE(tabs->tabText(2), QStringLiteral("模块结果"));
+    tabs->setCurrentIndex(2);
+    auto* outputs = control<QTreeWidget>(window, "moduleOutputTree");
+    QTRY_COMPARE(outputs->topLevelItemCount(), 1);
+    auto* root = outputs->topLevelItem(0);
+    QCOMPARE(root->text(0), QStringLiteral("图像源"));
+    QCOMPARE(root->text(2), QStringLiteral("第 1 轮"));
+    QCOMPARE(root->childCount(), 6);
+    QCOMPARE(root->child(0)->text(0), QStringLiteral("耗时（ms）"));
+    auto* image_row = root->child(1);
+    QCOMPARE(image_row->data(0, Qt::UserRole).toString(), QStringLiteral("image"));
+    QCOMPARE(image_row->childCount(), 4);
+    QCOMPARE(image_row->child(3)->text(2), QStringLiteral("17301505（Mono8）"));
+    QCOMPARE(root->child(5)->text(0), QStringLiteral("SN 码"));
+    outputs->setCurrentItem(image_row);
+    const auto expression = QStringLiteral("run.lookup_output(call, \"%1\", \"image\")").arg(QString::fromStdString(selected.to_string()));
+    QTRY_COMPARE(control<QLabel>(window,"sourceOutputReference")->text(), expression);
+    control<QPushButton>(window, "copySourceReference")->click();
+    QCOMPARE(QApplication::clipboard()->text(), expression);
+    image_row->setExpanded(true);
+    const auto shot = qEnvironmentVariable("VISIONPRO_IMAGE_SOURCE_WORKBENCH_SCREENSHOT");
+    if (!shot.isEmpty()) { QVERIFY(window.grab().save(shot)); }
+    outputs->setCurrentItem(image_row->child(0));
+    QTest::keyClick(outputs, Qt::Key_Return);
+    QTRY_COMPARE(tabs->currentIndex(), 0);
+    QTest::mouseDClick(canvas->viewport(), Qt::LeftButton, {}, node_position(*canvas, selected));
+    QTRY_VERIFY(visible_properties(window));
+    auto active_combo = [&] {
+        for (auto* box : properties->findChildren<QComboBox*>("source_source_type")) { if (box->isVisible()) { return box; } }
+        return static_cast<QComboBox*>(nullptr);
+    };
+    QTRY_VERIFY(active_combo());
+    auto* choose = active_combo();
+    const int sdk = choose->findData("SDK");
+    QVERIFY(sdk >= 0);
+    choose->setCurrentIndex(sdk);
+    emit choose->activated(sdk);
+    QTRY_VERIFY(!strip->isVisible());
+    QVERIFY(source_enum(*find_node(window.draft().workflows.front(),selected),"source_type","Local") == "SDK");
+    auto* input_tabs = control<QTabBar>(*properties, "moduleConfigTabs");
+    QTRY_VERIFY(input_tabs->isVisible() && input_tabs->tabText(1) == QStringLiteral("SDK 接入"));
+    QVERIFY(control<QWidget>(*properties, "source_sn_initial")->isVisible());
+    auto* flow_input = control<QPushButton>(*properties, "createSourceFlowInput");
+    QVERIFY(!flow_input->isVisible());
+    input_tabs->setCurrentIndex(1);
+    QPushButton* expose = nullptr;
+    QTRY_VERIFY((expose = properties->findChild<QPushButton*>("createSourceFlowInput")) && expose->isVisible());
+    expose->click();
+    QCOMPARE(window.draft().workflows.front().interface.inputs.size(), 1U);
+    auto* controller = window.findChild<RunController*>();
+    for (const auto* command : {"debugSelectedNode","runWorkflow"}) {
+        auto* run_action = control<QAction>(window, command);
+        QTRY_VERIFY_WITH_TIMEOUT(controller->can_submit(window.draft().workflows.front()) && run_action->isEnabled(), 10000);
+        const auto before = controller->runs().size();
+        const bool debug = std::string_view(command) == "debugSelectedNode";
+        bool supplied = false;
+        QTimer input_timer;
+        connect(&input_timer, &QTimer::timeout, &window, [&] {
+            auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+            if (!dialog) { return; }
+            input_timer.stop();
+            if (debug) {
+                auto* kind = dialog->findChild<QComboBox*>("sdkDebugImageSource");
+                if (!kind || kind->findData(true) < 0) { dialog->reject(); return; }
+                kind->setCurrentIndex(kind->findData(true));
+            } else {
+                auto* file = dialog->findChild<QLineEdit*>("runInputFile.image");
+                if (!file || dialog->findChild<QComboBox*>("sdkDebugImageSource")) { dialog->reject(); return; }
+                file->setText(paths.front());
+            }
+            supplied = true;
+            dialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Ok)->click();
+        });
+        input_timer.start(5);
+        run_action->trigger();
+        QVERIFY2(supplied, command);
+        QTRY_VERIFY_WITH_TIMEOUT(controller->can_start() && controller->runs().size() == before + 1,10000);
+        const auto& run = controller->runs().back();
+        const auto progress = take(run.inspect());
+        QVERIFY(progress.status == ExecutionStatus::Succeeded);
+        const auto record = take(run.lookup(*progress.nodes.front().invocation));
+        QVERIFY(record);
+        const auto* frame = record->output(source_key<OutputId>("image"));
+        QVERIFY(frame);
+        const auto& pixels = std::get<DataValue>(frame->content).as_image()->image;
+        QCOMPARE(pixels.width(),debug ? 2U : 9U);
+        QCOMPARE(pixels.height(),debug ? 2U : 6U);
+        if (debug) { QCOMPARE(pixels.format().order, ChannelOrder::Mono); }
+        QCOMPARE(std::holds_alternative<NodeTarget>(run.request().target()),debug);
+    }
+    tabs->setCurrentIndex(2);
+    QTRY_COMPARE(outputs->topLevelItemCount(), 1);
+    QTRY_COMPARE(outputs->topLevelItem(0)->childCount(), 4);
+    QCOMPARE(outputs->topLevelItem(0)->child(3)->text(0), QStringLiteral("SN 码"));
+    QVERIFY(outputs->findItems(QStringLiteral("帧号"), Qt::MatchExactly | Qt::MatchRecursive).empty());
 }
 
 void WorkspaceTests::format_image_sources_data()
@@ -1506,6 +1877,195 @@ void WorkspaceTests::loop_invocation_history()
     QVERIFY(history->selected_invocation()->scope != first->scope);
 }
 
+QPushButton* mapping_button(EditorWindow& window, const QString& field)
+{
+    auto* tree = control<QTreeWidget>(window, "moduleOutputTree");
+    for (QTreeWidgetItemIterator it(tree); *it; ++it) {
+        if ((*it)->data(0, Qt::UserRole).toString() == field) {
+            return qobject_cast<QPushButton*>(tree->itemWidget(*it, 4));
+        }
+    }
+    return nullptr;
+}
+
+bool edit_mapping(EditorWindow& window, const QString& field, VariableScope scope, const QString& choice,
+    const QString& name = {}, const std::function<bool(const QComboBox&, const QComboBox&)>& check = {})
+{
+    auto* button = mapping_button(window, field);
+    if (!button || !button->isEnabled()) { return false; }
+    bool accepted = false;
+    QTimer dispatch;
+    dispatch.setSingleShot(true);
+    QObject::connect(&dispatch, &QTimer::timeout, &window, [&] {
+        auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+        if (!dialog) { return; }
+        auto* scopes = dialog->findChild<QComboBox*>("resultVariableScope");
+        auto* targets = dialog->findChild<QComboBox*>("resultVariableTarget");
+        if (!scopes || !targets) { dialog->reject(); return; }
+        scopes->setCurrentIndex(scopes->findData(static_cast<int>(scope)));
+        if (check && !check(*scopes, *targets)) { dialog->reject(); return; }
+        const int index = targets->findData(choice);
+        if (index < 0) { dialog->reject(); return; }
+        targets->setCurrentIndex(index);
+        if (choice == QStringLiteral("new")) { control<QLineEdit>(*dialog, "resultVariableName")->setText(name); }
+        auto* ok = dialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Ok);
+        if (!ok->isEnabled()) { dialog->reject(); return; }
+        accepted = true;
+        ok->click();
+    });
+    dispatch.start(0);
+    button->click();
+    return accepted;
+}
+
+void WorkspaceTests::edits_image_result_variables()
+{
+    const auto registry = take(app::make_tool_registry());
+    const auto alternate = fixture_id<VariableId>("6174");
+    Workflow flow{inspection_id, "取像流程", {source_key<SchemaId>("test.result.variables"), 1}};
+    Solution solution{fixture_id<SolutionId>("6173"), "变量测试", infrastructure::solution_format_version, 1, {flow}};
+    solution.variables.push_back({alternate, "备用编号", DataType::integer(), ConfigValue::integer(-10)});
+    EditorWindow window(std::move(solution), registry);
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    auto& scene = dynamic_cast<ControlScene&>(*control<QGraphicsView>(window, "workflowCanvas")->scene());
+    QVERIFY(scene.add_tool(source_key<ToolTypeId>("visionpro.image.source"), {120, 80}));
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const auto path = directory.filePath("part.png");
+    QImage picture(9, 6, QImage::Format_RGB888);
+    picture.fill(Qt::blue);
+    QVERIFY(picture.save(path));
+    control<ImageSourceStrip>(window, "imageSourceStrip")->add_files({path});
+    control<QTabBar>(window, "workspaceOutputTabs")->setCurrentIndex(2);
+    QTRY_VERIFY(mapping_button(window, "image_width"));
+    QVERIFY(edit_mapping(window, "image_width", VariableScope::Global, {}, {}, [](const auto& scopes, const auto&) {
+        auto* dialog = scopes.window();
+        return control<QLabel>(*dialog, "resultVariableField")->text() == QStringLiteral("图像 · 宽度 · Int64")
+            && control<QLineEdit>(*dialog, "resultVariableName")->text() == QStringLiteral("图像 · 宽度");
+    }));
+    QVERIFY(edit_mapping(window, "sn", VariableScope::Global, "new", "采集编号"));
+    QVERIFY(edit_mapping(window, "file_name", VariableScope::Local, "new", "本轮文件名"));
+    QVERIFY(edit_mapping(window, "image", VariableScope::Local, "new", "本轮原图"));
+    const auto& draft = window.draft();
+    QCOMPARE(draft.workflows.front().nodes.size(), 1U);
+    QVERIFY(draft.workflows.front().control_links.empty());
+    QCOMPARE(draft.workflows.front().nodes.front().result_variables.size(), 3U);
+    QCOMPARE(draft.variables.size(), 2U);
+    QCOMPARE(draft.workflows.front().local_variables.size(), 2U);
+    const auto sn = draft.variables.back().id;
+    const auto file = draft.workflows.front().local_variables.front().id;
+    const auto image = draft.workflows.front().local_variables.back().id;
+    QVERIFY(draft.workflows.front().local_variables.back().type == DataType::optional(DataType::image()));
+    QTRY_VERIFY(mapping_button(window, "sn")->text().contains(QStringLiteral("采集编号")));
+    auto* controller = window.findChild<RunController*>();
+    auto* run = control<QAction>(window, "runWorkflow");
+    QTRY_VERIFY(run->isEnabled());
+    run->trigger();
+    QTRY_VERIFY_WITH_TIMEOUT(controller->can_start() && controller->runs().size() == 1, 10000);
+    const auto first_run = controller->runs().back();
+    const auto first = take(first_run.inspect());
+    QCOMPARE(first.status, ExecutionStatus::Succeeded);
+    const auto global = take(controller->shared_preview());
+    QVERIFY(global);
+    const auto sampled = take(global->data->read(sn));
+    QCOMPARE(sampled.revision, 1U);
+    QVERIFY(sampled.current_value.as_int64() && *sampled.current_value.as_int64() == 1);
+    const auto filename = std::ranges::find(first.local_variables, file, &GlobalVariableEntry::variable);
+    QVERIFY(filename != first.local_variables.end() && filename->current_value.as_string());
+    QCOMPARE(*filename->current_value.as_string(), std::string("part.png"));
+    const auto frame = std::ranges::find(first.local_variables, image, &GlobalVariableEntry::variable);
+    QVERIFY(frame != first.local_variables.end() && frame->current_value.optional_value());
+    const auto* pixels = frame->current_value.optional_value()->as_image();
+    QVERIFY(pixels && pixels->image.width() == 9 && pixels->image.height() == 6);
+    const auto screenshot = qEnvironmentVariable("VISIONPRO_RESULT_VARIABLES_SCREENSHOT");
+    if (!screenshot.isEmpty()) { QVERIFY(window.grab().save(screenshot)); }
+    const auto alt = QString::fromStdString(alternate.to_string());
+    const auto original = QString::fromStdString(sn.to_string());
+    QVERIFY(edit_mapping(window, "sn", VariableScope::Global, alt, {},
+        [&](const auto&, const auto& targets) { return targets.currentData().toString() == original; }));
+    QVERIFY(edit_mapping(window, "file_name", VariableScope::Local, {}));
+    QTRY_VERIFY(mapping_button(window, "sn")->text().contains(QStringLiteral("备用编号")));
+    auto* removed = mapping_button(window, "file_name");
+    QVERIFY(removed->text().isEmpty() && !removed->icon().isNull());
+    QVERIFY(removed->accessibleName().contains(QStringLiteral("绑定全局或局部变量")));
+    QTRY_VERIFY(run->isEnabled());
+    run->trigger();
+    QTRY_VERIFY_WITH_TIMEOUT(controller->can_start() && controller->runs().size() >= 1 &&
+        controller->runs().back().identity() != first_run.identity(), 10000);
+    const auto after = take(controller->runs().back().inspect());
+    QCOMPARE(after.status, ExecutionStatus::Succeeded);
+    const auto updated = take(controller->shared_preview());
+    QVERIFY(updated);
+    const auto second = take(updated->data->read(alternate));
+    QVERIFY(second.current_value.as_int64() && *second.current_value.as_int64() >= 1 && second.revision == 1);
+    const auto unbound = std::ranges::find(after.local_variables, file, &GlobalVariableEntry::variable);
+    QVERIFY(unbound != after.local_variables.end() && unbound->revision == 0);
+    QCOMPARE(*unbound->current_value.as_string(), std::string{});
+}
+
+void WorkspaceTests::restricts_image_result_variables_to_direct_group()
+{
+    const auto registry = take(app::make_tool_registry());
+    const auto flow_variable = fixture_id<VariableId>("6176"), outer_variable = fixture_id<VariableId>("6177");
+    Workflow flow{inspection_id, "取像流程", {source_key<SchemaId>("test.group.variables"), 1}};
+    flow.local_variables.push_back({flow_variable, "流程编号", DataType::integer(), ConfigValue::integer(-1)});
+    EditorWindow window({fixture_id<SolutionId>("6175"), "嵌套组", infrastructure::solution_format_version, 1, {flow}}, registry);
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    auto& scene = dynamic_cast<ControlScene&>(*control<QGraphicsView>(window, "workflowCanvas")->scene());
+    const auto& model = static_cast<const ControlGraphModel&>(scene.graphModel());
+    QVERIFY(scene.add_group("外组", {120, 80}));
+    const auto outer = scene.selected_nodes().front();
+    QVERIFY(scene.edit_draft("设置外组变量", [&](Solution& draft) -> Result<std::monostate> {
+        auto& config = std::get<GroupConfiguration>(draft.workflows.front().nodes.front().configuration);
+        config.local_variables.push_back({outer_variable, "外组编号", DataType::integer(), ConfigValue::integer(-2)});
+        return std::monostate{};
+    }));
+    QVERIFY(scene.open_group(model.canvas_id(outer)));
+    QVERIFY(scene.add_group("内组", {120, 80}));
+    const auto inner = scene.selected_nodes().front();
+    QVERIFY(scene.open_group(model.canvas_id(inner)));
+    QVERIFY(scene.add_tool(source_key<ToolTypeId>("visionpro.image.source"), {120, 80}));
+    control<QTabBar>(window, "workspaceOutputTabs")->setCurrentIndex(2);
+    QTRY_VERIFY(mapping_button(window, "sn"));
+    QVERIFY(edit_mapping(window, "sn", VariableScope::Local, "new", "内组编号", [&](const auto& scopes, const auto& targets) {
+        return scopes.currentText().contains(QStringLiteral("内组"))
+            && targets.findData(QString::fromStdString(flow_variable.to_string())) < 0
+            && targets.findData(QString::fromStdString(outer_variable.to_string())) < 0;
+    }));
+    const auto& updated_flow = window.draft().workflows.front();
+    const auto& own = std::get<GroupConfiguration>(find_node(updated_flow, inner)->configuration).local_variables;
+    QCOMPARE(own.size(), 1U);
+    QCOMPARE(own.front().name, std::string("内组编号"));
+    QCOMPARE(updated_flow.local_variables.size(), 1U);
+    QCOMPARE(std::get<GroupConfiguration>(find_node(updated_flow, outer)->configuration).local_variables.size(), 1U);
+    const auto local_id = own.front().id;
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QImage picture(5, 3, QImage::Format_Grayscale8);
+    picture.fill(64);
+    const auto path = directory.filePath("group-input.png");
+    QVERIFY(picture.save(path));
+    control<ImageSourceStrip>(window, "imageSourceStrip")->add_files({path});
+    auto* controller = window.findChild<RunController*>();
+    auto* run = control<QAction>(window, "runWorkflow");
+    QTRY_VERIFY(run->isEnabled());
+    run->trigger();
+    QTRY_VERIFY_WITH_TIMEOUT(controller->can_start() && controller->runs().size() == 1, 10000);
+    const auto result = take(controller->runs().front().inspect());
+    QCOMPARE(result.status, ExecutionStatus::Succeeded);
+    QCOMPARE(result.local_variables.size(), 1U);
+    QCOMPARE(result.local_variables.front().revision, 0U);
+    const auto outer_values = std::ranges::find(result.group_local_variables, outer, &GroupLocalVariables::group);
+    const auto inner_values = std::ranges::find(result.group_local_variables, inner, &GroupLocalVariables::group);
+    QVERIFY(outer_values != result.group_local_variables.end() && inner_values != result.group_local_variables.end());
+    QCOMPARE(outer_values->variables.front().revision, 0U);
+    QCOMPARE(inner_values->variables.size(), 1U);
+    const auto& written = inner_values->variables.front();
+    QVERIFY(written.variable == local_id && written.revision == 1 && written.current_value.as_int64());
+    QCOMPARE(*written.current_value.as_int64(), 1);
+}
 } // namespace
 } // namespace visionpro::ui
 

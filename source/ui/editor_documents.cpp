@@ -4,6 +4,7 @@
 
 #include "control_scene.hpp"
 #include "image_panel.hpp"
+#include "image_source_fields.hpp"
 
 #ifdef VISIONPRO_WITH_OPENCV
 #include "visual_preview.hpp"
@@ -517,6 +518,28 @@ void EditorWindow::open_preview_image(const fs::path& file, CoordinateSystemId f
     Q_UNUSED(file);
     Q_UNUSED(frame);
     Q_UNUSED(grayscale);
+#endif
+}
+
+void EditorWindow::open_source_preview(const QString& file, CoordinateSystemId frame, bool grayscale)
+{
+#ifdef VISIONPRO_WITH_OPENCV
+    const auto workflow = model_->workflow_id();
+    const auto selected = scene_->selected_nodes();
+    const auto* flow = workflow ? find_workflow(draft(), *workflow) : nullptr;
+    const auto* node = flow && selected.size() == 1 ? find_node(*flow, selected.front()) : nullptr;
+    if (busy_ || !is_image_source(node)) { return; }
+    const auto label = source_flag(*node, "show_name", true) ? tr("本地预览 · %1").arg(QFileInfo(file).fileName()) : tr("本地预览");
+    start_file_task(tr("加载本地预览…"), [path=file_path(file), frame, grayscale] {
+        return app::read_preview_image(path, frame, grayscale);
+    }, [this, workflow, selected, label](ImageHandle image) {
+        if (model_->workflow_id() != workflow || selected != scene_->selected_nodes()) { return; }
+        accept_preview_frame(image);
+        images_->set_provenance(label);
+    });
+#else
+    Q_UNUSED(file); Q_UNUSED(frame); Q_UNUSED(grayscale);
+    show_status(tr("当前构建未启用图像解码。"));
 #endif
 }
 

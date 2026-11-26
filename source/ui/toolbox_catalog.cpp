@@ -17,6 +17,16 @@ QString display_field(const QString& declared)
 {
     static const QHash<QString, QString> names{
         {"image", "图像"}, {"selected item", "所选元素"}, {"item", "元素"}, {"binary", "二值图"},
+        {"gray_image","灰度图像"},{"image_1","分时频闪图像 1"},{"image_2","分时频闪图像 2"},{"image_3","分时频闪图像 3"},
+        {"sn","SN"},{"file_path","图像路径"},{"file_name","文件名"},{"serial","相机序列号"},
+        {"module_status","模块状态"},{"original_path","本地原图保存路径"},{"original_name","原图名称"},
+        {"rendered_path","本地渲染图保存路径"},{"rendered_name","渲染图名称"},{"big_file_path","大文件路径"},
+        {"original_big_file_path","原图大文件路径"},{"rendered_big_file_path","渲染图大文件路径"},
+        {"bounds","包围框"},{"centroids","质心"},{"masks","ROI 掩膜"},{"regions","有效 ROI 轮廓"},
+        {"points","检测点"},{"lines","检测线"},{"circles","检测圆"},
+        {"frame_number","帧号"},{"camera_frame_number","相机帧号"},{"lost_frames","丢帧数"},{"lost_packets","丢包数"},
+        {"acquire_failures","采集失败数"},{"elapsed_ms","运行耗时（ms）"},{"timestamp_source","时间戳来源"},
+        {"device_ticks","设备时钟计数"},{"tick_frequency_hz","设备时钟频率（Hz）"},{"device_frame_number","设备原始帧号"},
         {"blue", "蓝色通道均值"}, {"green", "绿色通道均值"}, {"red", "红色通道均值"},
         {"effective_roi", "有效区域"}, {"roi_mask", "区域掩膜"}, {"matched", "匹配成功"}, {"score", "匹配分数"},
         {"position", "位置"}, {"transform", "坐标变换"}, {"value", "数值"}, {"minimum", "最小值"}, {"maximum", "最大值"}, {"threshold", "阈值"}, {"passed", "通过"},
@@ -30,6 +40,11 @@ QString display_field(const QString& declared)
         {"write confirmed", "写入确认"}, {"utf-8 bytes", "UTF-8 字节"}
     };
     return names.value(declared.toLower(), declared);
+}
+
+QString camera_diagnostic_name(std::string_view output)
+{
+    return output == "frame_number" ? QObject::tr("采集流水号") : display_field(QString::fromUtf8(output));
 }
 
 namespace {
@@ -69,6 +84,8 @@ struct Tool {
 };
 
 constexpr Tool tools[] = {
+    {"visionpro.image.source", Category::Acquisition, "图像源", Glyph::Image},
+    {"visionpro.image.output", Category::Acquisition, "输出图像", Glyph::Write, "图"},
     {"visionpro.image.read_file", Category::Acquisition, "本地图像", Glyph::Image},
     {"visionpro.camera.acquire", Category::Acquisition, "相机采集", Glyph::Camera},
     {"visionpro.camera.frame", Category::Acquisition, "触发图像", Glyph::Frame},

@@ -318,7 +318,11 @@ WorkspaceToolbox::WorkspaceToolbox(const core::ToolRegistry& registry, QWidget* 
         connect(tile, &ToolTile::activated, this, &WorkspaceToolbox::toolActivated);
         connect(tile, &ToolTile::dropped, this, [this, tile](QPoint position) { emit toolDropped(tile, position); });
     };
-    for (const auto& tool : registry.descriptors()) { add(tool.id.text(), QString::fromStdString(tool.display_name)); }
+    for (const auto& tool : registry.descriptors()) {
+        const auto type = tool.id.text();
+        if (type == "visionpro.image.read_file" || type == "visionpro.camera.acquire" || type == "visionpro.camera.frame") { continue; }
+        add(type, QString::fromStdString(tool.display_name));
+    }
     add("@group", {});
     add("@loop", {});
     update_sections();

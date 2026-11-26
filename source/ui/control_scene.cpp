@@ -1,4 +1,5 @@
 #include "control_scene.hpp"
+#include "image_source_fields.hpp"
 #include "workspace_appearance.hpp"
 #include "workspace_style.hpp"
 #include "run_panel.hpp"
@@ -152,7 +153,8 @@ public:
             Qt::AlignCenter, ordinal);
         const auto& colors = workspace_colors();
         QColor ink = style.FontColorFaded;
-        if (badge.status == ExecutionStatus::Failed || badge.status == ExecutionStatus::TimedOut) { ink = colors.error; }
+        if (badge.completion) { ink = *badge.completion == 1 ? colors.positive : colors.error; }
+        else if (badge.status == ExecutionStatus::Failed || badge.status == ExecutionStatus::TimedOut) { ink = colors.error; }
         else if (badge.status == ExecutionStatus::Cancelled) { ink = colors.warning; }
         else if (badge.judgement == Judgement::OK) { ink = colors.positive; }
         else if (badge.judgement == Judgement::NG) { ink = colors.negative; }
@@ -278,6 +280,9 @@ void delete_subgraph(Solution& draft, Workflow& flow, const std::set<core::NodeI
     std::erase_if(flow.outputs, obsolete_output);
     std::erase_if(flow.control_exports, obsolete_control);
     for (auto& node : flow.nodes) {
+        std::erase_if(node.display_styles,[&](const auto& style) {
+            return style.source.workflow == flow.id && removed.contains(style.source.node);
+        });
         if (auto* group = std::get_if<GroupConfiguration>(&node.configuration)) {
             if (group->loop && group->loop->break_source && removed.contains(*group->loop->break_source)) {
                 group->loop->break_source.reset();
@@ -377,6 +382,11 @@ void ControlScene::display_run(const std::optional<RunHandle>& run, std::optiona
                 badge.status = call.status;
                 auto& label = badge.text;
                 label = call.skip_reason == NodeSkipReason::Disabled ? tr("已禁用") : execution_status_text(call.status);
+                const auto* flow = find_workflow(run->request().snapshot().solution(), run->identity().workflow);
+                if (flow && is_image_output(find_node(*flow, call.node))) {
+                    badge.completion = module_completion_code(call.status);
+                    if (badge.completion) { label += tr(" · 状态 %1").arg(*badge.completion); }
+                }
                 if (call.invocation && call.status == ExecutionStatus::Succeeded) {
                     const auto lookup = run->lookup(*call.invocation);
                     if (const auto* result = std::get_if<std::optional<NodeResult>>(&lookup); result && *result) {
@@ -507,8 +517,12 @@ bool ControlScene::add_tool(core::ToolTypeId type, QPointF position)
         auto generated = core::IdFactory::generate<core::NodeId>();
         if (auto* failure = std::get_if<core::Diagnostic>(&generated)) { return std::move(*failure); }
         added = std::get<core::NodeId>(generated);
-        return append_node(draft, model_, {*added, tool->display_name, workflow::ToolConfiguration{type, tool->config_version},
-            {}, {}}, position);
+        workflow::Node node{*added, tool->display_name, workflow::ToolConfiguration{type, tool->config_version}, {}, {}};
+        if (is_image_source(&node)) {
+            const auto created = ensure_source_frame(draft, node, false);
+            if (const auto* failure = std::get_if<core::Diagnostic>(&created)) { return *failure; }
+        }
+        return append_node(draft, model_, std::move(node), position);
     });
     if (changed) { reveal_node(*added); }
     return changed;

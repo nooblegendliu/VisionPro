@@ -1,6 +1,8 @@
 #include "run_panel.hpp"
 #include "binary_editor.hpp"
 #include "coordinate_text.hpp"
+#include "image_source_fields.hpp"
+#include "toolbox_catalog.hpp"
 #include <visionpro/core/class_map.hpp>
 
 #include <QComboBox>
@@ -225,7 +227,7 @@ QString value_text(const BasicValue<Domain>& value, bool preview_list = true)
         "RasterMask", "ResourceReference"});
 }
 
-QString output_text(const OutputSlot& output)
+QString output_text(const OutputSlot& output, const QString& label = {})
 {
     const auto value = std::visit(Overload{
         [](const DataValue& data) { return value_text(data); },
@@ -235,7 +237,7 @@ QString output_text(const OutputSlot& output)
         },
         [](const InvalidOutput& invalid) { return QStringLiteral("Invalid · %1").arg(diagnostic_text(invalid.diagnostic)); }
     }, output.content);
-    return QStringLiteral("%1 = %2").arg(id_text(output.id), value);
+    return QStringLiteral("%1 = %2").arg(label.isEmpty() ? id_text(output.id) : label, value);
 }
 
 bool is_image(const OutputSlot& output)
@@ -618,9 +620,8 @@ void RunPanel::refresh_call()
         QStringList lines{QStringLiteral("已派发 %1 次").arg(progress_->call_order.size())};
         const auto& request = run->request();
         const auto kind = request.trigger().kind;
-        if (kind == TriggerKind::External || kind == TriggerKind::Continuous) {
-            lines.append(QStringLiteral("%1 trigger · %2 · %3").arg(kind == TriggerKind::External ? QStringLiteral("External")
-                : QStringLiteral("Continuous"), id_text(request.trigger().source),
+        if (kind != TriggerKind::Manual && kind != TriggerKind::Debug) {
+            lines.append(QStringLiteral("%1 trigger · %2 · %3").arg(QString::fromUtf8(trigger_kind_name(kind)), id_text(request.trigger().source),
                 run->admission() == RunAdmission::Queued ? QStringLiteral("Queued at admission") : QStringLiteral("Immediate admission")));
             if (const auto& id = request.correlation()) {
                 lines.append(QStringLiteral("Correlation · %1 / %2").arg(id_text(id->domain()), text(id->key())));
@@ -635,6 +636,26 @@ void RunPanel::refresh_call()
             lines.append(QStringLiteral("Run inputs"));
             for (const auto& input : request.inputs()) {
                 lines.append(QStringLiteral("%1 (%2) = %3").arg(id_text(input.id), input_origin_text(input.origin), value_text(input.value)));
+            }
+        }
+        const auto* flow = find_workflow(request.snapshot().solution(), run->identity().workflow);
+        const auto append_variables = [&](const QString& title, const std::vector<GlobalVariableDefinition>& definitions,
+                                          const std::vector<GlobalVariableEntry>& entries) {
+            if (entries.empty()) { return; }
+            lines.append(title);
+            for (const auto& entry : entries) {
+                const auto definition = std::ranges::find(definitions, entry.variable, &GlobalVariableDefinition::id);
+                const auto name = definition == definitions.end() ? id_text(entry.variable) : text(definition->name);
+                lines.append(tr("%1 = %2（修订 %3）").arg(name, value_text(entry.current_value)).arg(entry.revision));
+            }
+        };
+        if (flow) {
+            append_variables(tr("本轮流程局部变量"), flow->local_variables, progress_->local_variables);
+            for (const auto& local : progress_->group_local_variables) {
+                if (!node || node->scope != local.scope) { continue; }
+                const auto* owner = find_node(*flow, local.group);
+                const auto* group = owner ? std::get_if<GroupConfiguration>(&owner->configuration) : nullptr;
+                if (group) { append_variables(tr("组局部变量 · %1").arg(text(owner->name)), group->local_variables, local.variables); }
             }
         }
         const bool ready = node && node->invocation && node->status != ExecutionStatus::Pending && node->status != ExecutionStatus::Running;
@@ -658,7 +679,12 @@ void RunPanel::refresh_call()
         }
         outputs_->setEnabled(outputs_->count() > 0);
         if (node) {
-            lines.append(node->invocation ? invocation_text(*node->invocation) : QStringLiteral("Node %1").arg(id_text(node->node)));
+            lines.append(tr("节点 %1").arg(id_text(node->node)));
+            if (node->invocation) {
+                const auto attempts = node->attempts.empty() && displayed_result_ ? 1U : node->attempts.size();
+                lines.append(tr("作用域 %1 · 调用 %2 · 尝试次数 %3").arg(id_text(node->invocation->scope),
+                    id_text(node->invocation->invocation)).arg(attempts));
+            }
             if (node->scope) {
                 const auto owner = std::ranges::find(progress_->groups, *node->scope, &RunGroupCall::scope);
                 if (owner != progress_->groups.end()) {
@@ -717,7 +743,21 @@ void RunPanel::refresh_call()
                     timing.value ? QString::number(*timing.value, 'g', 15) : QStringLiteral("unknown"), unit));
             }
             if (!result.outputs.empty()) { lines.append(QStringLiteral("Outputs")); }
-            for (const auto& output : result.outputs) { lines.append(output_text(output)); }
+            const auto* definition = flow ? find_node(*flow, result.identity.invocation.node) : nullptr;
+            const bool camera = is_image_source(definition) && source_enum(*definition, "source_type", "Local") == "Camera";
+            QStringList camera_details;
+            for (const auto& output : result.outputs) {
+                const auto key = output.id.text();
+                if (camera && std::ranges::find(camera_diagnostic_outputs, key) != camera_diagnostic_outputs.end()) {
+                    camera_details.append(output_text(output, camera_diagnostic_name(key)));
+                } else {
+                    lines.append(output_text(output));
+                }
+            }
+            if (!camera_details.empty()) {
+                lines.append(tr("相机采集诊断"));
+                lines.append(camera_details);
+            }
             if (!result.selected_control_outputs.empty()) {
                 QStringList outlets;
                 for (const auto& port : result.selected_control_outputs) { outlets.append(id_text(port)); }

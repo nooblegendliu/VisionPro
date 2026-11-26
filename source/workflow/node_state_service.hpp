@@ -61,6 +61,7 @@ public:
 private:
     std::mutex mutex_;
     StateCatalog versions_;
+    StateCatalog debug_versions_;
     std::optional<core::ConfigSnapshotId> prepared_solution_;
     std::uint64_t last_generation_{0};
 };

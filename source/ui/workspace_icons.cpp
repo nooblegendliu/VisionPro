@@ -102,6 +102,12 @@ private:
     static void draw_glyph(QPainter& p, WorkspaceIcon glyph)
     {
         switch (glyph) {
+        case WorkspaceIcon::Camera: draw_category(p, ToolboxCategory::Acquisition); break;
+        case WorkspaceIcon::Link:
+            p.translate(10, 10); p.rotate(-45);
+            p.drawRoundedRect(QRectF(-9, -3, 8, 6), 3, 3);
+            p.drawRoundedRect(QRectF(1, -3, 8, 6), 3, 3);
+            p.drawLine(-4, 0, 4, 0); break;
         case WorkspaceIcon::Search:
             p.drawEllipse(QPointF(8.5,8.5),5.5,5.5); p.drawLine(13,13,18,18); break;
         case WorkspaceIcon::New:

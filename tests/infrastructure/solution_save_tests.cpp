@@ -14,6 +14,7 @@
 #include <iostream>
 #include <iterator>
 #include <mutex>
+#include <set>
 #include <stdexcept>
 #include <vector>
 
@@ -175,7 +176,7 @@ private:
     std::shared_ptr<Gate> gate_;
 };
 
-ToolRegistry registry(const std::shared_ptr<Gate>& gate, bool with_state = false)
+ToolRegistry registry(const std::shared_ptr<Gate>& gate, bool with_state = false, bool with_position = false)
 {
     const auto schema = key<SchemaId>("s38.read");
     ToolDescriptor descriptor{
@@ -194,6 +195,7 @@ ToolRegistry registry(const std::shared_ptr<Gate>& gate, bool with_state = false
         .execution = {},
         .state_parameters = {},
     };
+    if (with_position) { descriptor.outputs.push_back({key<OutputId>("position"), "Position", DataType::point2d()}); }
     if (with_state) {
         InputDescriptor input{key<InputId>("offset"), "Offset", DataType::integer(), false, ConfigValue::integer(0)};
         input.binding.allowed_sources = {BindingSourceKind::Constant, BindingSourceKind::PublicInput, BindingSourceKind::GlobalRead};
@@ -296,6 +298,7 @@ void transfer_packages()
     const ClassPalette palette{{17, {15, 160, 250}}};
     draft.layouts = {{workflow, {{node, 23, -17, palette}}}};
     draft.name = "已编辑";
+    draft.image_archive = ImageArchivePolicy{{PathBase::SolutionDirectory, "packs", {}}, 3};
     draft.resources.push_back({id<ResourceId>('3'), "Named external", ResourceKind::Binary, ExternalFileResource{
         {PathBase::NamedRoot, utf8(fixture.external.filename()), root_id}, ResourceReadPolicy::PerInvocation, {}, {}}});
     draft.resources.push_back({id<ResourceId>('4'), "Relative external", ResourceKind::Binary, ExternalFileResource{
@@ -314,6 +317,7 @@ void transfer_packages()
     write(fixture.package / "images" / u8"帧.bin", "selected");
     write(fixture.package / "images" / "notes.txt", "unselected");
     write(fixture.package / "outputs" / "previous.bin", "historical data");
+    write(fixture.package / "packs" / "previous.dat", "archived production image");
     write(fixture.package / "unrelated.bin", "not a resource");
 
     const auto destination = fixture.scratch.path / u8"另存方案";
@@ -329,6 +333,10 @@ void transfer_packages()
         && restored.layouts.front().nodes.front().class_palette == palette,
         "Layout round-trips with the same workflow and node identities.");
     const auto relative_to = [&](const ResourcePath& path) { return destination / fs::path(std::u8string(path.path.begin(), path.path.end())); };
+    check(restored.image_archive && restored.image_archive->images_per_file == 3
+        && restored.image_archive->directory.base == PathBase::SolutionDirectory
+        && fs::is_empty(relative_to(restored.image_archive->directory)),
+        "Save As preserves the package settings and creates an empty image archive directory.");
     const auto& copied = std::get<ManagedResource>(restored.resources[0].location);
     const auto& old = std::get<ManagedResource>(draft.resources[0].location);
     check(copied.path.base == PathBase::SolutionDirectory && copied.path.path != old.path.path
@@ -361,6 +369,9 @@ void transfer_packages()
     const auto clone = take(reload_saved_solution(independent_dir, independent.solution, fixture.tools, roots));
     const auto& cloned_flow = clone.solution().workflows.front();
     const auto& cloned_node = cloned_flow.nodes.front();
+    check(clone.solution().image_archive && clone.solution().image_archive->images_per_file == 3
+        && fs::is_empty(independent_dir / fs::u8path(clone.solution().image_archive->directory.path)),
+        "An independent copy preserves the image package policy without copying production images.");
     check(clone.solution().id != draft.id && clone.solution().revision == 1 && cloned_flow.id != workflow
         && cloned_node.id != node && cloned_flow.entries == std::vector{cloned_node.id}
         && clone.solution().resources.front().id != draft.resources.front().id
@@ -704,6 +715,92 @@ void cleanup()
     current_output_is(fixture, 'n');
     check(read(fixture.external) == "external", "Cleanup never rewrites the external file.");
 }
+void reusable_result_variable_mappings()
+{
+    const Fixture fixture;
+    const auto tools = registry({}, false, true);
+    const auto document = fixture.open();
+    auto draft = document.solution();
+    auto& flow = draft.workflows.front();
+    const auto group = id<NodeId>('2'), first = flow.nodes.front().id, second = id<NodeId>('3');
+    const auto local = id<VariableId>('4'), global = id<VariableId>('5'), point = id<VariableId>('6');
+    const auto coordinate = key<CoordinateSystemId>("local.point");
+    const auto host_coordinate = key<CoordinateSystemId>("source.host.point");
+    const auto host_origin = id<VariableId>('8');
+    const auto position_port = key<OutputId>("position");
+    const auto port = key<OutputId>("byte");
+    draft.variables.push_back({global,"Host result",DataType::integer(),ConfigValue::integer(-1)});
+    draft.coordinates.push_back({coordinate,CoordinateKind::Image,MeasurementUnit::Pixel,{0,0},{1,0},{0,-1},Handedness::LeftHanded});
+    auto source_frame = draft.coordinates.front(); source_frame.id = host_coordinate;
+    draft.coordinates.push_back(source_frame);
+    draft.variables.push_back({host_origin,"Host position",DataType::point2d(),
+        take(ConfigValue::point2d({host_coordinate,MeasurementUnit::Pixel,1,2}))});
+    flow.local_variables.push_back({id<VariableId>('7'),"Enclosing scope",DataType::integer(),ConfigValue::integer(77)});
+    GroupConfiguration body{{key<SchemaId>("variable.body"),1,{},{{port,"Byte",DataType::integer()}}}, {first},
+        {{port,{flow.id,second,port,{}}}}};
+    body.local_variables = {{local,"Group result",DataType::integer(),ConfigValue::integer(19)},
+        {point,"Origin",DataType::point2d(),take(ConfigValue::point2d({coordinate,MeasurementUnit::Pixel,12,34}))}};
+    auto writer = flow.nodes.front();
+    writer.id = second;
+    flow.nodes.front().result_variables = {{port,VariableScope::Local,local}};
+    writer.result_variables = {{port,VariableScope::Global,global},{position_port,VariableScope::Global,host_origin}};
+    flow.nodes.push_back(writer);
+    flow.nodes.push_back({group,"Result group",body,{},{}});
+    flow.entries = {group};
+    flow.containment = {{group,first},{group,second}};
+    flow.control_links = {{id<ControlLinkId>(),first,{},second}};
+
+    const auto package = fixture.scratch.path / "group-with-variable-results";
+    take(export_subgraph_package(package,draft,flow.id,group,tools,&document));
+    auto host = document.solution();
+    const auto missing = import_subgraph_package(package,host,flow.id,{},tools,&document);
+    rejected(missing,ErrorCode::MissingCapability,"A host must declare a variable used only as a result-write target.");
+    check(std::get<Diagnostic>(missing).location.variable == global, "The missing global is identified in the import diagnostic.");
+    host.variables = draft.variables;
+    auto destination_frame = source_frame; destination_frame.id = key<CoordinateSystemId>("destination.host.point");
+    host.coordinates.push_back(destination_frame);
+    host.variables.back().initial_value = take(ConfigValue::point2d({destination_frame.id,MeasurementUnit::Pixel,20,30}));
+    rejected(import_subgraph_package(package,host,flow.id,{},tools,&document,{true,true,false}),ErrorCode::MissingCapability,
+        "An explicit global result write requires the host shared-data service.");
+    const auto imported = take(import_subgraph_package(package,host,flow.id,{},tools,&document));
+    const auto again = take(import_subgraph_package(package,imported.solution,flow.id,{},tools,&document));
+    check(again.solution.coordinates.size() == 2 && again.solution.variables.back().initial_value == host.variables.back().initial_value,
+        "A required global's geometric initial value and frame remain owned by the destination host.");
+    const auto& imported_flow = again.solution.workflows.front();
+    std::set<VariableId> ids;
+    for (const auto instance : {*imported.group,*again.group}) {
+        const auto& definition = std::get<GroupConfiguration>(find_node(imported_flow,instance)->configuration);
+        check(definition.local_variables.size() == 2 && imported_flow.local_variables.empty(),
+            "Only the exported Group owns the two packaged definitions.");
+        const auto& owned = definition.local_variables[0];
+        check(owned.id != local && ids.insert(owned.id).second && *owned.initial_value.as_int64() == 19,
+            "Repeated imports own distinct Group locals with identical configured initial values.");
+        const auto* origin = definition.local_variables[1].initial_value.as_point2d();
+        check(origin && origin->coordinate_frame == coordinate && origin->x == 12 && origin->y == 34
+            && again.solution.coordinates.back().id == coordinate,
+            "A local variable's geometry default alone brings its coordinate definition into the host.");
+        const auto* child = find_node(imported_flow,definition.entries.front());
+        check(child->result_variables == std::vector<ResultVariableBinding>{{port,VariableScope::Local,owned.id}},
+            "The imported child writes to this Group instance's local variable.");
+        const auto* exported = find_node(imported_flow,definition.outputs.front().source.node);
+        check(exported->result_variables == writer.result_variables,
+            "The imported global result mapping retains its host identity.");
+    }
+    flow.nodes.back().result_variables = {{port,VariableScope::Global,global}};
+    const auto boundary = export_subgraph_package(fixture.scratch.path / "caller-write",draft,flow.id,group,tools,&document);
+    rejected(boundary,ErrorCode::ScopeViolation,"An isolated Group package cannot silently lose writes made by its enclosing caller.");
+    check(std::get<Diagnostic>(boundary).location.node == group,"A caller mapping rejection identifies the selected Group.");
+    const auto whole = fixture.scratch.path / "workflow-with-variable-results";
+    take(export_subgraph_package(whole,draft,flow.id,{},tools,&document));
+    const auto added = take(import_subgraph_package(whole,host,{},{},tools,&document));
+    const auto* added_flow = find_workflow(added.solution,added.workflow);
+    const auto* added_group = find_node(*added_flow,added_flow->entries.front());
+    check(added_flow->local_variables.size() == 1 && added_flow->local_variables.front().id != flow.local_variables.front().id
+        && added_flow->local_variables.front().initial_value == flow.local_variables.front().initial_value
+        && added_group->result_variables == flow.nodes.back().result_variables,
+        "A whole workflow package owns fresh flow locals and preserves its Group's caller-side result mapping.");
+}
+
 void reusable_packages()
 {
     const Fixture fixture;
@@ -876,7 +973,7 @@ int main(int argc, char** argv)
         else if (group == "cleanup") { cleanup(); }
         else if (group == "external-failures") { failures(PayloadStorage::External); }
         else if (group == "external-conflict") { conflict(PayloadStorage::External); }
-        else if (group == "subgraph") { reusable_packages(); }
+        else if (group == "subgraph") { reusable_packages(); reusable_result_variable_mappings(); }
         else if (group == "transfer") {
             transfer_packages();
             transfer_failures_and_explicit_copy();

@@ -4,6 +4,8 @@
 
 #include "managed_cleanup.hpp"
 #include "solution_codec.hpp"
+#include "solution_image_source.hpp"
+#include "solution_images.hpp"
 #include "solution_storage.hpp"
 
 #include <visionpro/core/runtime_id_factory.hpp>
@@ -56,7 +58,7 @@ struct SavePreparation {
 };
 
 Result<SavePreparation> prepare_save(const SolutionDocument& source, const Solution& edited,
-    std::span<const ManagedResourceWrite> writes)
+    std::span<const ManagedResourceWrite> writes, detail::PackageAssets& images)
 {
     const auto& previous = source.solution();
     if (!source.can_save()) {
@@ -77,6 +79,7 @@ Result<SavePreparation> prepare_save(const SolutionDocument& source, const Solut
     SavePreparation prepared{edited, source.directory() / (".visionpro-manifest-" + transaction + ".tmp"),
         source.directory() / "resources", {}, {}};
     auto& next = prepared.solution;
+    detail::migrate_image_sources(next);
     next.revision = previous.revision + 1;
     prepared.files.reserve(writes.size());
     std::set<ResourceId> supplied;
@@ -111,6 +114,16 @@ Result<SavePreparation> prepare_save(const SolutionDocument& source, const Solut
     }
     auto validated = validate_model_shape(next);
     if (auto* failure = std::get_if<Diagnostic>(&validated)) { return std::move(*failure); }
+    const auto embed = detail::embedded_image_resources(next);
+    if (!embed.empty()) {
+        auto paths = detail::resource_paths(source.directory(), source.resource_roots());
+        if (auto* failure = std::get_if<Diagnostic>(&paths)) { return std::move(*failure); }
+        for (auto& resource : next.resources) {
+            if (!embed.contains(resource.id) || supplied.contains(resource.id)) { continue; }
+            auto staged = detail::stage_image_resource(resource, std::get<detail::ResourcePaths>(paths), source.directory(), images, false);
+            if (auto* failure = std::get_if<Diagnostic>(&staged)) { return std::move(*failure); }
+        }
+    }
     prepared.manifest = detail::serialize_manifest(detail::encode_solution(next));
     return prepared;
 }
@@ -225,7 +238,8 @@ core::Result<SolutionSaveResult> detail::save_solution(const SolutionDocument& s
     std::span<const ManagedResourceWrite> writes, const SaveCheckpoint& checkpoint)
 {
     try {
-        auto planned = prepare_save(source, edited, writes);
+        detail::PackageAssets images(edited.id);
+        auto planned = prepare_save(source, edited, writes, images);
         if (auto* failure = std::get_if<Diagnostic>(&planned)) { return std::move(*failure); }
         auto& prepared = std::get<SavePreparation>(planned);
         if (auto failure = at(checkpoint, SaveStage::BeforeLock)) { return std::move(*failure); }
@@ -251,6 +265,7 @@ core::Result<SolutionSaveResult> detail::save_solution(const SolutionDocument& s
         auto committed = publish_file(prepared.temporary_manifest, manifest, true);
         if (auto* failure = std::get_if<Diagnostic>(&committed)) { return std::move(*failure); }
         staged.committed = true;
+        images.confirm_publication();
         cleanup_after_commit(saved, source, prepared, manifest, checkpoint, std::move(cleanup_failure));
         return Result<SolutionSaveResult>{std::move(saved)};
     } catch (CodecError& failure) {

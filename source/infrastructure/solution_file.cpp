@@ -4,6 +4,8 @@
 #include <visionpro/workflow/validation.hpp>
 
 #include "solution_codec.hpp"
+#include "solution_image_source.hpp"
+#include "solution_images.hpp"
 #include "solution_storage.hpp"
 
 #include <algorithm>
@@ -104,6 +106,9 @@ core::Result<SolutionDocument> load_solution(const fs::path& directory, const To
         std::vector<Diagnostic> diagnostics;
         auto solution = detail::decode_solution(detail::Reader{json, diagnostics});
         const bool complete = diagnostics.empty();
+        if (registry.find_descriptor(std::get<ToolTypeId>(SchemaIdFactory::parse<ToolTypeId>("visionpro.image.source")))) {
+            detail::migrate_image_sources(solution);
+        }
         auto diagnosed = diagnose_solution(solution, registry.descriptors());
         if (auto* failure = std::get_if<Diagnostic>(&diagnosed)) { return std::move(*failure); }
         const auto& edit = std::get<std::vector<Diagnostic>>(diagnosed);
@@ -147,8 +152,20 @@ core::Result<std::monostate> write_new_solution(const fs::path& directory, const
         }
         auto checked = validate_model_shape(solution);
         if (auto* failure = std::get_if<Diagnostic>(&checked)) { return std::move(*failure); }
-        const auto text = detail::serialize_manifest(detail::encode_solution(solution));
-        return publish_manifest(directory, text);
+        const auto embed = detail::embedded_image_resources(solution);
+        if (embed.empty()) { return publish_manifest(directory, detail::serialize_manifest(detail::encode_solution(solution))); }
+        auto model = solution;
+        auto paths = detail::resource_paths(directory, {}, false);
+        if (auto* failure = std::get_if<Diagnostic>(&paths)) { return std::move(*failure); }
+        detail::PackageAssets assets(solution.id);
+        for (auto& resource : model.resources) {
+            if (!embed.contains(resource.id)) { continue; }
+            auto staged = detail::stage_image_resource(resource, std::get<detail::ResourcePaths>(paths), directory, assets, false);
+            if (auto* failure = std::get_if<Diagnostic>(&staged)) { return std::move(*failure); }
+        }
+        auto written = publish_manifest(directory, detail::serialize_manifest(detail::encode_solution(model)));
+        if (std::holds_alternative<std::monostate>(written)) { assets.confirm_publication(); }
+        return written;
     } catch (detail::CodecError& failure) {
         return std::move(failure.diagnostic);
     } catch (const detail::Json::exception&) {
@@ -197,7 +214,8 @@ core::Result<LoadedSolutionExecution> open_solution_execution(const SolutionDocu
 }
 
 workflow::RunSubmission publish_solution_run(WorkflowSession& session, const ConfigSnapshot& base,
-    const SolutionDocument& source, const Solution& draft, const RunArguments& run)
+    const SolutionDocument& source, const Solution& draft, const RunArguments& run,
+    std::shared_ptr<ImageArchivePool> archives)
 {
     try {
         if (!source.can_save()) { return RunRejected{unknown_content(source)}; }
@@ -209,7 +227,7 @@ workflow::RunSubmission publish_solution_run(WorkflowSession& session, const Con
             return RunRejected{error(ErrorCode::UnsupportedSolutionFormat,
                 "The draft's solution format version is unsupported.", draft.id)};
         }
-        auto prepared = FileResourceProvider::create(draft, source.directory(), source.resource_roots());
+        auto prepared = FileResourceProvider::create(draft, source.directory(), source.resource_roots(), std::move(archives));
         if (auto* failure = std::get_if<Diagnostic>(&prepared)) { return RunRejected{std::move(*failure)}; }
         return session.publish_and_submit(base, draft, run, std::get<std::shared_ptr<FileResourceProvider>>(std::move(prepared)));
     } catch (...) {

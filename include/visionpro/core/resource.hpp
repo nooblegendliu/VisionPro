@@ -27,20 +27,23 @@ struct ResourcePath {
     PathBase base;
     std::string path; // UTF-8; no process working-directory interpretation.
     std::optional<SchemaId> named_root;
+    bool operator==(const ResourcePath&) const = default;
 };
 enum class ResourceReadPolicy { SnapshotLocked, PerInvocation };
 struct ManagedResource {
     ResourcePath path;
     std::uint64_t revision;
     std::string sha256;
+    bool operator==(const ManagedResource&) const = default;
 };
 struct ExternalFileResource {
     ResourcePath path;
     ResourceReadPolicy read_policy;
     std::optional<std::string> expected_sha256;
     std::optional<std::uint64_t> revision;
+    bool operator==(const ExternalFileResource&) const = default;
 };
-struct DirectorySelection { ResourcePath directory; std::string filename_pattern; };
+struct DirectorySelection { ResourcePath directory; std::string filename_pattern; bool operator==(const DirectorySelection&) const = default; };
 enum class SequenceSort { NameAscending, NameDescending, ExplicitOrder };
 enum class SequenceAdvance { PerInvocation, ExplicitCommand };
 enum class SequenceRepeat { Stop, Loop };
@@ -54,9 +57,11 @@ struct ImageSequenceResource {
     SequenceMissing missing;
     SequenceTrigger trigger;
     std::size_t initial_index;
+    std::vector<std::string> embedded_sha256{}; // One immutable package digest per explicit member, in list order.
+    bool operator==(const ImageSequenceResource&) const = default;
     // The current cursor belongs to runtime state, not this definition.
 };
-struct DeviceResource { SchemaId adapter; ConfigValue configuration; };
+struct DeviceResource { SchemaId adapter; ConfigValue configuration; bool operator==(const DeviceResource&) const = default; };
 enum class OutputNaming { FixedName, SequenceNumber, CorrelationKey };
 enum class OutputOverwrite { Fail, Replace, UniqueSuffix };
 struct OutputPathResource {
@@ -66,6 +71,7 @@ struct OutputPathResource {
     std::string extension;
     OutputOverwrite overwrite;
     std::uint64_t capacity_bytes;
+    bool operator==(const OutputPathResource&) const = default;
 };
 using ResourceLocation = std::variant<ManagedResource, ExternalFileResource,
     ImageSequenceResource, DeviceResource, OutputPathResource>;

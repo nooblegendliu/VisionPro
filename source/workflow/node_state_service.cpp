@@ -77,6 +77,7 @@ struct StateCell {
 struct StateGeneration {
     ToolExecutionConfiguration configuration;
     std::vector<Binding> bindings;
+    std::map<ResourceId, ResourceLocation> resources;
     std::uint64_t generation;
     DataValue initial;
     std::shared_ptr<StateCell> session;
@@ -158,15 +159,23 @@ StateCatalog NodeStateService::capture()
 
 namespace {
 Result<std::shared_ptr<StateGeneration>> bind_generation(const ToolExecutionConfiguration& configuration,
-    const Node& node, StateCatalog& catalog, std::uint64_t& last)
+    const Node& node, const Solution& solution, StateCatalog& catalog, std::uint64_t& last)
 {
     const auto& data = configuration.data();
     const auto& spec = configuration.effective_state();
     const auto key = std::pair{data.workflow, data.node};
     const bool strict = spec->compatibility == StateCompatibilityPolicy::AlwaysNewGeneration;
+    std::map<ResourceId, ResourceLocation> resources;
+    if (strict) {
+        for (const auto& binding : data.resources) {
+            const auto it = std::ranges::find(solution.resources, binding.resource.id, &ResourceDefinition::id);
+            if (it != solution.resources.end()) { resources.emplace(it->id, it->location); }
+        }
+    }
     const auto existing = catalog.find(key);
     if (existing != catalog.end() && same_specification(existing->second->configuration, configuration)
-        && (!strict || same_configuration(existing->second->configuration, existing->second->bindings, configuration, node.bindings))) {
+        && (!strict || (existing->second->resources == resources
+            && same_configuration(existing->second->configuration, existing->second->bindings, configuration, node.bindings)))) {
         return existing->second;
     }
     auto initial = materialize_config_value(spec->initial_value);
@@ -175,7 +184,7 @@ Result<std::shared_ptr<StateGeneration>> bind_generation(const ToolExecutionConf
     if (const auto* failure = std::get_if<Diagnostic>(&next)) { return *failure; }
     last = std::get<std::uint64_t>(next);
     auto version = std::make_shared<StateGeneration>(StateGeneration{configuration,
-        strict ? node.bindings : std::vector<Binding>{}, last, std::get<DataValue>(std::move(initial)), {}});
+        strict ? node.bindings : std::vector<Binding>{}, std::move(resources), last, std::get<DataValue>(std::move(initial)), {}});
     if (spec->scope == StateScope::SolutionSession) {
         version->session = std::make_shared<StateCell>(*spec, version->initial,
             NodeStateKey{data.node, last, SessionStateDomain{data.session}}, data.workflow);
@@ -207,12 +216,12 @@ Result<std::monostate> prepare_workflow_state(const ConfigSnapshot& snapshot, co
             pending.insert(pending.end(), group->entries.begin(), group->entries.end());
             continue;
         }
-        const auto* tool = snapshot.find_tool(std::get<ToolConfiguration>(node.configuration).type);
+        const auto* tool = snapshot.find_tool(node);
         if (!tool) { return error(ErrorCode::UnknownTool, flow.id, id, "Unknown tool in the solution execution scope."); }
         if (!tool->state) { continue; }
         auto configured = project_tool_configuration(snapshot, flow.id, node);
         if (const auto* failure = std::get_if<Diagnostic>(&configured)) { return *failure; }
-        auto generation = bind_generation(std::get<ToolExecutionConfiguration>(configured), node, catalog, last);
+        auto generation = bind_generation(std::get<ToolExecutionConfiguration>(configured), node, snapshot.solution(), catalog, last);
         if (const auto* failure = std::get_if<Diagnostic>(&generation)) { return *failure; }
     }
     return std::monostate{};
@@ -256,7 +265,8 @@ Result<RunStateBindings> NodeStateService::bind(const ExecutionPlan& plan, State
     const std::lock_guard lock(mutex_);
     // Stage the new catalog. A failed or rejected request cannot partially
     // replace live generations, and admitted older requests retain their cells.
-    auto& catalog = retired ? *retired : versions_;
+    auto& catalog = plan.request().debug_state() == DebugStatePolicy::IsolatedSession ? debug_versions_
+        : (retired ? *retired : versions_);
     auto updated = isolated ? StateCatalog{} : catalog;
     auto last = last_generation_;
     RunStateBindings bindings;
@@ -268,7 +278,7 @@ Result<RunStateBindings> NodeStateService::bind(const ExecutionPlan& plan, State
             continue;
         }
         const auto& node = *find_node(*find_workflow(solution, data.workflow), data.node);
-        auto bound = bind_generation(configuration, node, updated, last);
+        auto bound = bind_generation(configuration, node, solution, updated, last);
         if (const auto* failure = std::get_if<Diagnostic>(&bound)) { return *failure; }
         bindings.emplace(data.node, std::get<std::shared_ptr<StateGeneration>>(std::move(bound)));
     }
@@ -335,6 +345,7 @@ void NodeStateService::clear() noexcept
 {
     const std::lock_guard lock(mutex_);
     versions_.clear();
+    debug_versions_.clear();
     prepared_solution_.reset();
 }
 

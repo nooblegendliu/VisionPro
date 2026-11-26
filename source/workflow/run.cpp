@@ -22,6 +22,20 @@ template <class E> bool known(E value, E last)
 
 } // namespace
 
+std::string_view trigger_kind_name(TriggerKind kind) noexcept
+{
+    switch (kind) {
+    case TriggerKind::Manual: return "manual";
+    case TriggerKind::Continuous: return "continuous";
+    case TriggerKind::External: return "external";
+    case TriggerKind::Debug: return "debug";
+    case TriggerKind::Sdk: return "sdk";
+    case TriggerKind::ImageDirectory: return "image_directory";
+    case TriggerKind::ImageSequence: return "image_sequence";
+    }
+    return "unknown";
+}
+
 struct RunRequest::Storage {
     ConfigSnapshot snapshot;
     RunTarget target;
@@ -44,7 +58,7 @@ Result<RunRequest> RunRequest::create(const ConfigSnapshot& snapshot, RunTarget 
         if (const auto* node = std::get_if<NodeTarget>(&target)) { diagnostic.location.node = node->node; }
         return diagnostic;
     };
-    if (!known(trigger.kind, TriggerKind::Debug) || (debug_state && !known(*debug_state, DebugStatePolicy::Active))) {
+    if (!known(trigger.kind, TriggerKind::ImageSequence) || (debug_state && !known(*debug_state, DebugStatePolicy::IsolatedSession))) {
         return contextualize(error(ErrorCode::InvalidRunRequest, "Unknown trigger or debug state policy."));
     }
     const auto* workflow = find_workflow(snapshot.solution(), workflow_id);
@@ -79,7 +93,7 @@ Result<RunRequest> RunRequest::create(const ConfigSnapshot& snapshot, RunTarget 
             schema = &public_interface->inputs;
         } else {
             const auto& tool_config = std::get<ToolConfiguration>(node->configuration);
-            const auto* tool = snapshot.find_tool(tool_config.type);
+            const auto* tool = snapshot.find_tool(*node);
             if (!tool || tool->config_version != tool_config.config_version) {
                 return contextualize(error(ErrorCode::InvalidRunRequest, "Independent target requires its exact tool configuration version."));
             }
@@ -200,6 +214,11 @@ Result<NodeResult> NodeResult::create(const NodeResultData& data)
         return fail("A terminal call result cannot represent pending/running work or fabricate a skipped invocation.");
     }
     const bool success = data.status == ExecutionStatus::Succeeded;
+    if (!known(data.flow, core::InvocationFlow::EndContinuous)
+        || (!success && data.flow != core::InvocationFlow::Continue)
+        || (data.flow == core::InvocationFlow::CloseBranch && !data.selected_control_outputs.empty())) {
+        return fail("Invalid terminal control decision for this call.");
+    }
     if (!success && (data.judgement != Judgement::NotEvaluated || !data.selected_control_outputs.empty())) {
         return fail("Unsuccessful calls cannot publish detection judgements or normal control selections.");
     }
@@ -215,8 +234,19 @@ Result<NodeResult> NodeResult::create(const NodeResultData& data)
     std::set<core::OutputId> outputs;
     for (const auto& slot : data.outputs) {
         if (!outputs.insert(slot.id).second) { return fail("Result output identities must be unique."); }
+        if (slot.module_completion && !std::holds_alternative<DataValue>(slot.content)) {
+            return fail("A projected module status must contain its integer value.");
+        }
         if (const auto* available = std::get_if<DataValue>(&slot.content)) {
-            if (!success || available->type() != slot.type) { return fail("Only successful calls publish available outputs, with exact types."); }
+            if ((!success && !slot.module_completion) || available->type() != slot.type) {
+                return fail("Business outputs require a successful call and the declared type.");
+            }
+            if (slot.module_completion) {
+                const auto code = module_completion_code(data.status);
+                if (!code || !available->as_int64() || *available->as_int64() != *code) {
+                    return fail("Module completion must agree with the terminal state.");
+                }
+            }
         } else if (const auto* absent = std::get_if<NotProduced>(&slot.content)) {
             if (!known(absent->reason, OutputAbsenceReason::ConditionNotMet)
                 || (success && (absent->reason == OutputAbsenceReason::Failed || absent->reason == OutputAbsenceReason::Cancelled || absent->reason == OutputAbsenceReason::TimedOut))

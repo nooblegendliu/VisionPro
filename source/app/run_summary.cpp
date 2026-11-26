@@ -674,6 +674,10 @@ json node_json(const RunNodeProgress& node, const std::optional<NodeResult>& res
         const auto& data = result->data();
         trace["attempt"] = id_text(data.identity.attempt);
         trace["judgement"] = name(data.judgement);
+        if (std::ranges::any_of(data.outputs, [](const OutputSlot& slot) { return slot.id.text() == "module_status"; })) {
+            const auto code = module_completion_code(data.status);
+            trace["module_status"] = code ? json(*code) : json(nullptr);
+        }
         trace["selected_outputs"] = array_json(data.selected_control_outputs, id_text<ControlOutputId>);
         trace["outputs"] = array_json(data.outputs, output_json);
         trace["diagnostics"] = diagnostics_json(data.diagnostics);
@@ -738,6 +742,17 @@ core::Result<nlohmann::json> summarize_run(const workflow::RunHandle& handle,
             {"parent_scope", id_text(call.group.scope)}, {"group_invocation", id_text(call.group.invocation)},
             {"exports", array_json(call.exports, export_json)}};
     });
+    const auto local_json = [](const GlobalVariableEntry& entry) {
+        return json{{"id", id_text(entry.variable)}, {"value", data_json(entry.current_value)},
+            {"revision", std::to_string(entry.revision)}, {"update_origin", update_origin_json(entry.update_origin)}};
+    };
+    if (!progress.local_variables.empty()) { summary["local_variables"] = array_json(progress.local_variables, local_json); }
+    if (!progress.group_local_variables.empty()) {
+        summary["group_local_variables"] = array_json(progress.group_local_variables, [&](const GroupLocalVariables& group) {
+            return json{{"group", id_text(group.group)}, {"scope", id_text(group.scope)},
+                {"variables", array_json(group.variables, local_json)}};
+        });
+    }
     add_run_identity(summary, handle.identity());
     const auto& request = handle.request();
     if (std::holds_alternative<WorkflowTarget>(request.target()) && progress.status != ExecutionStatus::Pending
@@ -750,8 +765,8 @@ core::Result<nlohmann::json> summarize_run(const workflow::RunHandle& handle,
             {"selected_control_outputs", array_json(ports.selected_control_outputs, id_text<ControlOutputId>)}};
     }
     const auto& trigger = request.trigger();
-    if (trigger.kind == TriggerKind::External || trigger.kind == TriggerKind::Continuous) {
-        summary["trigger"] = {{"kind", trigger.kind == TriggerKind::External ? "external" : "continuous"},
+    if (trigger.kind != TriggerKind::Manual && trigger.kind != TriggerKind::Debug) {
+        summary["trigger"] = {{"kind", trigger_kind_name(trigger.kind)},
             {"source", id_text(trigger.source)}, {"correlation", nullptr}};
         if (const auto& correlation = request.correlation()) {
             summary["trigger"]["correlation"] = {{"domain", id_text(correlation->domain())}, {"key", correlation->key()}};

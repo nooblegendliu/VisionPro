@@ -6,7 +6,6 @@
 namespace visionpro::workflow {
 namespace {
 using namespace core;
-using Check = Result<std::monostate>;
 
 Diagnostic error(ErrorCode code, std::string message, const RunIdentity& run,
     std::optional<NodeId> node = {})
@@ -17,7 +16,7 @@ Diagnostic error(ErrorCode code, std::string message, const RunIdentity& run,
     return {code, Severity::Error, std::move(location), std::move(message)};
 }
 
-Check validate_record(const ConfigSnapshot& snapshot, const NodeResult& result)
+Result<NodeResult> checked_record(const ConfigSnapshot& snapshot, const NodeResult& result)
 {
     const auto& data = result.data();
     const auto& run = data.identity.run;
@@ -40,7 +39,7 @@ Check validate_record(const ConfigSnapshot& snapshot, const NodeResult& result)
         controls = group->interface.control_outputs;
     } else {
         const auto& configuration = std::get<ToolConfiguration>(node->configuration);
-        tool = snapshot.find_tool(configuration.type);
+        tool = snapshot.find_tool(*node);
         if (!tool) {
             auto diagnostic = fail(ErrorCode::UnknownTool, "Result node tool is not registered in this snapshot.");
             diagnostic.location.tool = configuration.type;
@@ -66,6 +65,9 @@ Check validate_record(const ConfigSnapshot& snapshot, const NodeResult& result)
         }
         if (slot.type != declaration->type) {
             return output_error(ErrorCode::TypeMismatch, "Result slot type differs from its declared output Schema.");
+        }
+        if (slot.module_completion && (!tool || tool->module_status_output != slot.id)) {
+            return output_error(ErrorCode::InvalidNodeResult, "Only the declared module status can expose execution metadata.");
         }
         if (const auto* value = std::get_if<DataValue>(&slot.content)) {
             auto checked = detail::validate_runtime_domain(*value, snapshot.solution(), declaration->semantics, tool);
@@ -100,11 +102,37 @@ Check validate_record(const ConfigSnapshot& snapshot, const NodeResult& result)
             return fail(ErrorCode::InvalidNodeResult, "Result selected an undeclared control outlet.");
         }
     }
-    return std::monostate{};
+    if (tool && tool->module_status_output) {
+        const auto code = module_completion_code(data.status);
+        if (code) {
+            const auto* reported = result.output(*tool->module_status_output);
+            if (reported && std::holds_alternative<DataValue>(reported->content)) {
+                const auto* integer = std::get<DataValue>(reported->content).as_int64();
+                if (!integer || *integer != *code) {
+                    return fail(ErrorCode::InvalidNodeResult, "Reported module status differs from the terminal state.");
+                }
+            }
+            if (data.status != ExecutionStatus::Succeeded && (!reported || !reported->module_completion)) {
+                auto record = data;
+                auto slot = std::ranges::find(record.outputs, *tool->module_status_output, &OutputSlot::id);
+                OutputSlot status{*tool->module_status_output, DataType::integer(), DataValue::integer(*code), true};
+                if (slot == record.outputs.end()) { record.outputs.push_back(std::move(status)); }
+                else {
+                    if (const auto* invalid = std::get_if<InvalidOutput>(&slot->content)) {
+                        record.diagnostics.push_back(invalid->diagnostic);
+                    }
+                    *slot = std::move(status);
+                }
+                return NodeResult::create(record);
+            }
+        }
+    }
+    return result;
 }
 } // namespace
 
-core::Result<std::monostate> ResultStore::insert(const ConfigSnapshot& snapshot, const NodeResult& result)
+core::Result<std::monostate> ResultStore::insert(const ConfigSnapshot& snapshot, const NodeResult& result,
+    const std::function<core::Result<std::monostate>()>& on_accept)
 {
     const auto& data = result.data();
     const auto& run = data.identity.run;
@@ -126,9 +154,16 @@ core::Result<std::monostate> ResultStore::insert(const ConfigSnapshot& snapshot,
         return error(core::ErrorCode::DuplicateResult,
             "This logical invocation already has a result; a different attempt does not replace it.", run, invocation.node);
     }
-    if (auto checked = validate_record(snapshot, result); std::holds_alternative<core::Diagnostic>(checked)) { return checked; }
+    auto checked = checked_record(snapshot, result);
+    if (const auto* bad = std::get_if<core::Diagnostic>(&checked)) { return *bad; }
     runs_.emplace(run.run, run);
-    results_.emplace(invocation, result);
+    const auto accepted = results_.emplace(invocation, std::get<NodeResult>(std::move(checked))).first;
+    if (on_accept) {
+        try {
+            auto committed = on_accept();
+            if (std::holds_alternative<core::Diagnostic>(committed)) { results_.erase(accepted); return committed; }
+        } catch (...) { results_.erase(accepted); throw; }
+    }
     return std::monostate{};
 }
 

@@ -15,6 +15,7 @@
 #include <QAction>
 #include <QDockWidget>
 #include <QApplication>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QDebug>
 #include <QDialog>
@@ -30,9 +31,12 @@
 #include <QScopeGuard>
 #include <QSpinBox>
 #include <QStatusBar>
+#include <QTabBar>
+#include <QTabBar>
 #include <QTemporaryDir>
 #include <QTest>
 #include <QTimer>
+#include <QToolButton>
 #include <QTreeWidget>
 
 #include <algorithm>
@@ -280,9 +284,25 @@ void omit_run_ids(json& entry)
     entry.erase("run");
 }
 
+void normalize_image_source_duration(json& report)
+{
+    for (auto& node : report.at("nodes")) {
+        auto& outputs = node.at("outputs");
+        if (node.at("status") == "Succeeded" && std::ranges::any_of(outputs, [](const auto& port) { return port.at("id") == "gray_image"; })) {
+            auto elapsed = std::ranges::find_if(outputs, [](const auto& port) { return port.at("id") == "elapsed_ms"; });
+            require(elapsed != outputs.end() && elapsed->at("status") == "Produced", "Image source did not publish elapsed_ms.");
+            auto& milliseconds = elapsed->at("value");
+            require(milliseconds.is_number_float() && std::isfinite(milliseconds.get<double>()) && milliseconds.get<double>() >= 0,
+                "Image source elapsed_ms must contain a finite nonnegative duration in milliseconds.");
+            milliseconds = 0.0; // GUI and CLI execute independently.
+        }
+    }
+}
+
 json normalize(json report)
 {
     omit_run_ids(report);
+    normalize_image_source_duration(report);
     for (auto& node : report.at("nodes")) {
         node.erase("invocation");
         for (auto& binding : node.at("bindings")) {
@@ -915,31 +935,54 @@ void AcceptanceParityTests::configures_and_acquires_saved_camera()
         wait_for_file(window);
         QVERIFY(scene(window).select_workflow(flow.id));
         QVERIFY(scene(window).reveal_node(node_id));
-        drive_dialog(window, "newCameraDevice", {}, {[](QDialog& dialog) -> QPushButton* {
+        action(window,"showProperties").trigger();
+        auto* tabs = window.findChild<QTabBar*>("moduleConfigTabs");
+        QVERIFY(tabs && tabs->tabText(1) == QStringLiteral("相机接入"));
+        tabs->setCurrentIndex(1);
+        QWidget* legacy_timeout{};
+        QTRY_VERIFY((legacy_timeout = window.findChild<QWidget*>("source_timeout_ms")) && legacy_timeout->isVisible());
+        auto* legacy_mode = window.findChild<QComboBox*>("source_mode");
+        QVERIFY(legacy_mode && legacy_mode->isVisible());
+        tabs->setCurrentIndex(0);
+        auto* manage = window.findChild<QToolButton*>("openSourceCameraManager");
+        QVERIFY(manage);
+        manage->click();
+        auto* manager = window.findChild<QDialog*>("cameraManagementDialog");
+        QVERIFY(manager && manager->isVisible());
+        bool device_edited = false;
+        QTimer::singleShot(0,manager,[&] {
+            auto* modal = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+            if (!modal) { return; }
+            auto& dialog = *modal;
             auto* name = dialog.findChild<QLineEdit*>(QStringLiteral("cameraDeviceName"));
             auto* adapter = dialog.findChild<QComboBox*>(QStringLiteral("cameraAdapter"));
             auto* serial = dialog.findChild<QLineEdit*>(QStringLiteral("cameraSerial"));
-            if (!name || !adapter || !serial || adapter->findData(QStringLiteral("visionpro.camera.mvs")) < 0) { return nullptr; }
+            auto* mode = dialog.findChild<QComboBox*>("cameraAcquisitionMode");
+            auto* timeout = dialog.findChild<QSpinBox*>("cameraAcquisitionTimeout");
+            auto* device_settings = dialog.findChild<QCheckBox*>("cameraAcquisitionFromDevice");
+            if (!name || !adapter || !serial || adapter->findData(QStringLiteral("visionpro.camera.mvs")) < 0
+                || !mode || !timeout || !device_settings || !device_settings->isChecked()) { dialog.reject(); return; }
             name->setText(QStringLiteral("桌面采集相机"));
             serial->setText(QStringLiteral("SIM-001"));
-            return ok_button(dialog);
-        }});
+            mode->setCurrentIndex(mode->findData(static_cast<int>(CameraMode::Software)));
+            timeout->setValue(1200);
+            device_edited = true;
+            ok_button(dialog)->click();
+        });
+        manager->findChild<QPushButton*>("addManagedCamera")->click();
+        QVERIFY(device_edited);
+        manager->close();
+        QComboBox* devices = nullptr;
+        QTRY_VERIFY((devices = window.findChild<QComboBox*>("selectNodeResource")) && devices->isVisible()
+            && devices->findText(QStringLiteral("桌面采集相机")) >= 0);
+        const auto device_index = devices->findText(QStringLiteral("桌面采集相机"));
+        devices->setCurrentIndex(device_index);
+        emit devices->activated(device_index);
         const auto resource = find_node(*find_workflow(window.draft(), flow.id), node_id)->resources.front().resource.id;
         QVERIFY(resource != document.solution().resources.front().id);
-        drive_dialog(window, "editBinding", QStringLiteral("timeout_ms"), {set_source, [](QDialog& dialog) -> QPushButton* {
-            auto* value = qobject_cast<QInputDialog*>(&dialog);
-            if (!value) { return nullptr; }
-            value->setTextValue(QStringLiteral("1200"));
-            return ok_button(dialog);
-        }, accept_binding});
-        drive_dialog(window, "editBinding", QStringLiteral("mode"), {set_source, [](QDialog& dialog) -> QPushButton* {
-            auto* choice = dialog.findChild<QComboBox*>(QStringLiteral("choice"));
-            if (!choice) { return nullptr; }
-            const auto index = choice->findText(QStringLiteral("Software"), Qt::MatchContains);
-            if (index < 0) { return nullptr; }
-            choice->setCurrentIndex(index);
-            return ok_button(dialog);
-        }, accept_binding});
+        tabs->setCurrentIndex(1);
+        QTRY_VERIFY(!window.findChild<QWidget*>("source_timeout_ms"));
+        QVERIFY(!window.findChild<QComboBox*>("source_mode"));
         window.transfer_document(saved, SolutionTransfer::SaveAs);
         wait_for_file(window);
         window.open_document(saved);
@@ -951,13 +994,9 @@ void AcceptanceParityTests::configures_and_acquires_saved_camera()
         QCOMPARE(take(camera_serial(*selected)), "SIM-001");
         const auto* saved_node = find_node(*find_workflow(window.draft(), flow.id), node_id);
         QCOMPARE(saved_node->resources.front().resource.id, resource);
-        for (const auto& [parameter, expected] : {std::pair{"mode", "Software"}, {"timeout_ms", "1200"}}) {
-            const auto target = BindingTarget{take(SchemaIdFactory::parse<ParameterId>(parameter))};
-            const auto binding = std::ranges::find(saved_node->bindings, target, &Binding::target);
-            QVERIFY(binding != saved_node->bindings.end());
-            const auto& value = std::get<ConfigValue>(binding->sources.front());
-            QCOMPARE(value.as_enum() ? std::string(value.as_enum()->text()) : std::to_string(*value.as_int64()), expected);
-        }
+        const auto device_settings = take(camera_acquisition_settings(*selected));
+        QVERIFY(device_settings && device_settings->mode == CameraMode::Software);
+        QCOMPARE(device_settings->timeout.count(), 1200);
         QVERIFY(scene(window).select_workflow(flow.id));
         const auto desktop = complete_editor_run(window, "runWorkflow");
         const auto cli = run_cli(saved, flow.id);
@@ -965,6 +1004,47 @@ void AcceptanceParityTests::configures_and_acquires_saved_camera()
             check_camera_frame(*report, node_id, resource, 1);
             QVERIFY(output(named(report->at("nodes"), "id", node_id.to_string()), "serial") == "SIM-001");
         }
+        QVERIFY(scene(window).reveal_node(node_id));
+        window.findChild<QTabBar*>("workspaceOutputTabs")->setCurrentIndex(2);
+        auto* results = window.findChild<QTreeWidget*>("moduleOutputTree");
+        const auto rows = [&](const QString& name) { return results->findItems(name, Qt::MatchExactly | Qt::MatchRecursive); };
+        QTRY_COMPARE(rows(QStringLiteral("帧号")).size(), 1);
+        auto* frame_row = rows(QStringLiteral("帧号")).front();
+        QCOMPARE(frame_row->data(0, Qt::UserRole).toString(), QStringLiteral("camera_frame_number"));
+        QCOMPARE(frame_row->text(2), QStringLiteral("1"));
+        QCOMPARE(rows(QStringLiteral("丢包数")).front()->text(2), QStringLiteral("设备未提供"));
+        QCOMPARE(rows(QStringLiteral("相机获取失败次数")).front()->text(2), QStringLiteral("0"));
+        QVERIFY(rows(QStringLiteral("设备原始帧号")).empty());
+        auto* run_dock = window.findChild<QDockWidget*>("runDock");
+        run_dock->show();
+        const auto* details = window.findChild<QPlainTextEdit*>("runDetails");
+        QTRY_VERIFY(details->toPlainText().contains(QStringLiteral("相机采集诊断")));
+        QVERIFY(details->toPlainText().contains(QStringLiteral("设备原始帧号 = 1")));
+        run_dock->hide();
+        action(window,"showProperties").trigger();
+        window.findChild<QTabBar*>("moduleConfigTabs")->setCurrentIndex(1);
+        QComboBox* input_mode = nullptr;
+        QTRY_VERIFY((input_mode = window.findChild<QComboBox*>("source_camera_input")) && input_mode->isVisible());
+        const int delivered = input_mode->findData("Delivered");
+        QVERIFY(delivered >= 0);
+        input_mode->setCurrentIndex(delivered);
+        emit input_mode->activated(delivered);
+        QPushButton* bind = nullptr;
+        QTRY_VERIFY((bind=window.findChild<QPushButton*>("createSourceFlowInput")) && bind->isVisible());
+        bind->click();
+        bool picked = false;
+        QTimer::singleShot(0,&window,[&] {
+            auto* modal = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+            if (!modal) { return; }
+            auto* options = modal->findChild<QComboBox*>();
+            if (modal->objectName() != "deliveredDebugFrame" || !options || !options->count()
+                || !options->currentText().contains(QString::fromStdString(resource.to_string()))) { modal->reject(); return; }
+            picked = true;
+            modal->accept();
+        });
+        const auto debug = complete_editor_run(window, "debugSelectedNode");
+        QVERIFY(picked);
+        check_camera_frame(debug,node_id,resource,1);
     } catch (const std::exception& failure) { QFAIL(failure.what()); }
 }
 
@@ -992,7 +1072,7 @@ void AcceptanceParityTests::configures_and_arms_saved_camera()
             auto* mode = dialog.findChild<QComboBox*>(QStringLiteral("triggerCameraMode"));
             auto* timeout = dialog.findChild<QSpinBox*>(QStringLiteral("triggerCameraTimeout"));
             if (!source || !input || !frame || !mode || !timeout || frame->currentText() != QStringLiteral("camera")
-                || mode->currentText() != QStringLiteral("Hardware") || !input->currentText().contains(QStringLiteral("image"))) { return nullptr; }
+                || mode->currentData().toInt() != static_cast<int>(CameraMode::Hardware) || !input->currentText().contains(QStringLiteral("image"))) { return nullptr; }
             source->setText(QStringLiteral("desktop.camera"));
             timeout->setValue(3000);
             return dialog.findChild<QPushButton*>(QStringLiteral("newTriggerCameraDevice"));
@@ -1841,6 +1921,7 @@ void AcceptanceParityTests::compares_saved_loop_in_group()
                 }
             };
             localize(localize, copy);
+            normalize_image_source_duration(copy);
             return copy;
         };
         const auto compare = [&](bool empty) {
@@ -1903,6 +1984,9 @@ void AcceptanceParityTests::compares_saved_s4_workflows()
         const auto edited = take(load_solution(package, registry));
         require(edited.solution().revision == baseline.solution().revision + 1 && !window.isWindowModified(),
             "Semantic edits did not commit as a new revision.");
+        // Compare the first invocation in a new desktop session with the first invocation of the CLI process.
+        window.open_document(package);
+        wait_for_file(window);
         std::vector<json> expected;
         for (const auto& fixture : workflows) {
             auto summary = compare_workflow(window, fixture, package, edited.solution(), "edited");

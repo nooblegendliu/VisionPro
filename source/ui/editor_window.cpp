@@ -1,8 +1,11 @@
 #include "editor_window.hpp"
+#include "image_archive_dialogs.hpp"
 
 #include "control_scene.hpp"
 #include "editor_inspector.hpp"
 #include "image_panel.hpp"
+#include "image_source_strip.hpp"
+#include "image_source_fields.hpp"
 #include "module_history_panel.hpp"
 #include "workspace_results.hpp"
 #include "run_controller.hpp"
@@ -14,6 +17,7 @@
 #include "workspace_style.hpp"
 
 #include <QtNodes/GraphicsView>
+#include <visionpro/core/shared_data.hpp>
 #include <QtNodes/internal/NodeGraphicsObject.hpp>
 #include <QAction>
 #include <QActionGroup>
@@ -240,6 +244,7 @@ void EditorWindow::create_actions()
     resource_copy_ = action(file, tr("复制资源到方案…"), "copyResource", [this] { choose_resource_copy(); });
     resource_root_ = action(file, tr("设置资源根目录…"), "setResourceRoot", [this] { choose_resource_root(); });
     resources_ = action(file, tr("方案资源…"), "solutionResources", [this] { show_solution_resources(); });
+    cameras_ = action(file, tr("全局相机管理…"), "globalCameraManagement", [this] { show_solution_resources(true); });
     file.addSeparator();
     action(file, tr("退出"), "exitEditor", [this] { close(); }, QKeySequence::Quit);
 
@@ -299,6 +304,18 @@ void EditorWindow::create_actions()
     });
 
     create_run_actions();
+    auto& settings = *menuBar()->addMenu(tr("设置(&S)"));
+    archive_policy_ = action(settings, tr("采集策略…"), "imageArchiveSettings", [this] {
+        edit_archive_policy(this, draft().image_archive, [this](auto policy) {
+            scene_->edit_draft(tr("修改大文件存图策略"), [policy=std::move(policy)](Solution& solution) -> Result<std::monostate> {
+                solution.image_archive = policy;
+                return std::monostate{};
+            });
+        });
+    });
+    auto& utilities = *menuBar()->addMenu(tr("工具(&T)"));
+    flush_archive_ = action(utilities, tr("完成存图队列写入"), "flushImageArchive", [this] { run_controller_->flush_archive(); });
+    action(utilities, tr("存图大数据解压…"), "imagePackageTool", [this] { open_image_packages(this); });
     auto& view = *menuBar()->addMenu(tr("视图(&V)"));
     auto* developer_tools = view.addAction(tr("显示模拟工具"));
     developer_tools->setObjectName(QStringLiteral("showDeveloperTools"));
@@ -356,6 +373,7 @@ void EditorWindow::create_actions()
     add_action(open_, WorkspaceIcon::Open, tr("打开"));
     add_action(save_, WorkspaceIcon::Save, tr("保存"));
     add_action(resources_, WorkspaceIcon::Properties, tr("方案资源"));
+    add_action(cameras_, WorkspaceIcon::Camera, tr("相机管理"));
     toolbar->addSeparator();
     add_action(undo_, WorkspaceIcon::Undo, tr("撤销"));
     add_action(redo_, WorkspaceIcon::Redo, tr("重做"));
@@ -589,6 +607,21 @@ void EditorWindow::create_docks()
     images_dock_->setFeatures(QDockWidget::NoDockWidgetFeatures);
     images_ = new ImagePanel(images_dock_);
     images_->setObjectName(QStringLiteral("imagePanel"));
+    image_source_strip_ = new ImageSourceStrip(images_);
+    image_source_strip_->read_folder_variable = [this](const GlobalReference& reference) -> std::optional<QString> {
+        if (!run_controller_) { return {}; }
+        auto status = run_controller_->shared_preview();
+        const auto* session = std::get_if<std::optional<SessionSharedPreview>>(&status);
+        if (!session || !*session || (*session)->snapshot.solution().id != draft().id) { return {}; }
+        auto read = (*session)->data->read(reference.variable);
+        const auto* entry = std::get_if<GlobalVariableEntry>(&read);
+        if (!entry || (reference.required_revision && *reference.required_revision != entry->revision)
+            || !entry->current_value.as_string()) { return QString{}; }
+        return QString::fromUtf8(*entry->current_value.as_string());
+    };
+    static_cast<QVBoxLayout*>(images_->layout())->addWidget(image_source_strip_);
+    connect(image_source_strip_, &ImageSourceStrip::notice, this, &EditorWindow::show_status);
+    connect(image_source_strip_, &ImageSourceStrip::preview_requested, this, &EditorWindow::open_source_preview);
     auto* history = new QDockWidget(tr("模块历史结果"), results);
     result_history_dock_ = history;
     history->setObjectName(QStringLiteral("moduleHistoryDock"));
@@ -598,6 +631,17 @@ void EditorWindow::create_docks()
     images_dock_->setTitleBarWidget(panel_header(new QLabel(tr("输出"), images_dock_), results_->image_tabs()));
     history->setTitleBarWidget(panel_header(new QLabel(tr("结果"), history), results_->result_tabs()));
     connect(results_, &WorkspaceResults::view_changed, this, &EditorWindow::refresh_workspace_statistics);
+    connect(results_, &WorkspaceResults::source_variable_requested, this, &EditorWindow::map_source_variable);
+    connect(results_, &WorkspaceResults::source_preview_requested, this, [this](const OutputId& output) {
+        auto& display = *workspace_image_selection_;
+        display.mode = WorkspaceImageSelection::Mode::Follow;
+        images_->set_manual_view(false);
+        present_workspace_image();
+        const auto it = std::ranges::find_if(display.sources, [&](const auto& s) {
+            return s.output == output && display.node == s.result.invocation.node && !s.upstream;
+        });
+        if (it != display.sources.end()) { images_->select_source(static_cast<int>(it - display.sources.begin())); }
+    });
     results->addWidget(images_dock_);
     results->addWidget(history);
     results->setSizes({510, 215});
@@ -657,13 +701,17 @@ void EditorWindow::replace_canvas(Solution replacement, bool editable)
         catch (...) { report_error(tr("无法添加工具。")); }
     });
     auto inspector = std::make_unique<EditorInspector>(*model, *scene, registry_, nullptr,
-        [this](const QString& path, std::function<void(std::string)> apply) { hash_resource_file(path, std::move(apply)); });
+        [this](const QString& path, std::function<void(std::string)> apply) { hash_resource_file(path, std::move(apply)); },
+        [this] { if (!busy_ && writable()) { show_solution_resources(true); } });
     for (auto* registered : view->actions()) {
         if (registered != view->clearSelectionAction()) { view->removeAction(registered); }
     }
     view->setObjectName(QStringLiteral("workflowCanvas"));
     if (auto* dialog = findChild<QDialog*>(QStringLiteral("solutionResourcesDialog"))) { dialog->close(); }
+    if (auto* dialog = findChild<QDialog*>(QStringLiteral("cameraManagementDialog"))) { dialog->close(); }
     properties_dialog_->hide();
+    // Reset the selection and retire pending thumbnails before replacing its model.
+    image_source_strip_->set_selection(nullptr, nullptr, {}, {}, {}, false);
     if (scene_) {
         disconnect(scene_.get(), nullptr, this, nullptr);
         disconnect(&scene_->undoStack(), nullptr, this, nullptr);
@@ -880,6 +928,22 @@ void EditorWindow::show_properties()
     const auto flow = model_->workflow_id();
     const auto target = flow && selected.size() == 1 ? std::optional{NodeTarget{*flow, selected.front()}} : std::nullopt;
     inspector_->pin(target);
+    const auto* workflow = flow ? find_workflow(draft(), *flow) : nullptr;
+    if (workflow && target && is_image_source(find_node(*workflow, target->node))) {
+        if (!properties_dialog_->property("sourceLayout").toBool()) {
+            properties_dialog_->setProperty("previousGeometry", properties_dialog_->saveGeometry());
+            properties_dialog_->setProperty("sourceLayout", true);
+            const auto available = screen()->availableGeometry().adjusted(8, 8, -8, -40);
+            const auto size = QSize(490, 640).boundedTo(available.size());
+            const auto anchor = view_->mapToGlobal(QPoint(12, 12));
+            properties_dialog_->resize(size);
+            properties_dialog_->move(std::clamp(anchor.x(), available.left(), available.right() - size.width() + 1),
+                std::clamp(anchor.y(), available.top(), available.bottom() - size.height() + 1));
+        }
+    } else if (properties_dialog_->property("sourceLayout").toBool()) {
+        properties_dialog_->restoreGeometry(properties_dialog_->property("previousGeometry").toByteArray());
+        properties_dialog_->setProperty("sourceLayout", false);
+    }
     properties_dialog_->show();
     refresh_properties_status();
     properties_dialog_->raise();
@@ -1000,9 +1064,12 @@ void EditorWindow::refresh_actions()
     export_workflow_->setEnabled(editable && active);
     export_group_->setEnabled(editable && group && !group->loop);
     import_subgraph_->setEnabled(editable);
+    archive_policy_->setEnabled(editable);
+    flush_archive_->setEnabled(run_controller_ && run_controller_->can_flush_archive());
     resource_copy_->setEnabled(editable && source_.has_value() && has_resource);
     resource_root_->setEnabled(available);
     resources_->setEnabled(available);
+    cameras_->setEnabled(available);
     const bool can_submit = editable && flow && run_controller_->can_submit(*flow);
     run_workflow_->setEnabled(can_submit);
     run_workflow_->setToolTip(can_submit ? tr("单次运行当前流程（F5）") : tr("需要可运行的当前流程和可用的运行会话"));

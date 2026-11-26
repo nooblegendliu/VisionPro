@@ -250,6 +250,38 @@ void copy_solution()
         == std::get<ToolConfiguration>(flow.nodes.front().configuration).type, "tool and Schema token identities are not regenerated");
 }
 
+void copy_result_variable_owners()
+{
+    auto original = solution();
+    auto& flow = original.workflows.front();
+    const auto global = id<VariableId>(41), local = id<VariableId>(42), grouped = id<VariableId>(43);
+    original.variables.push_back({global, "Global", DataType::integer(), ConfigValue::integer(1)});
+    flow.local_variables.push_back({local, "Workflow", DataType::integer(), ConfigValue::integer(2)});
+    auto& group = std::get<GroupConfiguration>(flow.nodes[1].configuration);
+    group.local_variables.push_back({grouped, "Group", DataType::integer(), ConfigValue::integer(3)});
+    flow.nodes[0].result_variables = {{output(), VariableScope::Local, local}};
+    flow.nodes[2].result_variables = {{output(), VariableScope::Local, grouped}};
+    flow.nodes[3].result_variables = {{output(), VariableScope::Global, global}};
+    flow.nodes[2].bindings.push_back({key<ParameterId>("local"), {GlobalReference{grouped, {}, {}}}});
+    const auto all = take(clone_solution(original, ExternalReferencePolicy::Reject));
+    const auto& duplicate = all.solution.workflows.front();
+    const auto& remap = all.identities.variables;
+    check(duplicate.local_variables.front().id == remap.at(local) && duplicate.local_variables.front().id != local
+        && duplicate.nodes[0].result_variables.front().variable == remap.at(local)
+        && duplicate.nodes[3].result_variables.front().variable == remap.at(global),
+        "Full copy rebinds writes to its new workflow local and global definitions.");
+    const auto partial = take(clone_subgraph(flow,std::array{flow.nodes[1].id},ExternalReferencePolicy::Preserve));
+    const auto& owned = std::get<GroupConfiguration>(copied_node(partial,2).configuration).local_variables.front();
+    const auto& child = copied_node(partial,3);
+    check(owned.id != grouped && *owned.initial_value.as_int64() == 3 && child.result_variables.front().variable == owned.id
+        && std::get<GlobalReference>(child.bindings.back().sources.front()).variable == owned.id
+        && copied_node(partial,4).result_variables.front().variable == global,
+        "A copied Group owns new locals while its global write still names the host variable.");
+    const auto single = take(clone_subgraph(flow,std::array{flow.nodes[2].id},ExternalReferencePolicy::Preserve));
+    check(single.identities.variables.empty() && single.nodes.front().result_variables.front().variable == grouped,
+        "A copied single node retains its enclosing Group's variable.");
+}
+
 void copy_boundaries()
 {
     const auto original = graph();
@@ -307,7 +339,7 @@ int main(int argc, char** argv)
     const std::string_view group = argv[1];
     try {
         if (group == "copy_subgraph") { copy_subgraph(); }
-        else if (group == "copy_solution") { copy_solution(); }
+        else if (group == "copy_solution") { copy_solution(); copy_result_variable_owners(); }
         else if (group == "copy_boundaries") { copy_boundaries(); }
         else { return 2; }
     } catch (const std::exception& error) {

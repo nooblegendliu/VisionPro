@@ -28,7 +28,7 @@ public:
     void source_ready(std::size_t slot);
     [[nodiscard]] bool has_error_route(std::size_t slot) const;
     void complete(std::size_t slot, std::span<const core::ControlOutputId> outputs,
-        std::optional<ControlCloseReason> failure = {});
+        std::optional<ControlCloseReason> failure = {}, bool close_branch = false);
     void stop(ControlCloseReason reason);
     [[nodiscard]] std::optional<SourceSelection::State> source_absence(std::size_t slot) const;
     [[nodiscard]] std::vector<std::pair<std::size_t, NodeSkipReason>> take_skipped();

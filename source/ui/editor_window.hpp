@@ -37,6 +37,7 @@ class ControlGraphModel;
 class ControlScene;
 class EditorInspector;
 class ImagePanel;
+class ImageSourceStrip;
 class ModuleHistoryPanel;
 class RunController;
 class RunPanel;
@@ -83,7 +84,8 @@ private:
     void add_workspace_tool(const QString& type, QPointF position);
     void choose_control_connection();
     void show_properties();
-    void show_solution_resources();
+    void show_solution_resources(bool cameras_only = false);
+    void map_source_variable(core::WorkflowId flow, core::NodeId node, core::OutputId port, QString field_name);
     void set_overview_visible(bool visible);
     void refresh_overview();
     void refresh_properties_status();
@@ -118,6 +120,7 @@ private:
     void choose_resource_root();
     void choose_preview_image();
     void choose_preview_resource();
+    void open_source_preview(const QString& file, core::CoordinateSystemId frame, bool grayscale);
     void accept_preview_frame(const core::ImageHandle& frame);
     bool writable() const noexcept;
     template<class Task, class Apply>
@@ -136,6 +139,7 @@ private:
     std::unique_ptr<ControlScene> scene_;
     EditorInspector* inspector_{};
     ImagePanel* images_{};
+    ImageSourceStrip* image_source_strip_{};
     WorkflowCanvas* view_{};
     std::optional<core::WorkflowId> shown_workflow_;
     std::optional<core::NodeId> shown_scope_;
@@ -204,7 +208,10 @@ private:
     QAction* export_group_{};
     QAction* import_subgraph_{};
     QAction* resource_copy_{};
+    QAction* archive_policy_{};
+    QAction* flush_archive_{};
     QAction* resources_{};
+    QAction* cameras_{};
     QAction* resource_root_{};
     QAction* preview_image_{};
     QAction* preview_resource_{};

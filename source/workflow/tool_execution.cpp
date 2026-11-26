@@ -9,6 +9,38 @@ namespace visionpro::workflow {
 namespace {
 using namespace core;
 using Check = Result<std::monostate>;
+void project_display_items(InvocationContextData& data, const Node& node, const BindingTarget& target,
+    const ResolvedBinding& resolved)
+{
+    const auto binding = std::ranges::find(node.bindings, target, &Binding::target);
+    if (binding == node.bindings.end()) { return; }
+    // A multiple binding may omit absent sources. Raster element indices refer to the compact resolved list.
+    std::vector<const ResultTrace*> producers(binding->sources.size());
+    std::vector<bool> omitted(binding->sources.size());
+    for (const auto& trace : resolved.sources) {
+        if (trace.source_index >= producers.size()) { continue; }
+        if (trace.accepted_absence) { omitted[trace.source_index] = true; }
+        const auto* result = std::get_if<ResultTrace>(&trace.origin);
+        const auto* source = std::get_if<OutputReference>(&binding->sources[trace.source_index]);
+        if (!trace.selector_step && result && source && result->reference == *source) {
+            producers[trace.source_index] = result;
+        }
+    }
+    std::size_t element = 0;
+    for (std::size_t i = 0; i < producers.size(); ++i) {
+        if (omitted[i]) { continue; }
+        if (const auto* producer = producers[i]) {
+            const auto verdict = producer->judgement == Judgement::OK ? ToolJudgement::OK
+                : producer->judgement == Judgement::NG ? ToolJudgement::NG : ToolJudgement::NotEvaluated;
+            const auto style = std::ranges::find_if(node.display_styles, [&](const auto& setting) {
+                return target == BindingTarget{setting.item} && setting.source == producer->reference;
+            });
+            data.display_items.push_back({target, element, verdict,
+                style != node.display_styles.end() ? std::optional{style->style} : std::nullopt});
+        }
+        ++element;
+    }
+}
 Diagnostic error(ErrorCode code, std::string message, const ConfigSnapshot& snapshot,
     WorkflowId workflow, NodeId node)
 {
@@ -56,6 +88,15 @@ Result<ConfigValue> fixed_parameter(const ParameterDescriptor& parameter, const 
 }
 ToolInvocationIdentity projected_identity(const ResultIdentity& result)
 { return {result.run.snapshot.session, result.run.snapshot.snapshot, result.invocation, result.attempt}; }
+
+void attach_image_archive(InvocationContextData& data, InvocationResourceProvider& provider)
+{
+    const auto& requirements = data.configuration.data().tool.resources;
+    if (std::ranges::find(requirements, ResourceKind::OutputPath, &ResourceRequirement::kind) != requirements.end()) {
+        data.image_archive_writer = provider.image_archive_writer();
+        data.image_storage_writer = provider.image_storage_writer();
+    }
+}
 
 Check validate_lease(const ToolResourceBinding& binding, const std::shared_ptr<const ResourceLease>& lease)
 {
@@ -170,7 +211,7 @@ core::Result<core::ToolExecutionConfiguration> detail::project_tool_configuratio
     if (!tool_config) {
         return error(core::ErrorCode::UnknownTarget, "Tool execution projection requires a tool node, not a Group.", snapshot, workflow, node);
     }
-    const auto* tool = snapshot.find_tool(tool_config->type);
+    const auto* tool = snapshot.find_tool(configured);
     if (!tool) { return error(core::ErrorCode::UnknownTool, "Tool execution metadata is absent from the snapshot.", snapshot, workflow, node); }
     core::ToolExecutionConfigurationData data{snapshot.identity().session, snapshot.identity().snapshot,
         workflow, node, *tool, {}, {}, tool_config->shared_targets};
@@ -186,6 +227,7 @@ core::Result<core::ToolExecutionConfiguration> detail::project_tool_configuratio
         data.parameters.push_back({parameter.id, std::get<core::ConfigValue>(std::move(value))});
     }
     for (const auto& resource : configured.resources) {
+        if (tool->specialize && std::ranges::find(tool->resources, resource.slot, &core::ResourceRequirement::slot) == tool->resources.end()) { continue; }
         if (auto checked = core::validate_resource_reference(resource.resource, snapshot.solution().resources);
             const auto* failure = std::get_if<core::Diagnostic>(&checked)) { return *failure; }
         auto fixed = resource.resource;
@@ -238,15 +280,31 @@ InvocationPreparation PreparedTool::prepare(const ResolutionContext& context, co
     if (failure) { return InvocationFailure{*failure, std::move(bindings)}; }
     if (unavailable) { return UnavailableInvocation{std::move(bindings)}; }
     if (pending) { return PendingInvocation{std::move(bindings)}; }
-    if (reserve && !reserve()) { return WaitingForAccess{std::move(bindings)}; }
+    core::InvocationContextData data{configuration_, {fixed.session, fixed.snapshot, context.consumer, attempt}, {}, {}, {}, {}};
+    const auto* display_node = fixed.tool.uses_display_item_styles
+        ? find_node(*find_workflow(snapshot_.solution(), fixed.workflow), fixed.node) : nullptr;
+    for (const auto& target : bindings) {
+        const auto& resolved = std::get<ResolvedBinding>(target.resolution);
+        if (display_node) {
+            project_display_items(data, *display_node, target.target, resolved);
+        }
+        if (const auto* input = std::get_if<core::InputId>(&target.target)) { data.inputs.push_back({*input, resolved.value}); }
+        else { data.parameters.push_back({std::get<core::ParameterId>(target.target), resolved.value}); }
+        for (const auto& region : resolved.regions) {
+            data.regions.push_back({target.target, region.reference, region.value, projected_identity(region.identity),
+                region.source_index, region.path});
+        }
+    }
+    const bool filtered = core::message_filtered(fixed.tool, data.parameters);
+    if (!filtered && reserve && !reserve()) { return WaitingForAccess{std::move(bindings)}; }
     const auto resource_failure = [&](core::Diagnostic diagnostic) {
         diagnostic.location.solution = snapshot_.solution().id;
         diagnostic.location.workflow = fixed.workflow;
         diagnostic.location.node = fixed.node;
         return InvocationFailure{std::move(diagnostic), std::move(bindings)};
     };
-    std::vector<core::InvocationResourceLease> resources;
-    if (provider) {
+    if (!filtered && provider) {
+        attach_image_archive(data, *provider);
         for (const auto& target : bindings) {
             const auto& resolved = std::get<ResolvedBinding>(target.resolution);
             auto checked = detail::validate_selected_resources(*provider, snapshot_.solution(), target.target, resolved.value, resolved.sources);
@@ -257,22 +315,11 @@ InvocationPreparation PreparedTool::prepare(const ResolutionContext& context, co
         }
         auto acquired = acquire_leases(*provider, configuration_);
         if (auto* invalid = std::get_if<core::Diagnostic>(&acquired)) { return resource_failure(std::move(*invalid)); }
-        resources = std::get<std::vector<core::InvocationResourceLease>>(std::move(acquired));
-    } else {
+        data.resources = std::get<std::vector<core::InvocationResourceLease>>(std::move(acquired));
+    } else if (!filtered) {
         auto checked = validate_leases(configuration_, leases);
         if (auto* invalid = std::get_if<core::Diagnostic>(&checked)) { return resource_failure(std::move(*invalid)); }
-        resources.assign(leases.begin(), leases.end());
-    }
-    core::InvocationContextData data{configuration_,
-        {fixed.session, fixed.snapshot, context.consumer, attempt}, {}, {}, {}, std::move(resources)};
-    for (const auto& target : bindings) {
-        const auto& resolved = std::get<ResolvedBinding>(target.resolution);
-        if (const auto* input = std::get_if<core::InputId>(&target.target)) { data.inputs.push_back({*input, resolved.value}); }
-        else { data.parameters.push_back({std::get<core::ParameterId>(target.target), resolved.value}); }
-        for (const auto& region : resolved.regions) {
-            data.regions.push_back({target.target, region.reference, region.value, projected_identity(region.identity),
-                region.source_index, region.path});
-        }
+        data.resources.assign(leases.begin(), leases.end());
     }
     auto invocation = core::InvocationContext::create(data);
     if (const auto* invalid = std::get_if<core::Diagnostic>(&invocation)) { return InvocationFailure{*invalid, std::move(bindings)}; }
@@ -290,11 +337,12 @@ core::Result<PreparedInvocation> PreparedTool::prepare_retry(core::InvocationCon
 {
     const auto& configured = configuration_.data();
     if (&fixed.configuration.data() != &configured || fixed.state || fixed.shared_data || fixed.correlation_join
-        || !fixed.resources.empty()) {
+        || fixed.image_archive_writer || fixed.image_storage_writer || !fixed.resources.empty()) {
         return error(core::ErrorCode::InvalidRunRequest, "Retry inputs require the original configuration without live attempt leases.",
             snapshot_, configured.workflow, configured.node);
     }
     if (provider) {
+        attach_image_archive(fixed, *provider);
         auto acquired = acquire_leases(*provider, configuration_);
         if (auto* failure = std::get_if<core::Diagnostic>(&acquired)) { return std::move(*failure); }
         fixed.resources = std::get<std::vector<core::InvocationResourceLease>>(std::move(acquired));
@@ -324,7 +372,7 @@ core::Result<NodeResult> checked_node_result(const PreparedInvocation& invocatio
     const RunIdentity run{invocation.snapshot.identity(), configuration.workflow, completion.identity.invocation.workflow_run};
     NodeResultData data{{run, completion.identity.invocation, completion.identity.attempt}, ExecutionStatus::Succeeded,
         Judgement::NotEvaluated, {}, completion.diagnostics, completion.elapsed, completion.selected_control_outputs,
-        completion.timings};
+        completion.timings, completion.flow};
     switch (completion.status) {
     case core::ToolCompletionStatus::Succeeded: data.status = ExecutionStatus::Succeeded; break;
     case core::ToolCompletionStatus::Failed: data.status = ExecutionStatus::Failed; break;

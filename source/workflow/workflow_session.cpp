@@ -1,4 +1,5 @@
 #include <visionpro/workflow/workflow_session.hpp>
+#include <visionpro/workflow/trigger_control.hpp>
 #include <visionpro/core/runtime_id_factory.hpp>
 #include <visionpro/workflow/validation.hpp>
 #include "solution_run.hpp"
@@ -255,6 +256,8 @@ struct WorkflowSession::Impl {
     std::shared_ptr<InvocationResourceProvider> resources;
     const WorkflowEngineOptions options;
     mutable std::mutex mutex;
+    using SenderKey = std::tuple<SnapshotIdentity, WorkflowId, InputId, SchemaId>;
+    std::map<SenderKey, std::weak_ptr<TriggerControl>> sdk_senders;
     WorkflowSessionProgress progress;
     std::shared_ptr<InvocationResourceProvider> active_provider;
     std::shared_ptr<WorkflowEngine> engine;
@@ -426,6 +429,25 @@ RunSubmission WorkflowSession::submit_guarded(const RunRequest& request, const A
     catch (...) {
         return RunRejected{error(ErrorCode::ExecutionBoundaryFailure, "Session run submission failed.", request.snapshot().solution().id, workflow)};
     }
+}
+
+Result<std::monostate> WorkflowSession::register_sdk_sender(const SnapshotIdentity& target,
+    WorkflowId workflow, InputId input, SchemaId sender, const std::shared_ptr<TriggerControl>& subscription)
+{
+    const std::lock_guard lock(impl_->mutex);
+    if (impl_->progress.status != WorkflowSessionStatus::Active || !impl_->progress.active
+        || impl_->progress.active->identity() != target) {
+        return error(ErrorCode::ResultIdentityMismatch, "SDK sender refers to an inactive snapshot.", {}, workflow);
+    }
+    std::erase_if(impl_->sdk_senders, [&](const auto& item) {
+        return std::get<0>(item.first) != target || item.second.expired();
+    });
+    auto& slot = impl_->sdk_senders[{target, workflow, std::move(input), std::move(sender)}];
+    if (const auto active = slot.lock(); active && active->accepting()) {
+        return error(ErrorCode::DuplicateIdentity, "SDK sender already has an armed subscription for this input.", {}, workflow);
+    }
+    slot = subscription;
+    return std::monostate{};
 }
 
 core::Result<RunObservation> WorkflowSession::observe(std::size_t capacity)

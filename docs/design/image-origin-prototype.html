@@ -1,0 +1,457 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>图像源 · 模块配置 | VisionPro</title>
+<style>
+:root{color-scheme:light;--ink:#21363e;--muted:#526971;--line:#c5cfd1;--panel:#fff;--teal:#006d70;--pale:#dff3f1;--dark:#202c31;--focus:#008c95}
+*{box-sizing:border-box}body{margin:0;color:var(--ink);background:#e6ebeb;font:14px/1.45 "Microsoft YaHei UI","Segoe UI",sans-serif}
+[hidden]{display:none!important}button,select,input{font:inherit;color:inherit}button,input:not([type=checkbox]),select{padding:4px 7px;min-height:29px;border:1px solid #b1bec1;border-radius:3px;background:#fff}button{cursor:pointer;line-height:1.25}button:hover:enabled{background:#e1f2f0;border-color:#609b9d}button:disabled,input:disabled,select:disabled{opacity:.5;cursor:default}
+button:focus-visible,select:focus-visible,input:focus-visible,summary:focus-visible{outline:2px solid var(--focus);outline-offset:2px}input[type=checkbox]{accent-color:var(--teal);width:15px;height:15px;margin:0}.num,output,time{font-family:Consolas,"Microsoft YaHei UI",monospace;font-variant-numeric:tabular-nums}
+.app,.toolbar,.striphead,.htitle,.foot,.titlebar,.phead,.sheetfoot,.actions,.ptools{display:flex;align-items:center;gap:8px}.app{height:41px;padding:0 15px;background:#22383e;color:#edf7f7}.brand{font-size:18px}.appmark{display:grid;place-items:center;width:20px;height:20px;border:2px solid #90d4cc;border-radius:5px}.appmark:after{content:"";width:7px;height:7px;border:2px solid #c2ece6;border-radius:50%}.context{padding-left:14px;border-left:1px solid #5a737a;color:#d0dee0}.prototype{margin-left:auto;color:#cbdbdc;font-size:12px}
+.toolbar{min-height:39px;padding:4px 10px;border-bottom:1px solid #aebbc0;background:#f7f9f9;flex-wrap:wrap}.toolsep{border-left:1px solid var(--line);height:18px}.toolbar .primary,.sheetfoot .primary{background:var(--teal);color:#fff;border-color:var(--teal)}.toolbar .primary:hover,.sheetfoot .primary:hover{background:#00595e}.toolbar .counter{margin-left:auto;font-size:12px;color:var(--muted)}
+.work{height:calc(100dvh - 107px);min-height:565px;display:grid;grid-template-columns:90px minmax(340px,.91fr) minmax(405px,1fr);gap:3px;background:#c2cdcf}
+.tools,.flow,.watchpane{min-width:0;min-height:0}.tools{background:#f3f6f6}.head,.phead,.htitle{margin:0;padding:8px 11px;font-weight:650;font-size:13px;border-bottom:1px solid var(--line);background:#f5f8f8;min-height:35px}.tools .category{margin:12px 7px 6px;color:var(--muted);font-size:12px}.tool{display:grid;justify-items:center;gap:5px;margin:0 5px;width:calc(100% - 10px);border-color:#9bc2bf;background:#eef8f6;color:#115e5d}.glyph{font-size:21px;line-height:1}.flow{position:relative;display:flex;flex-direction:column;background:#edf1f1}.flowhead{display:flex;align-items:center;gap:9px}.flowhead span{color:var(--muted);font-weight:400}.canvas{position:relative;flex:1;background-color:#edf1f1;background-image:radial-gradient(#b8c7c8 1px,transparent 1px);background-size:15px 15px;overflow:hidden}
+.node{position:absolute;left:20px;top:21px;display:grid;grid-template-columns:auto 1fr;gap:2px 8px;align-items:center;text-align:left;min-width:145px;border:2px solid var(--teal);box-shadow:0 2px 3px #20333116;padding:8px 10px;background:white}.node-icon{grid-row:1/3;display:grid;place-items:center;width:29px;height:29px;border:1px solid #8bb7b3;border-radius:4px;color:var(--teal);font-size:19px}.node small{font-size:11px;color:var(--muted)}.attr{position:absolute;left:174px;top:39px;font-size:12px}
+.watchpane{background:#eff3f3;display:grid;grid-template-rows:minmax(315px,1fr) minmax(126px,23%);gap:3px}.observe,.history{background:#fff;min-width:0;min-height:0;display:flex;flex-direction:column}.tabs{display:flex;align-items:stretch;gap:17px;padding:0 11px;min-height:35px;background:#f5f8f8;border-bottom:1px solid var(--line)}.tabs button{background:none;border:0;border-radius:0;border-bottom:3px solid transparent;padding:4px 2px;color:var(--muted);font-weight:600}.tabs button[aria-selected=true]{color:var(--teal);border-bottom-color:var(--teal)}.watchTitle{margin:auto 0 auto auto;color:var(--muted);font-size:12px}
+.preview{display:flex;flex:1;flex-direction:column;min-height:0}.phead{font-weight:400;min-height:32px;padding:3px 8px}.phead select{font-size:12px;min-height:25px}.phead #observeName{margin-left:auto;font-size:12px;color:var(--muted)}.screen{flex:1;min-height:110px;position:relative;background:var(--dark);overflow:auto;display:flex}.surface{min-width:100%;min-height:100%;display:flex;align-items:center;justify-content:center;flex:none}.overlays{position:absolute;inset:0;pointer-events:none;display:flex;align-items:flex-start;justify-content:space-between;flex-direction:column;padding:8px;color:#fff;font-size:11px}.overlays span{background:#19272bdc;padding:2px 6px}.empty{position:absolute;inset:0;color:#d9e3e5;display:grid;place-items:center;pointer-events:none}.frameArrow{position:absolute;top:47%;z-index:1;border:0;background:#13242acc;color:#fff;font-size:20px;padding:2px 8px}.frameArrow:hover:enabled{background:#164f53}.frameArrow.left{left:6px}.frameArrow.right{right:6px}
+.ptools{background:#e9eeee;padding:3px 8px;gap:5px;flex-wrap:wrap;border-bottom:1px solid var(--line)}.ptools output{font-size:12px}.ptools #dimensions{margin-right:auto}.ptools button{min-height:25px;padding:2px 7px;font-size:12px}.strip{padding:5px 8px;background:#f5f7f7;overflow:auto}.striphead{gap:5px;flex-wrap:wrap;font-size:12px}.striphead button,.striphead select{min-height:25px;padding:1px 5px;font-size:12px}.striphead strong{font-size:12px}.striphead label{display:flex;align-items:center;gap:4px}.striphead input{width:13px;height:13px}.thumbs{display:flex;gap:5px;overflow-x:auto;padding:5px 2px 2px}.thumbItem{position:relative;flex:none}.thumbItem>input{position:absolute;top:5px;left:5px;z-index:1}.thumb{display:grid;gap:2px;padding:2px;width:82px;text-align:left}.thumb img{width:100%;height:32px;object-fit:cover}.thumb span{font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.thumb[aria-current=true]{outline:2px solid var(--teal)}
+.htitle{padding:4px 9px;min-height:31px}.htitle strong{margin-right:auto}.htitle button{font-size:12px;min-height:24px;padding:2px 7px}.histlist{overflow:auto;flex:1}.histlist table,.resulttable{width:100%;border-collapse:collapse;font-size:12px}.histlist th,.histlist td,.resulttable td,.resulttable th{border-bottom:1px solid #dce3e4;padding:5px 7px;text-align:left}.histlist th,.resulttable thead th{color:var(--muted);font-weight:500;background:#f2f5f5}.histlist tbody tr[aria-selected=true]{background:#dcf0ef}.histlist tbody tr{cursor:pointer}.histlist tbody tr:hover{background:#edf5f4}.hint,.nocontent{font-size:12px;color:var(--muted);margin:5px 0}.nocontent{padding:7px 10px}.history time{white-space:nowrap}
+.resultpanel{overflow:auto;padding:8px;flex:1;min-height:0}.resultnote{padding:6px 8px;background:#e7f3f1;border-left:3px solid var(--teal);margin:0 0 7px}.resulttable{table-layout:fixed}.resulttable th{font-weight:500}.resulttable td{overflow-wrap:anywhere}.resulttable button,.resulttable select{font-size:12px;min-height:23px;padding:2px 4px;max-width:100%}.resulttable .link,.reference button{color:var(--teal)}.resulttable .link{background:none;border:0;text-align:left}.reference{padding:7px;background:#edf3f3;display:flex;gap:7px;align-items:center;flex-wrap:wrap;font-size:12px}.reference code{overflow-wrap:anywhere}.reference button{font-size:12px;min-height:24px}.image-result dl{display:grid;grid-template-columns:auto 1fr;gap:4px 7px;margin:4px}.image-result dd{margin:0}.image-result summary{color:var(--teal);cursor:pointer}
+.sheet{position:absolute;z-index:3;top:106px;left:clamp(10px,8%,56px);width:min(348px,calc(100% - 20px));max-height:calc(100% - 117px);display:flex;flex-direction:column;border:1px solid #82979c;border-radius:5px;overflow:hidden;box-shadow:0 7px 23px #203a403f;background:#fafbfb}.titlebar{min-height:33px;background:#31464c;color:white;padding:4px 9px;cursor:move;touch-action:none}.titlebar h1,.titlebar h2{font-size:14px;margin:0}.titlebar .trail{font-size:11px;color:#d9e3e5}.titlebar .x{margin-left:auto;border:0;background:none;color:white;font-size:18px;min-height:23px;padding:1px 5px}
+.scroll{overflow:auto;min-height:0;padding:5px 12px 9px}.block{padding:7px 0;border-bottom:1px solid var(--line)}.block h3,.block>summary,.subheading{font-size:13px;font-weight:700;margin:0 0 6px}.field{display:grid;grid-template-columns:minmax(86px,.77fr) minmax(96px,1.23fr);align-items:center;gap:6px;margin:5px 0}.field>select,.field>input{min-width:0;width:100%}.field select,.field input{font-size:13px;min-height:27px}.check{display:flex;align-items:center;gap:7px;min-height:26px}.sub{margin:3px 0 5px 13px;padding-left:8px;border-left:2px solid #c3d8d6}.inline,.addrow{display:flex;gap:5px;align-items:center;flex-wrap:wrap}.sheetfoot{background:#f0f4f4;border-top:1px solid var(--line);padding:5px 8px;gap:5px;justify-content:flex-end}.sheetfoot button{font-size:12px;min-height:26px}.sheetfoot .editstate{margin-right:auto;font-size:11px;color:var(--muted)}summary{cursor:pointer}
+.dismiss{padding:6px;display:flex;gap:4px;flex-wrap:wrap;align-items:center;background:#fff2ce;border-top:1px solid #d5c79d}.dismiss strong{width:100%;font-size:12px}.dismiss button{font-size:12px;min-height:25px;padding:2px 5px}
+.debugwrap{position:relative}.debugpop{position:absolute;z-index:9;top:calc(100% + 5px);left:0;width:278px;background:#fff;border:1px solid #8c9fa3;border-radius:4px;padding:9px;box-shadow:0 4px 14px #18323935}.debugpop p{margin:3px 0 7px}.debugpop h3{font-size:13px;margin:0}.debugpop .actions{flex-wrap:wrap}.foot{min-height:27px;padding:3px 10px;background:#31464b;color:white;font-size:12px;justify-content:space-between}.cameraManager{position:fixed;z-index:12;left:50%;top:15%;transform:translateX(-50%);width:min(42rem,96vw);border:1px solid #899b9f;border-radius:5px;background:#fbfcfc;box-shadow:0 10px 35px #203a4050;max-height:75dvh;overflow:auto}.cameraBody{padding:10px 14px}.cameraBody h3{font-size:14px;margin:4px 0}.cameraBody .field{max-width:480px}.camGrid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.foot .scope{color:#d2e1e1}.cameraManager .titlebar{cursor:auto}
+@media(min-height:850px){.sheet{top:118px}.field{margin:6px 0}.sheet .scroll{padding:9px 14px 12px}}
+@media(max-width:1000px){.work{grid-template-columns:64px minmax(300px,.84fr) minmax(355px,1fr)}.sheet{left:7px;width:calc(100% - 14px)}.tools .head{padding-left:7px}.tool{font-size:12px}}
+@media(max-width:760px){.work{height:auto;min-height:0;grid-template-columns:58px minmax(0,1fr);grid-template-rows:auto auto;gap:2px}.flow{min-height:160px}.flow:has(.sheet:not([hidden])){min-height:500px}.watchpane{grid-column:1/-1;min-height:560px;grid-template-rows:minmax(360px,1fr) 170px}.sheet{width:min(380px,calc(100% - 14px));max-height:calc(100% - 82px);top:75px}.node{top:8px;left:8px;min-width:120px;padding:4px 7px}.attr{top:18px;left:144px}.context{font-size:12px}.toolbar{gap:4px}.toolbar button{font-size:12px}.debugpop{left:auto;right:-26px}.camGrid{grid-template-columns:1fr}.foot .scope{display:none}}
+@media(max-width:420px){.context{display:none}.app{padding:0 7px}.sheet .scroll{padding:4px 8px}.field{grid-template-columns:85px minmax(80px,1fr)}.toolbar .counter{display:none}}
+</style>
+</head>
+<body>
+<header class="app"><span class="appmark" aria-hidden="true"></span><strong class="brand">VisionPro</strong><span class="context">表面检测方案　/　取像流程</span><span class="prototype">本机交互原型</span></header>
+<nav class="toolbar" aria-label="工作台工具栏"><button id="formalRun" class="primary">▷ 执行一次流程</button><button id="formalContinuous">连续执行流程</button><div class="debugwrap"><button id="timingOpen" aria-expanded="false" aria-controls="timingPop">运行设置 ▾</button><section class="debugpop" id="timingPop" hidden><h3>本地连续执行</h3><div class="field"><label for="interval">间隔（ms）</label><input type="number" id="interval" min="0" max="60000" value="700"></div><p class="hint">流程与隔离调试各自按此节拍取图。</p></section></div><span class="toolsep"></span><button id="cameraManage">相机管理</button><button id="undo" disabled>撤销编辑</button>
+<div class="debugwrap"><button id="debugOpen" aria-expanded="false" aria-controls="debugPop">模块调试 ▾</button><section class="debugpop" id="debugPop" hidden aria-label="隔离调试"><h3>图像源 · 隔离调试</h3><p class="hint">调试使用独立帧、序列游标和 SN。</p><div class="actions"><button id="run">调试一次</button><button id="continuous">连续调试</button></div>
+<div id="debugInject" hidden><div class="actions"><button id="inject">注入模拟帧</button></div><p class="hint" id="inputHint"></p></div><div id="debugChar" class="block" hidden><label class="check"><input id="messageReceived" type="checkbox" checked>本轮收到字符消息</label><div class="field"><label for="inputText">输入字符（模拟）</label><input id="inputText" value="START"></div></div><div id="debugExposure" class="field" hidden><label for="exposureValue">曝光订阅值（µs）</label><input id="exposureValue" type="number" min="1" value="8000"></div><div id="debugGain" class="field" hidden><label for="gainValue">增益订阅值（dB）</label><input id="gainValue" type="number" min="0" step="0.1" value="1"></div></section></div>
+<div class="debugwrap"><button id="externalOpen" aria-expanded="false" aria-controls="externalPop">模拟外部输入 ▾</button><section class="debugpop" id="externalPop" hidden><h3>流程输入 · 本机模拟</h3><p class="hint">按当前来源向流程提交输入。</p><div id="externalChar" hidden><label class="check"><input id="withMessage" type="checkbox" checked>本次随附字符消息</label><div class="field"><label for="externalText">通信字符</label><input id="externalText" value="START"></div></div><div class="actions"><button id="signal">提交相机帧</button><button id="submitSdk">提交 SDK 帧</button><button id="submitChar" hidden>提交字符消息</button></div></section></div><span class="counter">正式执行 <output id="formalCount">0</output> 次　·　独立调试 <output id="debugCount">0</output> 次</span></nav>
+<main class="work">
+<aside class="tools" aria-label="模块工具箱"><h2 class="head">工具箱</h2><div class="category">采集</div><button class="tool" id="tool" title="定位图像源示例节点"><span class="glyph" aria-hidden="true">▣</span>图像源</button></aside>
+<section class="flow" aria-label="流程编辑区"><h2 class="head flowhead">取像流程 <span>/　流程编辑</span></h2>
+<div class="canvas" id="board"><button class="node" id="node" title="单击查看模块；双击或按 Enter 打开参数"><span class="node-icon" aria-hidden="true">▣</span><strong>图像源</strong><small id="nodeState">01　待执行</small></button><button id="properties" class="attr">模块属性…</button>
+<section class="sheet" id="editor" role="dialog" aria-modal="false" aria-labelledby="title">
+<div class="titlebar" id="dragHandle"><h1 id="title">01 图像源</h1><span class="trail">模块参数</span><button class="x" id="topClose" title="关闭参数窗口" aria-label="关闭参数窗口">×</button></div>
+<div class="scroll" id="config">
+<section class="block"><h3>基本参数</h3><div class="field"><label for="source">图像源</label><select id="source"><option value="local">本地图像</option><option value="camera">相机</option><option value="sdk">SDK</option></select></div>
+<div id="localPanel"><div class="field"><label for="format">像素格式</label><select id="format"><option>Mono8</option><option>RGB24</option></select></div>
+<label class="check"><input id="embed" type="checkbox">方案存图（最多 120 张）</label><label class="check"><input id="nameOverlay" type="checkbox" checked>显示图像名称</label></div>
+<div id="cameraPanel" hidden><div class="field"><label for="device">关联相机</label><select id="device"><option value="sim">模拟相机 · 工位 A</option><option value="">未关联</option></select></div><div class="field"><label for="cameraMode">取帧方式</label><select id="cameraMode"><option value="active">执行时主动取帧</option><option value="event">使用本轮流程触发帧</option></select></div><button id="cameraShortcut">打开相机管理…</button>
+<label class="check"><input id="exposure" type="checkbox">控制曝光</label><div id="exposureBox" class="sub" hidden><div class="field"><label for="exposureBinding">float 订阅</label><select id="exposureBinding"><option>取像流程 / 曝光时间</option></select></div></div>
+<label class="check"><input id="gain" type="checkbox">控制增益</label><div id="gainBox" class="sub" hidden><div class="field"><label for="gainBinding">float 订阅</label><select id="gainBinding"><option>取像流程 / 增益</option></select></div></div></div>
+<div id="sdkPanel" hidden><div class="field"><span>接收入口</span><strong>取像流程 / 外部图像</strong></div><p class="hint">每次提交只供对应调用消费。调试帧在「模块调试」中注入。</p></div>
+<div class="field"><label id="snLabel" for="snValue">SN 初始值</label><div class="inline"><input type="number" id="snValue" min="0" max="2147483646" value="1" style="width:64px"><select id="snKind" aria-label="SN 来源"><option value="fixed">固定值</option><option value="binding">订阅整数</option></select></div></div>
+<div id="cacheField" class="field"><label for="cache">图片缓存（张）</label><input type="number" id="cache" min="0" max="5" value="0"></div>
+<label class="check" id="monoRow" hidden><input id="mono" type="checkbox">输出 Mono8 灰度图像</label>
+<label class="check"><input id="stitch" type="checkbox">拼接使能</label><div class="sub" id="stitchBox" hidden><div class="field"><label for="cropY">起始高度（px）</label><input type="number" id="cropY" min="0" max="20000" value="0"></div><div class="field"><label for="cropH">拼接高度（px）</label><input type="number" id="cropH" min="0" max="20000" value="64"></div><label class="check"><input id="clearOn" type="checkbox">触发清空上一帧</label><div id="clearBox" hidden><div class="field"><label for="clearValue">触发变量</label><input type="number" id="clearValue" step="1" value="0"></div><p class="hint">非零时先清空缓存。</p></div></div></section>
+<section class="block"><h3>触发设置</h3><div id="localTrigger"><label class="check"><input id="autoNext" type="checkbox" checked>自动切换</label><label class="check"><input id="last" type="checkbox" checked>最后一张停止</label></div>
+<label class="check"><input id="filter" type="checkbox">字符触发过滤</label><div class="sub" id="filterBox" hidden><div class="field"><label for="inputBinding">输入字符</label><select id="inputBinding"><option>通信 / 触发消息</option></select></div><div class="field"><label for="triggerText">触发字符</label><input id="triggerText" placeholder="留空接受任意字符"></div></div></section>
+<section id="folderBlock" class="block"><h3>订阅图片文件夹</h3><label class="check"><input id="watch" type="checkbox">订阅文件夹</label><div id="watchSettings" class="sub" hidden><div class="field"><label for="watchPath">图像路径</label><select id="watchPath"><option>模拟目录 / 来料图像</option></select></div>
+<label class="check"><input id="watchThumbs" type="checkbox" checked>更新缩略图</label><label class="check"><input id="watchRun" type="checkbox">触发流程执行</label><div class="addrow"><button id="folderPlus">模拟新增图片</button><button id="folderMinus">模拟删除图片</button></div><p class="hint" id="folderInfo"></p></div></section>
+</div><div class="sheetfoot"><span class="editstate" id="editState">有效编辑立即生效</span><button id="sheetDebug">调试本模块</button><button id="close">关闭</button></div></section>
+</div></section>
+<section class="watchpane" aria-label="工作台观察区">
+<section class="observe"><div class="tabs" role="tablist" aria-label="共享观察页"><button id="tabImage" role="tab" aria-selected="true" aria-controls="imagePage">图像</button><button id="tabResults" role="tab" aria-selected="false" aria-controls="results">模块结果</button><span class="watchTitle" id="observeContext">取像流程 / 图像源</span></div>
+<div class="preview" id="imagePage" role="tabpanel" aria-labelledby="tabImage"><div class="phead"><label for="layer">图层</label><select id="layer"><option value="source">来源预览</option><option value="image">调用主图</option><option value="gray">调用灰度图</option></select><span id="observeName">当前模块</span></div>
+<div class="screen" id="screen"><div class="surface"><canvas id="viewImage" aria-label="模块观察图像"></canvas></div><div class="overlays"><span id="viewTag"></span><span id="viewName"></span></div><div class="empty" id="blank" hidden></div><button id="prev" class="frameArrow left" aria-label="预览上一张">‹</button><button id="next" class="frameArrow right" aria-label="预览下一张">›</button></div>
+<div class="ptools"><output id="dimensions">—</output><button id="minus" aria-label="缩小">−</button><output id="scale">—</output><button id="plus" aria-label="放大">＋</button><button id="fit">自适应</button></div>
+<div class="strip" id="strip"><div class="striphead"><strong>图像源</strong><span id="position"></span><label><input id="autoMirror" type="checkbox" checked>自动切换</label><select id="range" aria-label="运行图片范围"><option value="all">运行全部</option><option value="checked">运行选中</option></select><button id="add">添加图片</button><button id="addFolder">添加文件夹</button><button id="first">首张</button><button id="remove">移除当前</button><button id="clearList">清空</button></div><div class="thumbs" id="thumbs" aria-label="图片序列与运行选择"></div></div>
+<input type="file" id="files" accept="image/*" multiple hidden><input type="file" id="folderFiles" accept="image/*" webkitdirectory multiple hidden>
+</div>
+<div class="resultpanel" id="results" role="tabpanel" aria-labelledby="tabResults" hidden><div class="resultnote" id="resultState"></div><table class="resulttable"><thead><tr><th scope="col">结果名称</th><th scope="col">当前值</th><th scope="col">变量管理</th></tr></thead><tbody id="resultRows"></tbody></table><div class="reference"><strong>VisionPro 结果引用</strong><code id="refText">选取一项已产出的结果</code><button id="copyRef" disabled>复制</button></div></div></section>
+<section class="history"><div class="htitle tabs" role="tablist" aria-label="结果显示区"><button id="histTab" role="tab" aria-selected="true" aria-controls="histPage">历史结果</button><button id="helpTab" role="tab" aria-selected="false" aria-controls="helpPage">帮助</button><span id="historyMark" class="hint" style="margin-left:auto">跟随最新</span><button id="live" disabled>返回实时</button></div><div class="histlist" id="histPage" role="tabpanel" aria-labelledby="histTab"><table><thead><tr><th>执行序号</th><th>时间</th><th>模块数据</th></tr></thead><tbody id="historyRows"></tbody></table><p id="noHistory" class="nocontent">暂无执行记录</p></div><div id="helpPage" role="tabpanel" aria-labelledby="helpTab" class="scroll" hidden><h3 class="subheading">图像源</h3><p>为后续模块提供一帧图像，来源可选本地文件、相机或 SDK。</p><p>单击画布节点查看图像与模块结果，双击编辑参数。在图像页添加图片，勾选缩略图可限定运行范围。选取历史记录可回看该次调用的输出。</p></div></section>
+</section></main>
+<footer class="foot"><span id="status" role="status" aria-live="polite">就绪</span><span class="scope">工作台 · 模块观察</span></footer>
+<section class="cameraManager" id="manager" role="dialog" aria-modal="false" aria-labelledby="managerTitle" hidden><div class="titlebar"><h2 id="managerTitle">全局相机管理</h2><span class="trail">模拟设备</span><button class="x" id="managerClose" aria-label="关闭相机管理">×</button></div><div class="cameraBody"><h3>工位 A　<small>SIM-A001</small></h3><div class="camGrid"><div><div class="field"><label for="camConnected">连接</label><select id="camConnected"><option value="yes">已连接</option><option value="no">断开</option></select></div><div class="field"><label for="camFormat">像素格式</label><select id="camFormat"><option>RGB24</option><option>Mono8</option></select></div><div class="field"><span>传感器尺寸</span><strong>720 × 450 px</strong></div></div><div><div class="field"><label for="camTrigger">采集触发</label><select id="camTrigger"><option value="soft">软触发</option><option value="line">外部线触发</option></select></div><div class="field"><label for="camExposure">曝光（µs）</label><input type="number" id="camExposure" min="1" max="100000" value="8000"></div><div class="field"><label for="camGain">增益（dB）</label><input type="number" id="camGain" min="0" max="24" step="0.1" value="0"></div></div></div>
+<p class="hint">模拟参数作用于后续相机帧。外部线触发模式通过按钮模拟一次到帧。</p><div class="actions"><button id="managerDone">关闭</button></div></div></section>
+<script>
+"use strict";
+const byId=id=>document.getElementById(id);
+const sourceNames={local:"本地图像",camera:"相机",sdk:"SDK"};
+const assets=new Map(),sampleIds=[];let assetCount=0;
+function makeCanvas(width, height) {
+  const c = document.createElement("canvas");
+  c.width = width;
+  c.height = height;
+  return c;
+}
+// 离线合成同一法兰盘的不同位置与照明，所有示例均在本地绘制。
+function workpiece(seed) {
+  const c = makeCanvas(720, 450);
+  const ctx = c.getContext("2d");
+  let randomState = seed * 193 + 11;
+  function random() {
+    randomState = (Math.imul(randomState, 1664525) + 1013904223) >>> 0;
+    return randomState / 4294967296;
+  }
+  const bg = ctx.createLinearGradient(0, 0, 640, 450);
+  bg.addColorStop(0, "#8f9690"); bg.addColorStop(.58, "#626c6b"); bg.addColorStop(1, "#495655");
+  ctx.fillStyle = bg; ctx.fillRect(0, 0, c.width, c.height);
+  for (let i = 0; i < 5200; i++) {
+    const x = random() * 720, y = random() * 450;
+    ctx.fillStyle = random() > .5 ? "rgba(230,230,218,.11)" : "rgba(25,28,25,.13)";
+    ctx.fillRect(x, y, random() * 7 + 1, 1);
+  }
+  ctx.save();
+  ctx.translate(354 + 18 * Math.sin(seed), 214 + 13 * Math.cos(seed));
+  ctx.rotate(-.08 + (seed % 7) * .042);
+  function disk(x, y, r, fill) {
+    ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fillStyle = fill; ctx.fill();
+  }
+  ctx.shadowColor = "#172322a8"; ctx.shadowBlur = 22; ctx.shadowOffsetY = 13;
+  disk(0, 4, 159, "#505c5d"); ctx.shadowBlur = 0; ctx.shadowOffsetY = 0;
+  const alloy = ctx.createLinearGradient(-130,-148,142,143);
+  [[0,"#7d888b"],[.17,"#d5d5c9"],[.38,"#a8afaa"],[.64,"#7b8685"],[.8,"#c3c4b6"],[1,"#737d7b"]]
+    .forEach(([stop,color])=>alloy.addColorStop(stop,color));
+  disk(0,0,159,alloy); disk(0,0,154,"#747d7c"); disk(0,0,151,alloy);
+  for(let r=44;r<153;r+=1.8){
+    ctx.beginPath(); ctx.arc(0,0,r,0,2*Math.PI);
+    ctx.strokeStyle=r%4<2 ? "#eff0dc32" : "#26333029"; ctx.lineWidth=.7;ctx.stroke();
+  }
+  function bore(x,y,r) {
+    const lip=ctx.createLinearGradient(x-r,y-r,x+r,y+r);
+    lip.addColorStop(0,"#4b5656");lip.addColorStop(.48,"#788782");lip.addColorStop(1,"#efebd4");
+    disk(x,y,r+3,lip);
+    const hole=ctx.createRadialGradient(x+2,y+3,1,x,y,r);
+    hole.addColorStop(0,"#414c4a");hole.addColorStop(.7,"#434e4b");hole.addColorStop(1,"#202a29");
+    disk(x,y,r,hole);
+  }
+  disk(0,0,64,alloy);bore(0,0,52);
+  for(let i=0;i<8;i++){
+    const a=i*Math.PI/4+.14;
+    bore(Math.cos(a)*110, Math.sin(a)*110, 13.5);
+  }
+  ctx.fillStyle="#414844";ctx.font="12px Consolas, monospace";ctx.textAlign="center";
+  ctx.fillText("FL-08   ·   316L",0,86);
+  ctx.restore();
+  return c;
+}
+function addAsset(image, name, path) {
+  const id = "frame-" + (++assetCount);
+  const mini = makeCanvas(128,80);
+  mini.getContext("2d").drawImage(image,0,0,128,80);
+  assets.set(id,{image,name,path,thumb:mini.toDataURL("image/jpeg",.72)});
+  return id;
+}
+function newSample(seed, path="示例/法兰盘") {
+  const name="flange_"+String(seed).padStart(3,"0")+".png";
+  return addAsset(workpiece(seed),name,path+"/"+name);
+}
+for(let i=1;i<=4;i++) sampleIds.push(newSample(i));
+
+const controls=[...byId("config").querySelectorAll("input,select"),byId("range"),byId("interval"),...byId("manager").querySelectorAll("input,select")];
+const getControl=el=>el.type==="checkbox"?el.checked:el.value;
+const copy=obj=>JSON.parse(JSON.stringify(obj));
+let config={fields:Object.fromEntries(controls.map(el=>[el.id,getControl(el)])),ids:[...sampleIds],checked:[...sampleIds]};
+const field=id=>config.fields[id];
+const edits=[],bindings=new Map(),records=[];
+let selected=sampleIds[0],folderIds=sampleIds.slice(0,2),folderThumbs=[...folderIds],folderChanges=0,folderRuns=0;
+let zoom=null,locked=null,lastView=null,reference=null,openCameraFrom=null;
+function makeSession(label){return {label,count:0,phase:0,success:0,next:selected,previous:null,incoming:null,frame:0,timer:null};}
+const formal=makeSession("流程"),debug=makeSession("调试");
+function status(msg){byId("status").textContent=msg;}
+function visibleIds(){return field("watch")?folderThumbs:config.ids;}
+function activeIds(){return field("watch")?folderIds:config.ids;}
+function stop(session){if(session.timer!==null)window.clearInterval(session.timer);session.timer=null;
+ byId(session===debug?"continuous":"formalContinuous").textContent=session===debug?"连续调试":"连续执行流程";}
+function resetSessions(){
+ for(const session of [debug,formal]){stop(session);session.phase++;session.success=0;session.next=selected;session.previous=null;session.incoming=null;session.frame=0;}
+}
+function mutate(action,reset=false){
+ const before=copy(config);action();if(JSON.stringify(before)===JSON.stringify(config))return;
+ edits.push(before);if(edits.length>40)edits.shift();if(reset)resetSessions();
+ sync();status("已更新模块配置，可撤销");
+}
+function sync(){
+ for(const c of controls){if(c.type==="checkbox")c.checked=!!field(c.id);else c.value=field(c.id);}
+ byId("autoMirror").checked=field("autoNext");byId("undo").disabled=!edits.length;
+ sections();showList();showPreview();showResults();
+}
+function sections(){
+ const s=field("source"),local=s==="local",active=s==="camera"&&field("cameraMode")==="active";
+ for(const k of Object.keys(sourceNames))byId(k+"Panel").hidden=k!==s;
+ for(const [id,visible] of Object.entries({localTrigger:local,cacheField:local,folderBlock:local,strip:local,watchSettings:field("watch"),exposureBox:field("exposure"),gainBox:field("gain"),stitchBox:field("stitch"),clearBox:field("clearOn"),filterBox:field("filter"),monoRow:local?field("format")==="RGB24":s==="camera"?field("camFormat")==="RGB24":true}))byId(id).hidden=!visible;
+ for(const id of ["exposure","gain","exposureValue","gainValue","exposureBinding","gainBinding"])byId(id).disabled=!active;
+ byId("snKind").options[1].disabled=!local;byId("snLabel").textContent=field("snKind")==="fixed"?"SN 初始值":"订阅整数值";
+ byId("debugChar").hidden=byId("externalChar").hidden=!field("filter");byId("submitChar").hidden=!field("filter")||!local;
+ byId("debugExposure").hidden=!active||!field("exposure");byId("debugGain").hidden=!active||!field("gain");
+ byId("inputText").disabled=!byId("messageReceived").checked;byId("externalText").disabled=!byId("withMessage").checked;byId("add").disabled=byId("addFolder").disabled=field("watch");
+ byId("remove").disabled=field("watch")||!config.ids.includes(selected);byId("clearList").disabled=field("watch")||!config.ids.length;
+ byId("folderMinus").disabled=!folderIds.length;byId("folderInfo").textContent="模拟目录 "+folderIds.length+" 张 · 缩略图 "+folderThumbs.length+" 张 · 触发流程 "+folderRuns+" 次";
+ const need=s==="sdk"||s==="camera"&&(field("cameraMode")==="event"||field("camTrigger")==="line");
+ byId("debugInject").hidden=!need;byId("inputHint").textContent=debug.incoming?"有一帧待独立调试消费。":"本轮尚无调试输入帧。";
+ byId("inject").textContent=s==="sdk"?"注入模拟 SDK 帧":"注入模拟相机帧";
+ byId("signal").disabled=s!=="camera";byId("submitSdk").disabled=s!=="sdk";
+ byId("formalCount").textContent=formal.count;byId("debugCount").textContent=debug.count;
+}
+function setSelected(id,advance=true){
+ selected=id;if(advance){debug.next=id;formal.next=id;}zoom=null;locked=null;byId("layer").value="source";
+ sections();showList();showPreview();showHistory();showResults();
+}
+function showList(){
+ const strip=byId("thumbs");strip.replaceChildren();const ids=visibleIds();
+ ids.forEach((id,i)=>{
+  const item=assets.get(id),wrap=document.createElement("div"),check=document.createElement("input"),b=document.createElement("button"),im=document.createElement("img"),name=document.createElement("span");
+  wrap.className="thumbItem";check.type="checkbox";check.checked=config.checked.includes(id);check.setAttribute("aria-label","勾选 "+item.name);
+  check.onchange=()=>{mutate(()=>{config.checked=config.checked.filter(x=>x!==id);if(check.checked)config.checked.push(id);});byId("thumbs").children[i]?.querySelector("input").focus();};
+  b.className="thumb";b.title=item.name;b.setAttribute("aria-current",String(id===selected));im.src=item.thumb;im.alt="";name.textContent=item.name;b.append(im,name);
+  b.onclick=()=>{setSelected(id);byId("thumbs").children[i]?.querySelector("button").focus();};wrap.append(check,b);strip.append(wrap);
+ });
+ if(!ids.length){const empty=document.createElement("span");empty.className="hint";empty.textContent="可添加图片或文件夹";strip.append(empty);}
+ const idx=ids.indexOf(selected);byId("position").textContent=(idx<0?"—":idx+1)+"/"+ids.length;
+ for(const id of ["first","prev","next"])byId(id).disabled=!ids.length;
+}
+function changePreview(delta){const ids=visibleIds();if(!ids.length)return;const i=Math.max(0,ids.indexOf(selected));setSelected(ids[(i+delta+ids.length)%ids.length]);}
+function grayscale(input){const c=makeCanvas(input.width,input.height),ctx=c.getContext("2d");ctx.filter="grayscale(1)";ctx.drawImage(input,0,0);return c;}
+function layoutCanvas(){
+ const view=byId("viewImage"),wrapper=byId("screen");if(view.hidden||!wrapper.clientWidth||!wrapper.clientHeight)return;
+ const scale=zoom===null?Math.min(wrapper.clientWidth/view.width,wrapper.clientHeight/view.height):zoom;
+ view.style.width=Math.round(view.width*scale)+"px";view.style.height=Math.round(view.height*scale)+"px";byId("scale").textContent=Math.round(scale*100)+"%";
+}
+function shown(){return locked||lastView;}
+function showPreview(){
+ const s=field("source"),local=s==="local",r=shown(),out=r?.state==="成功"?r:null,layer=byId("layer");
+ layer.options[1].disabled=!out;layer.options[2].disabled=!out?.gray;
+ if(layer.selectedOptions[0]?.disabled)layer.value="source";
+ let image=null,name="",format="",tag="",empty="本轮没有图像";
+ if(layer.value==="source"){
+  let id=local?(visibleIds().includes(selected)?selected:null):debug.incoming;
+  if(locked&&!out)id=null;
+  const asset=assets.get(id);
+  if(asset){image=asset.image;name=asset.name;format=local?field("format"):s==="camera"?field("camFormat"):"RGB24";}
+  tag=local?"文件预览":"模拟输入预览";
+  empty=locked?"所选调用无有效图像":local?"可添加图片或文件夹":s==="sdk"?"等待本轮 SDK 图像":"等待模拟相机帧";
+ }else if(out){
+  const gray=layer.value==="gray";image=gray?out.gray:out.image;name=out.name;format=gray?"Mono8":out.format;
+  tag=(locked?"历史 · ":"")+out.label+" #"+out.run+" · "+(gray?"灰度图像":"主图");
+ }
+ const view=byId("viewImage");view.hidden=!image;byId("blank").hidden=!!image;byId("blank").textContent=empty;
+ byId("viewTag").textContent=tag;byId("viewName").hidden=!name||(local&&!field("nameOverlay")&&layer.value==="source");byId("viewName").textContent=name;
+ byId("observeName").textContent=locked?"已锁定 "+locked.label+" #"+locked.run:"当前模块";
+ byId("prev").hidden=byId("next").hidden=!local||!!locked||layer.value!=="source";
+ byId("dimensions").textContent=image?image.width+" × "+image.height+" px　"+format:"—";
+ for(const id of ["minus","plus","fit"])byId(id).disabled=!image;
+ if(!image){byId("scale").textContent="—";return;}
+ view.width=image.width;view.height=image.height;const ctx=view.getContext("2d");ctx.filter=format==="Mono8"?"grayscale(1)":"none";ctx.drawImage(image,0,0);layoutCanvas();
+}
+function setTab(result){
+ byId("results").hidden=!result;byId("imagePage").hidden=result;
+ byId("tabImage").setAttribute("aria-selected",String(!result));byId("tabResults").setAttribute("aria-selected",String(result));
+ if(!result)layoutCanvas();
+}
+function chooseReference(id){
+ reference="取像流程 / 图像源 / "+id;
+ byId("refText").textContent=reference;byId("copyRef").disabled=false;
+}
+function showResults(){
+ const r=shown(),rows=byId("resultRows");rows.replaceChildren();reference=null;byId("refText").textContent="选取一项已产出的结果";byId("copyRef").disabled=true;
+ byId("resultState").textContent=r?(locked?"历史 · ":"")+r.label+" #"+r.run+"　"+r.state+(r.detail?" · "+r.detail:""):"尚未执行本模块";
+ if(!r||r.state!=="成功")return;
+ const data=[["耗时（ms）","elapsed_ms",r.cost.toFixed(2),"float"],["图像","image",{pic:r.image,format:r.format,layer:"image"},"image"],["SN 码","sn",r.sn,"int"]];
+ if(r.gray)data.push(["灰度图像","gray_image",{pic:r.gray,format:"Mono8",layer:"gray"},"image"]);
+ if(r.source==="local")data.push(["当前图像名称","file_name",r.name,"string"],["当前图像路径","file_path",r.path,"string"]);
+ if(r.source==="camera")data.push(["帧号","camera_frame_number",r.frame,"int"],["丢帧数","lost_frames",0,"int"],["丢包数","lost_packets",0,"int"],["相机获取失败次数","acquire_failures",r.failures,"int"]);
+ for(const [name,id,value,type] of data){
+  const tr=document.createElement("tr"),th=document.createElement("th"),b=document.createElement("button"),val=document.createElement("td"),vars=document.createElement("td");
+  th.scope="row";b.className="link";b.textContent=name;b.onclick=()=>chooseReference(id);th.append(b);tr.append(th,val,vars);
+  if(type==="image"){
+   const details=document.createElement("details"),summary=document.createElement("summary"),dl=document.createElement("dl"),preview=document.createElement("button");details.className="image-result";
+   summary.textContent=value.pic.width+" × "+value.pic.height+" · "+value.format;summary.setAttribute("aria-label","展开"+name+"数据");summary.onclick=()=>chooseReference(id);
+   preview.textContent="预览"+name;preview.onclick=()=>{setTab(false);byId("layer").value=value.layer;zoom=null;showPreview();};
+   for(const [label,text] of [["数据",preview],["宽度",value.pic.width+" px"],["高度",value.pic.height+" px"],["像素格式",value.format]]){const dt=document.createElement("dt"),dd=document.createElement("dd");dt.textContent=label;dd.append(text);dl.append(dt,dd);}
+   details.append(summary,dl);val.append(details);vars.textContent="无匹配示例变量";
+  }else{
+   const scalar=document.createElement("button");scalar.className="link";scalar.textContent=value;scalar.setAttribute("aria-label",name+"当前值 "+value);scalar.onclick=()=>chooseReference(id);val.append(scalar);
+   const select=document.createElement("select");select.setAttribute("aria-label",name+"变量管理");
+   select.add(new Option("未绑定",""));select.add(new Option("局部 / "+({float:"耗时",int:"计数",string:"文本"}[type]),type));
+   select.value=bindings.get(id)||"";select.onchange=()=>{bindings.set(id,select.value);chooseReference(id);status("已更新示例变量绑定");};vars.append(select);
+  }
+  rows.append(tr);
+ }
+}
+function showHistory(){
+ const tbody=byId("historyRows");tbody.replaceChildren();byId("noHistory").hidden=!!records.length;
+ byId("live").disabled=!locked;byId("historyMark").textContent=locked?"锁定 "+locked.label+" #"+locked.run:"跟随最新";
+ for(const rec of records){
+  const row=document.createElement("tr");row.tabIndex=0;row.setAttribute("aria-selected",String(rec===locked));
+  const texts=[rec.label+" #"+rec.run,rec.time,rec.state==="成功"?rec.name+" · "+rec.image.width+" × "+rec.image.height+" px · SN "+rec.sn:rec.state+" · "+rec.detail];
+  for(const t of texts){const td=document.createElement("td");td.textContent=t;row.append(td);}
+  const inspect=()=>{locked=rec;zoom=null;byId("layer").value=rec.image?"image":"source";showHistory();showPreview();showResults();};
+  row.onclick=inspect;row.onkeydown=e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();inspect();}};tbody.append(row);
+ }
+}
+function publish(session,data){
+ const timestamp=new Date();
+ const date=[timestamp.getFullYear(),String(timestamp.getMonth()+1).padStart(2,"0"),String(timestamp.getDate()).padStart(2,"0")].join("-");
+ const time=date+" "+timestamp.toLocaleTimeString("zh-CN",{hour12:false})+"."+String(timestamp.getMilliseconds()).padStart(3,"0");
+ const r={...data,label:session.label,run:session.count,time,source:field("source")};
+ records.unshift(r);if(records.length>40){const old=records.pop();if(old===locked)locked=null;}lastView=r;
+ if(!locked){zoom=null;byId("layer").value=r.image?"image":"source";}
+ byId("nodeState").textContent="01　"+r.label+" · "+r.state;
+ sections();showList();showHistory();showPreview();showResults();return r;
+}
+function runOnce(session){
+ const start=performance.now(),s=field("source");session.count++;
+ const incoming=session.incoming;session.incoming=null;
+ const message=session===debug?(byId("messageReceived").checked?byId("inputText").value:null):session.message;session.message=null;
+ function fail(state,detail){stop(session);if(s==="camera"&&state==="采集失败")session.failures=(session.failures||0)+1;publish(session,{state,detail});status(session.label+" #"+session.count+" · "+state+" · "+detail);return false;}
+ if(field("filter")&&(message==null||(field("triggerText")&&message!==field("triggerText"))))return fail("已过滤","字符条件未满足");
+ let id=null,frame=null,ids=[];
+ if(s==="local"){
+  ids=activeIds().filter(x=>field("range")==="all"||config.checked.includes(x));
+  if(!ids.length)return fail("无输入",field("range")==="checked"?"没有勾选可运行的图片":"图片序列为空");
+  id=ids.includes(session.next)?session.next:ids[0];if(!locked)selected=id;
+ }else if(s==="sdk"){
+  if(!incoming)return fail("无输入","本轮未收到 SDK 帧");id=incoming;
+ }else{
+  if(!field("device"))return fail("无输入","未关联全局相机");
+  if(field("camConnected")==="no")return fail("采集失败","模拟相机已断开");
+  if((field("cameraMode")==="event"||field("camTrigger")==="line")&&!incoming)return fail("无输入","本轮未收到相机触发帧");
+  frame=++session.frame;id=incoming||sampleIds[(frame-1)%sampleIds.length];
+ }
+ const asset=assets.get(id),format=s==="local"?field("format"):s==="camera"?field("camFormat"):"RGB24";
+ let raw=format==="Mono8"?grayscale(asset.image):asset.image;
+ if(s==="camera"){
+  const active=field("cameraMode")==="active",gain=active&&field("gain")?(session===debug?Number(byId("gainValue").value):1):Number(field("camGain"));
+  const exp=active&&field("exposure")?(session===debug?Number(byId("exposureValue").value):8000):Number(field("camExposure"));
+  if(!Number.isFinite(gain)||gain<0||!Number.isFinite(exp)||exp<=0)return fail("输入无效","曝光或增益订阅值无效");
+  const target=makeCanvas(raw.width,raw.height),ctx=target.getContext("2d");ctx.filter="brightness("+Math.min(5,Math.pow(10,gain/20)*exp/8000)+")";ctx.drawImage(raw,0,0);raw=target;
+ }
+ let image=raw;
+ if(field("stitch")){
+  const old=field("clearOn")&&Number(field("clearValue"))!==0?null:session.previous;
+  const ok=old?.format===format&&old.image.width===raw.width,y=Number(field("cropY")),h=Number(field("cropH"));
+  if(y+h>(ok?old.image.height:raw.height))return fail("配置无效","裁剪区超过帧高度");
+  image=makeCanvas(raw.width,raw.height+h);const ctx=image.getContext("2d");ctx.fillStyle="#000";ctx.fillRect(0,0,image.width,image.height);
+  if(ok&&h>0)ctx.drawImage(old.image,0,y,raw.width,h,0,0,raw.width,h);ctx.drawImage(raw,0,h);
+ }
+ session.previous={image:raw,format};const gray=format==="RGB24"&&field("mono")?grayscale(image):null;
+ const sn=Number(field("snValue"))+(field("snKind")==="binding"?1:session.success);session.success++;
+ let end=false;if(s==="local"){const k=ids.indexOf(id);end=k===ids.length-1&&field("last");session.next=field("autoNext")&&!end?ids[(k+1)%ids.length]:id;}
+ const name=s==="local"?asset.name:s==="camera"?"模拟相机帧 "+frame:"模拟 SDK 帧";
+ publish(session,{state:"成功",name,image,gray,format,path:asset.path,sn,frame,failures:session.failures||0,cost:performance.now()-start});
+ if(end&&session.timer!==null)stop(session);status(session.label+" #"+session.count+" 成功 · SN "+sn+(end?" · 已到末张":""));return true;
+}
+function continuous(session){
+ if(session.timer!==null){stop(session);status(session.label+"连续执行已停止");return;}
+ session.timer=setInterval(()=>runOnce(session),Math.max(1,field("source")==="local"?Number(field("interval")):700));
+ byId(session===debug?"continuous":"formalContinuous").textContent=session===debug?"停止调试":"停止流程";runOnce(session);
+}
+function folderChange(add){
+ if(!field("watch"))return;
+ if(add){const id=newSample(5+folderChanges++,"模拟目录/来料图像");folderIds.push(id);config.checked.push(id);}
+ else{if(!folderIds.length)return;const id=folderIds.pop();config.checked=config.checked.filter(x=>x!==id);}
+ if(field("watchThumbs"))folderThumbs=[...folderIds];if(!visibleIds().includes(selected))selected=visibleIds()[0]||null;sync();
+ status("模拟目录已"+(add?"新增":"删除")+"一张图片");
+ if(field("watchRun")){folderRuns++;runOnce(formal);}
+}
+async function importFiles(input){
+ const files=[...input.files];input.value="";if(!files.length)return;const imported=[];
+ for(const file of files.filter(f=>f.type.startsWith("image/")||/\.(png|jpe?g|bmp|gif|webp)$/i.test(f.name))){
+  const url=URL.createObjectURL(file);
+  try{const im=new Image();im.src=url;await im.decode();if(im.naturalWidth*im.naturalHeight>16000000)continue;
+  const c=makeCanvas(im.naturalWidth,im.naturalHeight);c.getContext("2d").drawImage(im,0,0);imported.push(addAsset(c,file.name,file.webkitRelativePath||file.name));}
+  catch{/* 失败项计入导入反馈。 */}finally{URL.revokeObjectURL(url);}
+ }
+ if(field("source")!=="local"||field("watch")){status("图像来源已改变，已取消导入");return;}
+ if(field("embed")&&config.ids.length+imported.length>120){status("方案存图最多 120 张，请减少本次导入数量");return;}
+ if(imported.length){mutate(()=>{config.ids.push(...imported);config.checked.push(...imported);},true);setSelected(imported[0]);}
+ status("导入 "+imported.length+" / "+files.length+" 项"+(imported.length<files.length?" · 支持可解码且不超过 1600 万像素的图片":""));
+}
+function changeField(el){
+ const id=el.id,value=getControl(el);
+ if(el.type==="number"&&(value===""||!el.validity.valid)){el.value=field(id);status("输入超出范围，保留原值");return;}
+ if(id==="embed"&&value&&activeIds().length>120){el.checked=false;status("方案存图最多 120 张");return;}
+ mutate(()=>{
+  config.fields[id]=value;
+  if(id==="source"&&value!=="local")config.fields.snKind="fixed";
+  if(id==="watch"&&value||id==="watchThumbs"&&value)folderThumbs=[...folderIds];
+  if(id==="watch")selected=visibleIds()[0]||null;
+ },["source","device","cameraMode","snKind","snValue","format","watch","camFormat"].includes(id));
+ if(id==="source"){locked=null;lastView=null;byId("layer").value="source";showHistory();showResults();showPreview();}
+ if(id==="format"&&!locked){byId("layer").value="source";showPreview();}
+}
+controls.forEach(el=>el.addEventListener("change",()=>changeField(el)));
+byId("autoMirror").onchange=e=>{const val=e.target.checked;mutate(()=>{config.fields.autoNext=val;});};
+byId("undo").onclick=()=>{
+ if(!edits.length)return;config=edits.pop();if(!visibleIds().includes(selected))selected=visibleIds()[0]||null;
+ resetSessions();locked=null;lastView=null;byId("layer").value="source";sync();showHistory();status("已撤销上一项编辑");
+};
+byId("files").onchange=e=>importFiles(e.target);byId("folderFiles").onchange=e=>importFiles(e.target);
+byId("add").onclick=()=>byId("files").click();byId("addFolder").onclick=()=>byId("folderFiles").click();
+byId("remove").onclick=()=>{mutate(()=>{config.ids=config.ids.filter(x=>x!==selected);config.checked=config.checked.filter(x=>x!==selected);selected=config.ids[0]||null;},true);setSelected(selected);status("已移除图片引用，可撤销");};
+byId("clearList").onclick=()=>{mutate(()=>{config.ids=[];config.checked=[];selected=null;},true);setSelected(null);status("已清空图片引用，可撤销");};
+byId("prev").onclick=()=>changePreview(-1);byId("next").onclick=()=>changePreview(1);byId("first").onclick=()=>setSelected(visibleIds()[0]||null);
+byId("folderPlus").onclick=()=>folderChange(true);byId("folderMinus").onclick=()=>folderChange(false);
+function openEditor(){byId("editor").hidden=false;byId("source").focus();}
+function closeEditor(){byId("editor").hidden=true;byId("node").focus();status("已关闭参数窗口，编辑已生效");}
+byId("node").onclick=()=>{byId("observeContext").textContent="取像流程 / 图像源";status("当前选中图像源");};
+byId("tool").onclick=()=>{byId("node").focus();byId("node").click();};
+byId("node").ondblclick=openEditor;byId("properties").onclick=openEditor;byId("node").onkeydown=e=>{if(e.key==="Enter"){e.preventDefault();openEditor();}};
+byId("close").onclick=byId("topClose").onclick=closeEditor;
+function openPop(key){
+ const on=byId(key+"Pop").hidden;
+ for(const other of ["debug","external","timing"].filter(k=>k!==key)){
+  byId(other+"Pop").hidden=true;byId(other+"Open").setAttribute("aria-expanded","false");
+ }
+ byId(key+"Pop").hidden=!on;byId(key+"Open").setAttribute("aria-expanded",String(on));sections();
+}
+byId("debugOpen").onclick=()=>openPop("debug");byId("externalOpen").onclick=()=>openPop("external");byId("timingOpen").onclick=()=>openPop("timing");
+byId("sheetDebug").onclick=()=>{byId("debugPop").hidden=true;openPop("debug");byId("run").focus();};
+byId("run").onclick=()=>{stop(debug);runOnce(debug);};byId("continuous").onclick=()=>continuous(debug);
+byId("formalRun").onclick=()=>{stop(formal);runOnce(formal);};byId("formalContinuous").onclick=()=>continuous(formal);
+byId("inject").onclick=()=>{debug.incoming=sampleIds[debug.count%sampleIds.length];byId("layer").value="source";sections();showPreview();status("已备好一帧独立调试输入");};
+function externalSubmit(expected){
+ if(field("source")!==expected)return;
+ if(expected==="camera"&&field("cameraMode")==="active"&&field("camTrigger")!=="line"){status("主动软触发相机请使用「执行一次流程」");return;}
+ formal.message=byId("withMessage").checked?byId("externalText").value:null;
+ if(expected!=="local")formal.incoming=sampleIds[formal.count%sampleIds.length];runOnce(formal);
+}
+byId("signal").onclick=()=>externalSubmit("camera");byId("submitSdk").onclick=()=>externalSubmit("sdk");
+byId("submitChar").onclick=()=>externalSubmit("local");byId("messageReceived").onchange=byId("withMessage").onchange=sections;
+function showManager(from){openCameraFrom=from;byId("manager").hidden=false;byId("camConnected").focus();}
+function closeManager(){byId("manager").hidden=true;(openCameraFrom||byId("cameraManage")).focus();}
+byId("cameraManage").onclick=e=>showManager(e.currentTarget);byId("cameraShortcut").onclick=e=>showManager(e.currentTarget);
+byId("managerClose").onclick=byId("managerDone").onclick=closeManager;
+document.addEventListener("keydown",e=>{if(e.key!=="Escape")return;
+ if(!byId("manager").hidden)closeManager();
+ else if(!byId("debugPop").hidden){openPop("debug");byId("debugOpen").focus();}
+ else if(!byId("externalPop").hidden){openPop("external");byId("externalOpen").focus();}
+ else if(!byId("timingPop").hidden){openPop("timing");byId("timingOpen").focus();}
+ else if(!byId("editor").hidden)closeEditor();
+});
+byId("tabImage").onclick=()=>setTab(false);byId("tabResults").onclick=()=>setTab(true);
+function setHelp(help){
+ byId("histPage").hidden=help;byId("helpPage").hidden=!help;byId("historyMark").hidden=byId("live").hidden=help;
+ byId("histTab").setAttribute("aria-selected",String(!help));byId("helpTab").setAttribute("aria-selected",String(help));
+}
+byId("histTab").onclick=()=>setHelp(false);byId("helpTab").onclick=()=>setHelp(true);
+byId("histTab").parentElement.onkeydown=e=>{if(e.key==="ArrowLeft"||e.key==="ArrowRight"){e.preventDefault();const help=byId("helpPage").hidden;setHelp(help);byId(help?"helpTab":"histTab").focus();}};
+document.querySelector(".tabs").onkeydown=e=>{if(e.key==="ArrowLeft"||e.key==="ArrowRight"){e.preventDefault();const result=byId("results").hidden;setTab(result);byId(result?"tabResults":"tabImage").focus();}};
+byId("live").onclick=()=>{locked=null;byId("layer").value=lastView?.image?"image":"source";zoom=null;showHistory();showPreview();showResults();};
+byId("copyRef").onclick=async()=>{if(!reference)return;try{await navigator.clipboard.writeText(reference);status("已复制 VisionPro 结果引用");}
+ catch{const range=document.createRange();range.selectNodeContents(byId("refText"));const selection=window.getSelection();selection.removeAllRanges();selection.addRange(range);status("已选中结果引用，可按 Ctrl+C 复制");}};
+byId("layer").onchange=()=>{zoom=null;showPreview();};byId("fit").onclick=()=>{zoom=null;layoutCanvas();};
+function stepZoom(f){const actual=byId("viewImage").getBoundingClientRect().width/byId("viewImage").width;zoom=Math.max(.05,Math.min(6,actual*f));layoutCanvas();}
+byId("minus").onclick=()=>stepZoom(1/1.25);byId("plus").onclick=()=>stepZoom(1.25);
+const handle=byId("dragHandle");let drag=null;
+handle.onpointerdown=e=>{if(e.target.closest("button"))return;const sheet=byId("editor");drag={x:e.clientX,y:e.clientY,left:sheet.offsetLeft,top:sheet.offsetTop};handle.setPointerCapture(e.pointerId);};
+handle.onpointermove=e=>{if(!drag)return;const board=byId("board"),sheet=byId("editor");
+ sheet.style.left=Math.max(0,Math.min(board.clientWidth-sheet.offsetWidth,drag.left+e.clientX-drag.x))+"px";
+ sheet.style.top=Math.max(0,Math.min(board.clientHeight-sheet.offsetHeight,drag.top+e.clientY-drag.y))+"px";
+};
+handle.onpointerup=handle.onpointercancel=()=>{drag=null;};
+window.addEventListener("resize",()=>{byId("editor").style.left="";byId("editor").style.top="";});
+new ResizeObserver(layoutCanvas).observe(byId("screen"));sync();showHistory();
+</script>
+</body>
+</html>

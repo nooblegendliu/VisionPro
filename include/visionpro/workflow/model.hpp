@@ -50,14 +50,29 @@ struct GroupConfiguration {
     std::vector<OutputMapping> outputs;
     std::vector<ControlOutputMapping> control_exports;
     std::optional<LoopConfiguration> loop{};
+    std::vector<core::GlobalVariableDefinition> local_variables{};
 };
 struct NodeResourceBinding { core::SchemaId slot; core::ResourceReference resource; };
+enum class VariableScope { Global, Local };
+struct ResultVariableBinding {
+    core::OutputId output;
+    VariableScope scope;
+    core::VariableId variable;
+    bool operator==(const ResultVariableBinding&) const = default;
+};
+[[nodiscard]] bool result_variable_compatible(const core::DataType& output, const core::DataType& variable) noexcept;
 enum class JoinPolicy { AllActivated };
 struct NodeExecutionPolicy {
     std::uint32_t timeout_ms{0}; // Per attempt. Zero disables the deadline.
     std::uint32_t max_retries{0}; // Additional attempts after the initial call.
     std::optional<core::ControlOutputId> error_output{};
     bool operator==(const NodeExecutionPolicy&) const = default;
+};
+struct ResultDisplayStyle {
+    core::InputId item;
+    OutputReference source;
+    core::DisplayItemStyle style;
+    bool operator==(const ResultDisplayStyle&) const = default;
 };
 struct Node {
     core::NodeId id;
@@ -68,7 +83,10 @@ struct Node {
     bool enabled{true};
     JoinPolicy join{JoinPolicy::AllActivated};
     NodeExecutionPolicy execution_policy{};
+    std::vector<ResultVariableBinding> result_variables{};
+    std::vector<ResultDisplayStyle> display_styles{};
 };
+[[nodiscard]] core::ToolDescriptor specialize_tool(const core::ToolDescriptor& descriptor, const Node& node);
 struct ControlLink {
     core::ControlLinkId id;
     core::NodeId source;
@@ -114,6 +132,7 @@ struct Workflow {
     std::vector<ControlOutputMapping> control_exports;
     WorkflowAdmission admission{};
     std::optional<WorkflowTrigger> trigger{};
+    std::vector<core::GlobalVariableDefinition> local_variables{};
 };
 struct DisplayColor {
     std::uint8_t red, green, blue;
@@ -147,6 +166,12 @@ struct SolutionGraph {
     std::vector<WorkflowPortBinding> bindings;
     bool operator==(const SolutionGraph&) const = default;
 };
+struct ImageArchivePolicy {
+    static constexpr std::uint32_t max_images_per_file = 65536;
+    core::ResourcePath directory;
+    std::uint32_t images_per_file{64};
+    bool operator==(const ImageArchivePolicy&) const = default;
+};
 struct Solution {
     core::SolutionId id;
     std::string name;
@@ -159,11 +184,13 @@ struct Solution {
     std::vector<core::CoordinateFrameDefinition> coordinates;
     std::vector<WorkflowLayout> layouts;
     std::optional<SolutionGraph> graph{};
+    std::optional<ImageArchivePolicy> image_archive{};
 };
 
 // Borrowed pointers remain valid only while their editable owner is unchanged/alive.
 [[nodiscard]] const Workflow* find_workflow(const Solution& solution, const core::WorkflowId& id) noexcept;
 [[nodiscard]] const Node* find_node(const Workflow& workflow, const core::NodeId& id) noexcept;
+[[nodiscard]] const std::vector<core::GlobalVariableDefinition>& local_variable_definitions(const Workflow& workflow, core::NodeId node) noexcept;
 [[nodiscard]] const NodePlacement* find_placement(const Solution& solution, const core::WorkflowId& workflow,
     const core::NodeId& node) noexcept;
 [[nodiscard]] core::Result<std::vector<core::NodeId>> children(const Workflow& workflow,

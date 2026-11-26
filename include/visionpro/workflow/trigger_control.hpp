@@ -32,6 +32,25 @@ public:
     [[nodiscard]] static core::Result<std::shared_ptr<TriggerControl>> start(
         std::shared_ptr<WorkflowSession> session, core::WorkflowId workflow,
         Clock::time_point now = Clock::now());
+    // SDK delivery numbers increase within one sender subscription. Rejected deliveries may be retried.
+    [[nodiscard]] static core::Result<std::shared_ptr<TriggerControl>> start_sdk(
+        std::shared_ptr<WorkflowSession> session, const SnapshotIdentity& target, core::WorkflowId workflow,
+        core::InputId image_input, core::SchemaId sender);
+    // A local subscription requires no synthetic public frame-number input in the workflow.
+    // Zero interval selects directory change events, a positive interval selects periodic ticks.
+    [[nodiscard]] static core::Result<std::shared_ptr<TriggerControl>> start_local(
+        std::shared_ptr<WorkflowSession> session, const SnapshotIdentity& target, core::WorkflowId workflow,
+        std::uint32_t interval_ms = 0, Clock::time_point now = Clock::now());
+    [[nodiscard]] TriggerReceipt sdk_frame(std::int64_t delivery, const core::ImageFrame& image,
+        std::optional<core::CorrelationId> correlation = {}, std::span<const RunInput> inputs = {});
+    // Borrows pixels only until this call returns. Padding and row stride are validated before admission.
+    [[nodiscard]] TriggerReceipt sdk_frame(std::int64_t delivery, const core::ImageLayout& layout,
+        std::span<const std::byte> pixels, core::CoordinateSystemId coordinates,
+        std::optional<core::FrameId> frame = {},
+        std::optional<std::chrono::sys_time<std::chrono::nanoseconds>> captured_at = {},
+        std::optional<core::CorrelationId> correlation = {}, std::span<const RunInput> inputs = {});
+    [[nodiscard]] bool accepting() const;
+    [[nodiscard]] TriggerReceipt directory_changed(std::int64_t batch, std::vector<DirectoryChange> changes);
     ~TriggerControl();
     TriggerControl(const TriggerControl&) = delete;
     TriggerControl& operator=(const TriggerControl&) = delete;
@@ -49,6 +68,9 @@ public:
     // A later call may continue waiting or request cancellation of remaining work.
     [[nodiscard]] core::Result<RunWaitOutcome> stop(TriggerStopMode mode, Clock::time_point deadline);
 private:
+    static core::Result<std::shared_ptr<TriggerControl>> start_image_entry(std::shared_ptr<WorkflowSession> session,
+        const SnapshotIdentity& target, core::WorkflowId workflow, core::SchemaId source,
+        std::optional<core::InputId> image_input, std::uint32_t interval_ms, Clock::time_point now);
     struct Impl;
     explicit TriggerControl(std::unique_ptr<Impl> impl);
     std::unique_ptr<Impl> impl_;

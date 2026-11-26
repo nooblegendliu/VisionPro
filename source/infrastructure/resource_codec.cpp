@@ -32,8 +32,6 @@ template<> struct EnumNames<OutputOverwrite> {
     static constexpr auto values = std::to_array<std::string_view>({"fail", "replace", "unique_suffix"});
 };
 
-namespace {
-
 Json encode_path(const ResourcePath& path)
 {
     return {{"base", write_enum(path.base)}, {"path", path.path}, {"named_root", write_optional(path.named_root, write_id<SchemaId>)}};
@@ -45,6 +43,8 @@ ResourcePath decode_path(const Reader& reader)
     return {read_enum<PathBase>(reader.field("base")), std::string(reader.field("path").text()),
         read_optional<SchemaId>(reader.field("named_root"), read_id<SchemaId>)};
 }
+
+namespace {
 
 Json encode_revision(const std::optional<std::uint64_t>& revision)
 {
@@ -77,9 +77,11 @@ Json encode_location(const ImageSequenceResource& resource)
     } else {
         selection = {{"kind", "files"}, {"files", write_array(std::get<std::vector<ResourcePath>>(resource.selection), encode_path)}};
     }
-    return {{"kind", "image_sequence"}, {"selection", std::move(selection)}, {"sort", write_enum(resource.sort)},
+    Json result{{"kind", "image_sequence"}, {"selection", std::move(selection)}, {"sort", write_enum(resource.sort)},
         {"advance", write_enum(resource.advance)}, {"repeat", write_enum(resource.repeat)}, {"missing", write_enum(resource.missing)},
         {"trigger", write_enum(resource.trigger)}, {"initial_index", std::to_string(resource.initial_index)}};
+    if (!resource.embedded_sha256.empty()) { result["embedded_sha256"] = resource.embedded_sha256; }
+    return result;
 }
 
 Json encode_location(const DeviceResource& resource)
@@ -123,11 +125,16 @@ ResourceLocation decode_location(const Reader& reader)
             read_optional<std::string>(reader.field("expected_sha256"), &Reader::text), decode_revision(reader.field("revision"))};
     }
     if (token == "image_sequence") {
-        reader.object({"kind", "selection", "sort", "advance", "repeat", "missing", "trigger", "initial_index"});
-        return ImageSequenceResource{decode_selection(reader.field("selection")), read_enum<SequenceSort>(reader.field("sort")),
+        reader.object({"kind", "selection", "sort", "advance", "repeat", "missing", "trigger", "initial_index", "embedded_sha256"});
+        ImageSequenceResource sequence{decode_selection(reader.field("selection")), read_enum<SequenceSort>(reader.field("sort")),
             read_enum<SequenceAdvance>(reader.field("advance")), read_enum<SequenceRepeat>(reader.field("repeat")),
             read_enum<SequenceMissing>(reader.field("missing")), read_enum<SequenceTrigger>(reader.field("trigger")),
             reader.field("initial_index").size_value()};
+        if (reader.contains("embedded_sha256")) {
+            sequence.embedded_sha256 = read_array<std::string>(reader.field("embedded_sha256"),
+                [](const Reader& hash) { return std::string(hash.text()); });
+        }
+        return sequence;
     }
     if (token == "device") {
         reader.object({"kind", "adapter", "configuration"});

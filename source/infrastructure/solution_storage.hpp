@@ -21,7 +21,8 @@ public:
     PackageWriteLock& operator=(PackageWriteLock&& other) noexcept;
     ~PackageWriteLock();
 
-    [[nodiscard]] static core::Result<PackageWriteLock> acquire(const std::filesystem::path& directory);
+    [[nodiscard]] static core::Result<PackageWriteLock> acquire(const std::filesystem::path& directory,
+        bool require_local_ntfs = true, bool wait = true);
 
 private:
     explicit PackageWriteLock(void* handle) noexcept : handle_(handle) {}

@@ -88,6 +88,7 @@ class ImageViewTests final : public QObject {
 
 private slots:
     void owns_and_displays_strided_cropped_bgr();
+    void rgb24_preserves_channels_and_pixel_readout();
     void aligns_effective_mask_and_geometry_in_the_crop();
     void preserves_business_coordinates_through_zoom_pan_and_draw();
     void keyboard_pixel_inspection_and_compatible_frames();
@@ -139,6 +140,21 @@ void ImageViewTests::owns_and_displays_strided_cropped_bgr()
     QCOMPARE(render_viewport(view).pixelColor(position), QColor(142, 82, 22));
     view.clear_image();
     QVERIFY(!view.pixel_at(position));
+}
+
+void ImageViewTests::rgb24_preserves_channels_and_pixel_readout()
+{
+    const auto image = take(core::ImageHandle::copy({1,1,3,{core::PixelDepth::UInt8,core::ChannelOrder::RGB}},
+        std::array{std::byte{190},std::byte{11},std::byte{38}}, frame("rgb")));
+    QCOMPARE(take(ui::to_display_image(image)).pixelColor(0,0), QColor(190,11,38));
+    ui::ImageView view;
+    view.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&view));
+    take(view.set_image(image));
+    QSignalSpy changed(&view,&ui::ImageView::pixel_changed);
+    move_pointer(view.viewport(),view.mapFromScene(QPointF(0,0)));
+    QVERIFY(!changed.isEmpty());
+    QVERIFY(changed.takeLast().front().toString().contains("R 190, G 11, B 38"));
 }
 
 void ImageViewTests::aligns_effective_mask_and_geometry_in_the_crop()

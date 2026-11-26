@@ -1,6 +1,9 @@
 #include "editor_inspector.hpp"
+#include "image_source_fields.hpp"
+#include "image_output_settings.hpp"
 #include "data_type_text.hpp"
 #include "toolbox_catalog.hpp"
+#include "workspace_icons.hpp"
 #include "binary_editor.hpp"
 #include "endpoint_editor.hpp"
 #include "camera_editor.hpp"
@@ -12,6 +15,7 @@
 
 #include <visionpro/core/id_factory.hpp>
 #include <visionpro/core/schema_id_factory.hpp>
+#include <visionpro/infrastructure/camera.hpp>
 #include <visionpro/workflow/validation.hpp>
 
 #include <QApplication>
@@ -19,6 +23,7 @@
 #include <QComboBox>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QDir>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFormLayout>
@@ -41,6 +46,7 @@
 #include <QSpinBox>
 #include <QStringList>
 #include <QTimer>
+#include <QToolButton>
 #include <QTabBar>
 #include <QStackedWidget>
 #include <QUndoStack>
@@ -221,7 +227,7 @@ QString constant_text(const ConfigValue& value)
     }
     if (value.type().kind() == TypeKind::Optional) {
         const auto* inner = value.optional_value();
-        return inner ? constant_text(*inner) : QStringLiteral("None");
+        return inner ? constant_text(*inner) : QObject::tr("无");
     }
     return type_text(value.type());
 }
@@ -308,6 +314,24 @@ QString reference_text(const Solution& solution, const QString& prefix, const Se
     return selector.empty() ? prefix : QStringLiteral("%1 / %2").arg(prefix, selector_text(selector, &solution));
 }
 
+QString variable_label(const Solution& solution, VariableId id)
+{
+    const auto named = [id](const std::vector<GlobalVariableDefinition>& variables, const QString& owner) {
+        const auto found = std::ranges::find(variables, id, &GlobalVariableDefinition::id);
+        return found == variables.end() ? QString{} : owner + QStringLiteral(" · ") + qtext(found->name);
+    };
+    if (const auto label = named(solution.variables, QObject::tr("全局")); !label.isEmpty()) { return label; }
+    for (const auto& flow : solution.workflows) {
+        if (const auto label = named(flow.local_variables, qtext(flow.name)); !label.isEmpty()) { return label; }
+        for (const auto& node : flow.nodes) {
+            if (const auto* group = std::get_if<GroupConfiguration>(&node.configuration)) {
+                if (const auto label = named(group->local_variables, qtext(node.name)); !label.isEmpty()) { return label; }
+            }
+        }
+    }
+    return QObject::tr("变量缺失");
+}
+
 QString source_text(const Solution& solution, const BindingSource& source)
 {
     return std::visit([&](const auto& value) -> QString {
@@ -321,14 +345,24 @@ QString source_text(const Solution& solution, const BindingSource& source)
             return reference_text(solution, QStringLiteral("%1 [%2] → %3").arg(name, short_id(value.node), output_text(value.output)),
                 value.selector);
         } else if constexpr (std::is_same_v<Value, ScopedInputReference>) {
-            return reference_text(solution, QStringLiteral("Public input %1").arg(id_text(value.input)), value.selector);
+            auto label = id_text(value.input);
+            if (const auto* flow = find_workflow(solution, value.workflow)) {
+                const auto* owner = value.group ? find_node(*flow, *value.group) : nullptr;
+                const auto* group = owner ? std::get_if<GroupConfiguration>(&owner->configuration) : nullptr;
+                const auto* ports = group ? &group->interface.inputs : value.group ? nullptr : &flow->interface.inputs;
+                if (ports) {
+                    const auto input = std::ranges::find(*ports, value.input, &InputDescriptor::id);
+                    if (input != ports->end() && !input->display_name.empty()) { label = qtext(input->display_name); }
+                }
+            }
+            return reference_text(solution, (value.group ? QObject::tr("分组输入 · %1") : QObject::tr("流程输入 · %1"))
+                .arg(label), value.selector);
         } else if constexpr (std::is_same_v<Value, ResourceReference>) {
             const auto found = std::ranges::find(solution.resources, value.id, &ResourceDefinition::id);
             const auto name = found == solution.resources.end() ? QStringLiteral("Missing resource") : qtext(found->name);
             return QStringLiteral("%1 [%2]").arg(name, short_id(value.id));
         } else {
-            const auto found = std::ranges::find(solution.variables, value.variable, &GlobalVariableDefinition::id);
-            const auto name = found == solution.variables.end() ? QStringLiteral("Missing variable") : qtext(found->name);
+            const auto name = variable_label(solution, value.variable);
             return reference_text(solution, QStringLiteral("%1 [%2]").arg(name, short_id(value.variable)), value.selector);
         }
     }, source);
@@ -717,7 +751,7 @@ QString kind_text(BindingSourceKind kind)
     case BindingSourceKind::RunOutput: return QObject::tr("节点输出");
     case BindingSourceKind::PublicInput: return QObject::tr("公开输入");
     case BindingSourceKind::Resource: return QObject::tr("资源");
-    case BindingSourceKind::GlobalRead: return QObject::tr("全局变量");
+    case BindingSourceKind::GlobalRead: return QObject::tr("变量（全局或局部）");
     }
     return {};
 }
@@ -764,11 +798,15 @@ Choices<TypedSource> binding_choices(const Solution& solution, const Workflow& f
         }
     } else if (kind == BindingSourceKind::GlobalRead) {
         const auto* prior = current ? std::get_if<GlobalReference>(current) : nullptr;
-        for (const auto& variable : solution.variables) {
-            const auto pinned = prior && variable.id == prior->variable ? prior->required_revision : std::nullopt;
-            choices.emplace_back(QStringLiteral("%1 [%2]").arg(qtext(variable.name), short_id(variable.id)),
-                TypedSource{GlobalReference{variable.id, pinned, {}}, variable.type, {}});
-        }
+        const auto append = [&](const auto& definitions, const QString& owner) {
+            for (const auto& variable : definitions) {
+                const auto pinned = prior && variable.id == prior->variable ? prior->required_revision : std::nullopt;
+                choices.emplace_back(QStringLiteral("%1 · %2 [%3]").arg(owner, qtext(variable.name), short_id(variable.id)),
+                    TypedSource{GlobalReference{variable.id, pinned, {}}, variable.type, {}});
+            }
+        };
+        append(solution.variables, QObject::tr("全局"));
+        append(local_variable_definitions(flow, node), scope ? QObject::tr("组局部") : QObject::tr("流程局部"));
     }
     return choices;
 }
@@ -1014,6 +1052,7 @@ struct InspectorContext {
     const EditorInspector::HashFile& hash_file;
     const bool& refresh_pending;
     const std::optional<NodeTarget>& pin;
+    const std::function<void()>& camera_manager;
 
     template<class Change>
     bool edit_flow(const WorkflowId& id, const QString& label, const Change& change) const
@@ -1263,6 +1302,7 @@ void edit_execution_policy(const InspectorContext& context, WorkflowId flow, Nod
     retries->setObjectName(QStringLiteral("nodeMaxRetries"));
     retries->setEnabled(tool.execution.retry != ToolRetry::Never || current.max_retries);
     const auto capability = tool.execution.retry == ToolRetry::ProtocolDeduplicated ? QStringLiteral("Protocol deduplication")
+        : tool.execution.retry == ToolRetry::StagedState ? QObject::tr("同一帧的结果受理前可重试")
         : tool.execution.retry == ToolRetry::Idempotent ? QStringLiteral("Pure computation") : QStringLiteral("Retries disabled");
     auto* outlet = new QLineEdit(current.error_output ? id_text(*current.error_output) : QString{}, &dialog);
     outlet->setObjectName(QStringLiteral("nodeErrorOutlet"));
@@ -1586,6 +1626,10 @@ QWidget* constant_field(QWidget* owner, const InspectorContext& context, const W
         const auto* workflow = find_workflow(context.model.draft(), flow);
         const auto* current = workflow ? find_node(*workflow, node) : nullptr;
         if (!current) { return QObject::tr("节点已变更。"); }
+        if (is_image_source(current) && target.id.text() == "folder_path" && value.as_string()
+            && !value.as_string()->empty() && !QDir::isAbsolutePath(qtext(*value.as_string()))) {
+            return QObject::tr("请输入绝对目录路径或 UNC 共享路径。");
+        }
         const BindingTarget id{target.id};
         const auto previous = std::ranges::find(current->bindings, id, &Binding::target);
         if ((previous != current->bindings.end()) != bound || (bound && (previous->conversion != conversion
@@ -1695,7 +1739,7 @@ void select_resource(const InspectorContext& context, const WorkflowId& id, cons
     const auto found = std::ranges::find(node->resources, slot.slot, &NodeResourceBinding::slot);
     const auto old = found == node->resources.end() ? std::nullopt : std::optional{found->resource};
     const auto* config = std::get_if<ToolConfiguration>(&node->configuration);
-    const bool camera = config && config->type.text() == "visionpro.camera.acquire" && slot.kind == ResourceKind::Device;
+    const bool camera = config && (is_image_source(node) || config->type.text() == "visionpro.camera.acquire") && slot.kind == ResourceKind::Device;
     const auto endpoint = config && slot.kind == ResourceKind::Device ? endpoint_adapter(config->type) : std::nullopt;
     Choices<std::optional<ResourceReference>> choices{{QStringLiteral("Unbound"), std::nullopt}};
     std::size_t current = 0;
@@ -1745,7 +1789,7 @@ void select_external_file(const InspectorContext& context, const WorkflowId& id,
 }
 
 void resource_row(QFormLayout& form, QWidget* owner, const InspectorContext& context, const Workflow& flow,
-    const Node& node, const ResourceRequirement& slot)
+    const Node& node, const ResourceRequirement& slot, const QString& row_label = {})
 {
     const auto bound = std::ranges::find(node.resources, slot.slot, &NodeResourceBinding::slot);
     const auto* configuration = std::get_if<ToolConfiguration>(&node.configuration);
@@ -1761,17 +1805,93 @@ void resource_row(QFormLayout& form, QWidget* owner, const InspectorContext& con
                                        : QStringLiteral(" · Expected %1").arg(qtext(*endpoint));
     }
     auto* row = new QHBoxLayout;
-    auto* edit = action(owner, button_text(summary), "selectNodeResource", [context, id = flow.id, selected = node.id, slot] {
-        select_resource(context, id, selected, slot);
-    });
-    edit->setToolTip(summary);
-    row->addWidget(edit, 1);
+    const bool source_camera = is_image_source(&node) && slot.kind == ResourceKind::Device;
+    if (source_camera) {
+        auto* cameras = new QComboBox(owner);
+        cameras->setObjectName(QStringLiteral("selectNodeResource"));
+        cameras->setAccessibleName(QObject::tr("关联相机"));
+        cameras->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+        cameras->setMinimumContentsLength(8);
+        cameras->addItem(QObject::tr("未关联"));
+        const auto& resources = context.model.draft().resources;
+        for (const auto& resource : resources) {
+            if (!is_camera_device(resource)) { continue; }
+            const auto label = qtext(resource.name);
+            const auto id = qtext(resource.id.to_string());
+            const bool duplicate = std::ranges::any_of(resources, [&](const auto& other) {
+                return other.id != resource.id && other.name == resource.name && is_camera_device(other);
+            });
+            cameras->addItem(duplicate ? QStringLiteral("%1 [%2]").arg(label, short_id(resource.id)) : label, id);
+            cameras->setItemData(cameras->count() - 1, QStringLiteral("%1\n%2").arg(label, id), Qt::ToolTipRole);
+        }
+        if (bound != node.resources.end()) {
+            const auto id = qtext(bound->resource.id.to_string());
+            if (cameras->findData(id) < 0) { cameras->addItem(QObject::tr("相机不可用 [%1]").arg(short_id(bound->resource.id)), id); }
+            cameras->setCurrentIndex(cameras->findData(id));
+        }
+        cameras->setToolTip(cameras->currentText());
+        QObject::connect(cameras, &QComboBox::activated, owner, [cameras, context, flow_id = flow.id, node_id = node.id, slot, previous = cameras->currentIndex()](int index) {
+            if (index == previous) { return; }
+            const auto id = cameras->itemData(index).toString();
+            guarded(context.owner, [&] {
+                context.edit_node(flow_id, node_id, QObject::tr("关联相机"), [&](Solution& solution, Workflow&, Node& draft) -> Check {
+                    std::optional<ResourceReference> ref;
+                    if (!id.isEmpty()) {
+                        const auto found = std::ranges::find_if(solution.resources, [&](const auto& r) {
+                            return qtext(r.id.to_string()) == id && is_camera_device(r);
+                        });
+                        if (found == solution.resources.end()) { return error(ErrorCode::UnknownTarget, "Camera resource is unavailable."); }
+                        ref = ResourceReference{found->id, ResourceKind::Device, {}};
+                    }
+                    write_resource_binding(draft, slot, ref);
+                    return std::monostate{};
+                });
+            });
+        });
+        row->addWidget(cameras, 1);
+    } else {
+        auto* edit = action(owner, button_text(summary), "selectNodeResource", [context, id = flow.id, selected = node.id, slot] {
+            select_resource(context, id, selected, slot);
+        });
+        edit->setToolTip(summary);
+        row->addWidget(edit, 1);
+    }
     const bool locked_file = slot.kind == ResourceKind::Calibration || slot.kind == ResourceKind::Template;
+    if (slot.kind == ResourceKind::OutputPath) {
+        auto* choose = action(owner, QObject::tr("选择目录…"), "chooseImageOutputDirectory",
+            [context,id=flow.id,selected=node.id,slot] {
+                const auto path = QFileDialog::getExistingDirectory(context.owner, QObject::tr("选择存图目录"));
+                if (path.isEmpty()) { return; }
+                const ResourcePath selected_path{PathBase::Absolute, utf8(QDir::fromNativeSeparators(path)), {}};
+                context.edit_node(id,selected,QObject::tr("配置存图目录"), [&](Solution& solution,Workflow&,Node& draft) -> Check {
+                    auto it = std::ranges::find_if(solution.resources,[&](const auto& resource) {
+                        const auto* directory = std::get_if<OutputPathResource>(&resource.location);
+                        return directory && directory->directory == selected_path;
+                    });
+                    if (it == solution.resources.end()) {
+                        auto created = IdFactory::generate<ResourceId>();
+                        if (auto* failure = std::get_if<Diagnostic>(&created)) { return *failure; }
+                        OutputPathResource directory{selected_path,OutputNaming::SequenceNumber,"image","png",
+                            OutputOverwrite::UniqueSuffix,std::numeric_limits<std::uint64_t>::max()};
+                        ResourceDefinition resource{std::get<ResourceId>(created), utf8(path), ResourceKind::OutputPath, std::move(directory)};
+                        auto checked = validate_resource_definition(resource);
+                        if (auto* failure = std::get_if<Diagnostic>(&checked)) { return *failure; }
+                        solution.resources.push_back(std::move(resource));
+                        it = std::prev(solution.resources.end());
+                    }
+                    write_resource_binding(draft,slot,ResourceReference{it->id,ResourceKind::OutputPath,{}});
+                    return std::monostate{};
+                });
+            });
+        choose->setProperty("slot", id_text(slot.slot));
+        choose->setAccessibleName(QObject::tr("选择%1").arg(row_label));
+        row->addWidget(choose);
+    }
     if (file_resource_kind(slot.kind) && (!locked_file || context.hash_file)) {
         row->addWidget(action(owner, QStringLiteral("File…"), "chooseExternalResource",
             [context, id = flow.id, selected = node.id, slot] { select_external_file(context, id, selected, slot); }));
     }
-    const bool camera = configuration && configuration->type.text() == "visionpro.camera.acquire" && slot.kind == ResourceKind::Device;
+    const bool camera = configuration && (is_image_source(&node) || configuration->type.text() == "visionpro.camera.acquire") && slot.kind == ResourceKind::Device;
     if (camera || endpoint) {
         const auto save_device = [context, id = flow.id, selected = node.id, slot, endpoint](std::optional<ResourceId> original) {
             const auto& catalog = context.model.draft().resources;
@@ -1789,13 +1909,23 @@ void resource_row(QFormLayout& form, QWidget* owner, const InspectorContext& con
                 return std::monostate{};
             });
         };
-        row->addWidget(action(owner, QStringLiteral("New…"), endpoint ? "newEndpoint" : "newCameraDevice", [save_device] { save_device({}); }));
-        if (bound != node.resources.end() && compatible_endpoint) {
-            row->addWidget(action(owner, QStringLiteral("Edit device…"), endpoint ? "editEndpoint" : "editCameraDevice",
-                [save_device, resource = bound->resource.id] { save_device(resource); }));
+        if (source_camera && context.camera_manager) {
+            auto* manager = new QToolButton(owner);
+            manager->setObjectName(QStringLiteral("openSourceCameraManager"));
+            manager->setIcon(workspace_icon(WorkspaceIcon::Camera));
+            manager->setToolTip(QObject::tr("相机管理"));
+            manager->setAccessibleName(manager->toolTip());
+            QObject::connect(manager, &QToolButton::clicked, owner, [context] { guarded(context.owner, context.camera_manager); });
+            row->addWidget(manager);
+        } else {
+            row->addWidget(action(owner, QStringLiteral("New…"), endpoint ? "newEndpoint" : "newCameraDevice", [save_device] { save_device({}); }));
+            if (bound != node.resources.end() && compatible_endpoint) {
+                row->addWidget(action(owner, QStringLiteral("Edit device…"), endpoint ? "editEndpoint" : "editCameraDevice",
+                    [save_device, resource = bound->resource.id] { save_device(resource); }));
+            }
         }
     }
-    form.addRow(id_text(slot.slot), row);
+    form.addRow(!row_label.isEmpty() ? row_label : camera ? QObject::tr("关联相机") : id_text(slot.slot), row);
 }
 
 Choices<SharedTargetId> compatible_targets(const Solution& solution, const SharedTargetRequirement& requirement)
@@ -1898,7 +2028,548 @@ void shared_targets(QVBoxLayout& panel, const InspectorContext& context, const W
     form->addRow(type_text(requirement.type), button);
 }
 
-void tool_settings(QVBoxLayout& panel, const InspectorContext& context, const Workflow& flow, const Node& node)
+Check next_interface_version(const Solution& solution, const ToolRegistry& registry, PublicInterface& interface);
+
+const ResourceDefinition* source_camera_device(const Solution& solution, const Node& node)
+{
+    const auto slot = std::ranges::find(node.resources, source_key<SchemaId>("camera"), &NodeResourceBinding::slot);
+    if (slot == node.resources.end()) { return nullptr; }
+    const auto camera = std::ranges::find(solution.resources, slot->resource.id, &ResourceDefinition::id);
+    return camera == solution.resources.end() ? nullptr : &*camera;
+}
+
+std::optional<InputId> source_workflow_image_input(const Workflow& flow, const Node& node)
+{
+    const auto image = std::ranges::find(node.bindings, BindingTarget{source_key<InputId>("image")}, &Binding::target);
+    if (image == node.bindings.end() || image->sources.size() != 1) { return std::nullopt; }
+    const auto* ref = std::get_if<ScopedInputReference>(&image->sources.front());
+    if (!ref || ref->workflow != flow.id || ref->group || !ref->selector.empty()) { return std::nullopt; }
+    return ref->input;
+}
+
+void edit_source_camera_trigger(const InspectorContext& context, WorkflowId flow_id, NodeId node_id,
+    const std::optional<WorkflowTrigger>& current, std::optional<InputId> prior, const DataType& type)
+{
+    const auto image_id = source_key<InputId>("image");
+    const auto& solution = context.model.draft();
+    const auto* original = find_workflow(solution, flow_id);
+    const auto* source = original ? find_node(*original, node_id) : nullptr;
+    if (!source || original->trigger != current || (current && !current->camera)) { return; }
+    Workflow offered{original->id, original->name, original->interface, {}, {}, {}, {}, {}};
+    offered.trigger = current;
+    Solution choices{solution.id, solution.name, solution.format_version, solution.revision, {}, solution.resources, {}, {}, solution.coordinates};
+    auto candidate = *source;
+    auto frame = ensure_source_frame(choices, candidate, false);
+    if (const auto* bad = std::get_if<Diagnostic>(&frame)) { warn(context.owner, qtext(bad->message)); return; }
+    const auto* origin = source_value(candidate, "frame_origin");
+    if (!origin || !origin->as_point2d()) { warn(context.owner, QObject::tr("请先选择固定的像素坐标系。")); return; }
+    const auto coordinates = origin->as_point2d()->coordinate_frame;
+    auto& ports = offered.interface.inputs;
+    const auto choose_port = [&](const char* spelling, const char* label, const DataType& kind, ValueSemantics semantics) {
+        const auto found = std::ranges::find_if(ports, [&](const InputDescriptor& p) {
+            return p.type == kind && (kind != DataType::image() || p.semantics.unit == MeasurementUnit::Unspecified
+                || p.semantics.unit == MeasurementUnit::Pixel);
+        });
+        if (found != ports.end()) { return found->id; }
+        auto id = source_key<InputId>(spelling);
+        for (unsigned i = 1; std::ranges::find(ports, id, &InputDescriptor::id) != ports.end(); ++i) {
+            id = source_key<InputId>(std::string(spelling) + "." + std::to_string(i));
+        }
+        ports.push_back({id, label, kind, true, {}, {}, {}, semantics});
+        return id;
+    };
+    const auto default_frame = choose_port("frame", "相机帧号", DataType::integer(), {});
+    const auto default_image = choose_port("image", "相机图像", DataType::image(), {MeasurementUnit::Pixel, coordinates});
+    const auto* camera = source_camera_device(solution, *source);
+    const auto source_id = current ? current->source : source_key<SchemaId>("camera." + node_id.to_string());
+    if (!current && camera) {
+        const auto mode = source_enum(*source, "mode", "Single");
+        const auto* timeout = source_value(*source, "timeout_ms");
+        const auto configured = infrastructure::camera_acquisition_settings(*camera);
+        if (const auto* bad = std::get_if<Diagnostic>(&configured)) { warn(context.owner, qtext(bad->message)); return; }
+        const auto settings = std::get<std::optional<infrastructure::CameraAcquisitionSettings>>(configured).value_or(
+            infrastructure::CameraAcquisitionSettings{
+                mode == "Continuous" ? CameraMode::Continuous : mode == "Software" ? CameraMode::Software :
+                    mode == "Hardware" ? CameraMode::Hardware : CameraMode::Single,
+                std::chrono::milliseconds{timeout && timeout->as_int64() ? *timeout->as_int64() : 1000}});
+        offered.trigger = WorkflowTrigger{TriggerMode::External, source_id, default_frame, 0,
+            CameraTriggerBinding{camera->id, prior.value_or(default_image), coordinates, settings.mode,
+                static_cast<std::uint32_t>(settings.timeout.count())}};
+    }
+    QDialog dialog(context.owner);
+    dialog.setWindowTitle(QObject::tr("相机帧启动流程"));
+    auto* layout = new QVBoxLayout(&dialog);
+    auto* number = new QComboBox(&dialog);
+    number->setObjectName(QStringLiteral("sourceTriggerFrameInput"));
+    for (const auto& p : ports) {
+        if (p.type == DataType::integer()) { number->addItem(qtext(p.display_name), id_text(p.id)); }
+    }
+    number->setCurrentIndex(number->findData(id_text(current ? current->frame_input : default_frame)));
+    auto* header = new QFormLayout;
+    header->addRow(QObject::tr("帧号输入"), number);
+    layout->addLayout(header);
+    auto* setup = new CameraTriggerEditor(&dialog, choices, offered);
+    layout->addWidget(setup);
+    // Existing workflow inputs can also feed other nodes. Keep their identities when editing from one node.
+    if (current) {
+        number->setEnabled(false);
+        setup->retain_binding(*current->camera);
+    } else if (prior) {
+        setup->retain_image_input(*prior);
+    }
+    close_buttons(dialog, *layout);
+    if (dialog.exec() != QDialog::Accepted) { return; }
+    if (number->currentIndex() < 0) { warn(context.owner, QObject::tr("请先在流程属性中修复帧号输入。")); return; }
+    const auto selected = setup->binding();
+    if (const auto* failure = std::get_if<Diagnostic>(&selected)) { warn(context.owner, qtext(failure->message)); return; }
+    const auto chosen = std::get<CameraTriggerBinding>(selected);
+    const WorkflowTrigger next{TriggerMode::External, source_id, source_key<InputId>(utf8(number->currentData().toString())), 0, chosen};
+    context.edit_node(flow_id, node_id, QObject::tr("配置相机帧触发与节点绑定"), [&](Solution& draft, Workflow& workflow, Node& target) -> Check {
+        if (workflow.trigger != current) { return error(ErrorCode::InvalidState, "Workflow trigger changed during editing."); }
+        if (const auto* added = setup->new_device()) { draft.resources.push_back(*added); }
+        if (std::ranges::find(draft.coordinates, chosen.coordinate_frame, &CoordinateFrameDefinition::id) == draft.coordinates.end()) {
+            const auto coordinate = std::ranges::find(choices.coordinates, chosen.coordinate_frame, &CoordinateFrameDefinition::id);
+            if (coordinate == choices.coordinates.end()) { return error(ErrorCode::InvalidCoordinate, "Missing camera pixel coordinates."); }
+            draft.coordinates.push_back(*coordinate);
+        }
+        const auto size = workflow.interface.inputs.size();
+        for (const auto& port : ports) {
+            if ((port.id == chosen.image_input || port.id == next.frame_input)
+                && std::ranges::find(workflow.interface.inputs, port.id, &InputDescriptor::id) == workflow.interface.inputs.end()) {
+                workflow.interface.inputs.push_back(port);
+            }
+        }
+        if (size != workflow.interface.inputs.size()) {
+            auto version = next_interface_version(draft, context.registry, workflow.interface);
+            if (std::holds_alternative<Diagnostic>(version)) { return version; }
+        }
+        workflow.trigger = next;
+        set_source_value(target, "camera_input", std::get<ConfigValue>(ConfigValue::enumeration(type, source_key<EnumMemberId>("Delivered"))));
+        replace_binding(target, image_id, Binding{image_id, {ScopedInputReference{flow_id, {}, chosen.image_input, {}}}});
+        auto checked = validate_workflow_trigger(workflow);
+        if (std::holds_alternative<Diagnostic>(checked)) { return checked; }
+        return validate_camera_trigger_ownership(draft, workflow, context.registry.descriptors());
+    });
+}
+
+void source_camera_trigger(QFormLayout& form, const InspectorContext& context, const Workflow& flow,
+    const Node& node, const ParameterDescriptor& input_mode)
+{
+    const auto current = flow.trigger;
+    if (current) {
+        QString summary = id_text(current->source);
+        if (current->camera) {
+            const auto& resources = context.model.draft().resources;
+            const auto device = std::ranges::find(resources, current->camera->device, &ResourceDefinition::id);
+            if (device != resources.end()) { summary = qtext(device->name) + QStringLiteral(" · ") + summary; }
+            summary += QObject::tr(" · 帧号 %1 · 图像 %2").arg(id_text(current->frame_input), id_text(current->camera->image_input));
+        }
+        auto* label = new QLabel(summary, form.parentWidget());
+        label->setWordWrap(true);
+        label->setObjectName(QStringLiteral("sourceCameraTriggerSummary"));
+        form.addRow(QObject::tr("当前流程触发源"), label);
+    }
+    const auto image_id = source_key<InputId>("image");
+    const auto image = std::ranges::find(node.bindings, BindingTarget{image_id}, &Binding::target);
+    const auto input = source_workflow_image_input(flow, node);
+    const auto slot = source_key<SchemaId>("camera");
+    const auto bound = std::ranges::find(node.resources, slot, &NodeResourceBinding::slot);
+    const bool delivered = source_enum(node, "camera_input", "Acquire") == "Delivered";
+    const bool linked = delivered && current && current->camera && input == current->camera->image_input;
+    auto* button = action(form.parentWidget(), linked ? QObject::tr("查看 / 编辑相机帧触发…") : QObject::tr("相机帧启动流程…"),
+        "configureSourceCameraTrigger", [context, flow_id = flow.id, node_id = node.id, current,
+        input, type = input_mode.type] {
+            edit_source_camera_trigger(context, flow_id, node_id, current, input, type);
+        });
+    QString unavailable;
+    if (parent_of(flow, node.id)) { unavailable = QObject::tr("请在流程顶层节点绑定公共图像输入。"); }
+    else if (current && !current->camera) { unavailable = QObject::tr("流程已有其他触发源，请先在流程属性中调整。"); }
+    else if (image != node.bindings.end() && (!input || (current && current->camera->image_input != *input))) {
+        unavailable = QObject::tr("节点已有其他图像绑定，请先在输入设置中调整。");
+    } else if (!delivered && current && bound != node.resources.end() && current->camera->device != bound->resource.id) {
+        unavailable = QObject::tr("流程触发器已关联另一台相机。");
+    }
+    form.addRow(button);
+    if (!unavailable.isEmpty()) {
+        button->setEnabled(false);
+        auto* explanation = new QLabel(unavailable, form.parentWidget());
+        explanation->setWordWrap(true);
+        form.addRow(explanation);
+        if (current) {
+            form.addRow(action(form.parentWidget(), QObject::tr("打开流程触发设置…"), "openSourceWorkflowTrigger",
+                [context, id = flow.id] { edit_trigger(context, id); }));
+        }
+    }
+}
+
+void image_source_settings(QVBoxLayout& panel, QVBoxLayout* connection, const InspectorContext& context, const Workflow& flow,
+    const Node& node, const ToolDescriptor& tool)
+{
+    const auto group = [](QVBoxLayout& page, const char* title) {
+        auto* fields = new QFormLayout(section(page, QObject::tr(title)));
+        fields->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+        fields->setRowWrapPolicy(QFormLayout::WrapLongRows);
+        return fields;
+    };
+    auto* form = group(panel, "基本参数");
+    const auto parameter = [&](std::string_view name) -> const ParameterDescriptor* {
+        const auto it = std::ranges::find_if(tool.parameters, [&](const auto& p) { return p.id.text() == name; });
+        return it == tool.parameters.end() ? nullptr : &*it;
+    };
+    const auto bind = [&](const char* name, const char* label) {
+        if (const auto* p = parameter(name)) {
+            auto target = *p;
+            target.display_name = utf8(QObject::tr(label));
+            binding_row(*form, form->parentWidget(), context, flow, node, target);
+        }
+    };
+    const auto fixed = [&](const char* name, const char* label, const ParameterDescriptor* subscription = nullptr) {
+        const auto* p = parameter(name);
+        if (!p) { return; }
+        const auto* value = source_value(node, name);
+        if (!value && p->default_value) { value = &*p->default_value; }
+        auto* owner = form->parentWidget();
+        const auto commit = [context, id = flow.id, selected = node.id, name, descriptor = *p](const ConfigValue& next) {
+            const auto checked = check_constants(descriptor, Binding{descriptor.id,{next}});
+            if (const auto* failure = std::get_if<Diagnostic>(&checked)) { warn(context.owner,qtext(failure->message)); return false; }
+            return context.edit_node(id, selected, QObject::tr("编辑图像源参数"), [&](Solution& solution, Workflow&, Node& target) -> Check {
+                set_source_value(target, name, next);
+                if (std::string_view(name) == "stitch" && next.as_bool() && *next.as_bool()) {
+                    return ensure_source_frame(solution, target, true);
+                }
+                return std::monostate{};
+            });
+        };
+        QWidget* field = nullptr;
+        if (p->type.kind() == TypeKind::Bool) {
+            field = checkbox(owner, value && value->as_bool() && *value->as_bool(), name,
+                [commit](bool enabled) { return commit(ConfigValue::boolean(enabled)); });
+        } else if (p->type.kind() == TypeKind::Enum) {
+            auto* combo = new QComboBox(owner);
+            const static QHash<QString, QString> labels{{"Local","本地图像"},{"Camera","相机"},{"SDK","SDK"},
+                {"Gray8","Mono8"},{"Native8","保留原格式（兼容）"},{"RGB24","RGB24"},{"Acquire","执行时取帧"},
+                {"Delivered","使用本轮输入帧"},{"Single","单次采集"},{"Continuous","连续采集"},{"Software","软触发"},{"Hardware","硬触发"}};
+            for (const auto& member : p->type.enum_members()) {
+                const auto key = id_text(member.id);
+                combo->addItem(labels.value(key, key), key);
+            }
+            if (value && value->as_enum()) { combo->setCurrentIndex(combo->findData(id_text(*value->as_enum()))); }
+            QObject::connect(combo, &QComboBox::activated, owner, [combo, type = p->type, commit](int index) {
+                const auto& member = type.enum_members()[static_cast<std::size_t>(index)];
+                const auto next = ConfigValue::enumeration(type, member.id);
+                if (const auto* v = std::get_if<ConfigValue>(&next)) { commit(*v); }
+            });
+            field = combo;
+        } else {
+            field = scalar_editor(owner, p->type, value, p->constraints, [commit](const ConfigValue& v) {
+                return commit(v) ? QString{} : QObject::tr("修改未生效");
+            });
+        }
+        if (!field) { return; }
+        field->setObjectName(QStringLiteral("source_") + QString::fromLatin1(name));
+        field->setAccessibleName(QObject::tr(label));
+        if (!subscription) { form->addRow(QObject::tr(label), field); return; }
+        auto target = *subscription;
+        target.display_name = "订阅 SN";
+        const auto binding = std::ranges::find(node.bindings, BindingTarget{target.id}, &Binding::target);
+        const bool bound = binding != node.bindings.end() && !binding->sources.empty();
+        auto* button = action(owner, bound ? QObject::tr("已订阅…") : QObject::tr("订阅…"), "editBinding",
+            [context, id = flow.id, selected = node.id, target] { open_binding(context, id, selected, target); });
+        button->setProperty("bindingTarget", id_text(target.id));
+        button->setProperty("bindingIsParameter", true);
+        button->setAccessibleName(QObject::tr("订阅 SN"));
+        button->setToolTip(bound ? source_text(context.model.draft(), binding->sources.front()) : QObject::tr("选择本轮 SN 的订阅来源"));
+        auto* row = new QHBoxLayout;
+        row->addWidget(field, 1);
+        row->addWidget(button);
+        form->addRow(QObject::tr(label), row);
+    };
+    fixed("source_type", "图像源");
+    const auto source = source_enum(node, "source_type", "Local");
+    const bool local = source == "Local", camera = source == "Camera";
+    const bool active = camera && source_enum(node, "camera_input", "Acquire") == "Acquire";
+    if (local) {
+        fixed("decode_mode", "像素格式");
+        fixed("embed_images", "方案存图");
+        fixed("show_name", "显示图像名称");
+    } else if (camera) {
+        if (active) {
+            for (const auto& slot : tool.resources) {
+                if (slot.slot.text() == "camera") { resource_row(*form, form->parentWidget(), context, flow, node, slot); }
+            }
+            fixed("control_exposure", "控制曝光");
+            if (source_flag(node, "control_exposure")) { bind("exposure_us", "曝光（µs）"); }
+            fixed("control_gain", "控制增益");
+            if (source_flag(node, "control_gain")) { bind("gain", "增益"); }
+        } else {
+            auto* origin = new QLabel(QObject::tr("由本轮图像输入提供"), form->parentWidget());
+            origin->setObjectName(QStringLiteral("sourceDeliveredCamera"));
+            origin->setTextFormat(Qt::PlainText);
+            origin->setWordWrap(true);
+            if (flow.trigger && flow.trigger->camera && source_workflow_image_input(flow, node) == flow.trigger->camera->image_input) {
+                const auto& resources = context.model.draft().resources;
+                const auto id = flow.trigger->camera->device;
+                const auto device = std::ranges::find(resources, id, &ResourceDefinition::id);
+                const auto name = device != resources.end() && is_camera_device(*device)
+                    ? qtext(device->name) : QObject::tr("相机不可用 [%1]").arg(short_id(id));
+                origin->setText(QObject::tr("%1（流程触发相机）").arg(name));
+                origin->setToolTip(QObject::tr("在流程的触发设置中更换相机。"));
+            }
+            form->addRow(QObject::tr("关联相机"), origin);
+        }
+    }
+    fixed("sn_initial", "SN 初始值", local ? parameter("sn_subscription") : nullptr);
+    if (local) { fixed("cache_size", "图片缓存（张）"); }
+    if (!local || source_enum(node, "decode_mode", "Gray8") != "Gray8") { fixed("output_mono8", "输出 Mono8"); }
+    fixed("stitch", "拼接使能");
+    if (source_flag(node, "stitch")) {
+        if (local) { bind("stitch_origin", "拼接坐标系"); }
+        fixed("stitch_start", "起始高度（px）"); fixed("stitch_height", "拼接高度（px）");
+        fixed("clear_on_trigger", "触发清空");
+        if (source_flag(node, "clear_on_trigger")) { bind("clear_value", "触发变量"); }
+    }
+    if (local) { bind("frame_origin", "图像坐标系"); }
+    form = group(panel, "触发设置");
+    if (local) { fixed("auto_next", "自动切换"); fixed("stop_at_end", "最后一张停止"); }
+    fixed("filter_enabled", "字符触发过滤");
+    if (source_flag(node, "filter_enabled")) { bind("message", "输入字符"); fixed("trigger_text", "触发字符"); }
+    if (local) {
+        form = group(panel, "订阅图片文件夹");
+        fixed("subscribe_folder", "订阅文件夹");
+        if (source_flag(node, "subscribe_folder")) {
+            bind("folder_path", "图像路径（绝对／UNC）"); fixed("refresh_thumbnails", "更新缩略图"); fixed("trigger_flow", "触发流程执行");
+        }
+    }
+    if (local) { return; }
+    auto& page = connection ? *connection : panel;
+    form = group(page, camera ? "相机取帧" : "流程图像输入");
+    if (camera) {
+        fixed("camera_input", "取帧方式");
+        if (const auto* resource = source_camera_device(context.model.draft(), node); active && resource) {
+            const auto configured = infrastructure::camera_acquisition_settings(*resource);
+            const auto* settings = std::get_if<std::optional<infrastructure::CameraAcquisitionSettings>>(&configured);
+            if (settings && !settings->has_value()) {
+                fixed("mode", "采集模式");
+                fixed("timeout_ms", "超时（ms）");
+            }
+        }
+    }
+    if (!active) {
+        for (const auto& input : tool.inputs) {
+            if (input.id.text() != "image") { continue; }
+            binding_row(*form, form->parentWidget(), context, flow, node, input);
+            const bool unbound = std::ranges::find(node.bindings,BindingTarget{input.id},&Binding::target) == node.bindings.end();
+            if (unbound && std::ranges::find(flow.containment,node.id,&Containment::child) == flow.containment.end()
+                && std::ranges::none_of(flow.interface.inputs, [](const auto& p) { return p.type == DataType::image(); })) {
+                form->addRow(action(form->parentWidget(),QObject::tr("创建并绑定流程图像输入"),"createSourceFlowInput",
+                    [context,id=flow.id,selected=node.id,input] {
+                        context.edit_node(id,selected,QObject::tr("创建并绑定流程图像输入"),[&](Solution& draft,Workflow& workflow,Node& target) -> Check {
+                            auto port = input;
+                            if (std::ranges::find(workflow.interface.inputs,port.id,&InputDescriptor::id) != workflow.interface.inputs.end()) {
+                                port.id = source_key<InputId>("frame." + selected.to_string());
+                            }
+                            if (auto version = next_interface_version(draft,context.registry,workflow.interface);
+                                std::holds_alternative<Diagnostic>(version)) { return version; }
+                            workflow.interface.inputs.push_back(port);
+                            replace_binding(target,input.id,Binding{input.id,{ScopedInputReference{id,{},port.id,{}}}});
+                            return std::monostate{};
+                        });
+                    }));
+            }
+        }
+    }
+    if (active || source_flag(node, "stitch")) {
+        form = group(page, "坐标系");
+        if (active) { bind("frame_origin", "图像坐标系"); }
+        if (source_flag(node, "stitch")) { bind("stitch_origin", "拼接坐标系"); }
+    }
+    if (camera) {
+        form = group(page, "流程触发");
+        source_camera_trigger(*form, context, flow, node, *parameter("camera_input"));
+    }
+}
+
+void output_settings(QVBoxLayout& basic, QVBoxLayout& render, QVBoxLayout& layers, const InspectorContext& context,
+    const Workflow& flow, const Node& node, const ToolDescriptor& descriptor)
+{
+    OutputEditorActions actions;
+    actions.input = [&](QFormLayout& form, const InputDescriptor& field) {
+        if (field.id.text() == "trigger") {
+            auto* quick = new QComboBox(form.parentWidget());
+            quick->setObjectName("outputTriggerSource");
+            quick->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+            quick->setMinimumContentsLength(8);
+            quick->addItem(QObject::tr("选择节点结果、公开输入或变量…"));
+            Choices<TypedSource> choices;
+            const auto previous = preceding_nodes(flow,node.id);
+            for (const auto kind : {BindingSourceKind::RunOutput,BindingSourceKind::PublicInput,BindingSourceKind::GlobalRead}) {
+                for (const auto& option : binding_choices(context.model.draft(),flow,node.id,context.registry,kind,nullptr)) {
+                    if (const auto* ref = std::get_if<OutputReference>(&option.second.source); ref && !previous.contains(ref->node)) { continue; }
+                    const auto& type = option.second.type;
+                    if (type != field.type && type.kind() != TypeKind::String && type.kind() != TypeKind::Int64) { continue; }
+                    quick->addItem(option.first + QStringLiteral(" · ") + type_text(type));
+                    choices.push_back(option);
+                }
+            }
+            const auto type_field = std::ranges::find_if(descriptor.parameters,[](const auto& p){return p.id.text()=="trigger_source_type";});
+            if (type_field != descriptor.parameters.end()) {
+                QObject::connect(quick,&QComboBox::activated,quick,[context,options=std::move(choices),
+                    field_type=type_field->type,flow_id=flow.id,node_id=node.id,input=field.id](int row) {
+                    if (row <= 0 || row > static_cast<int>(options.size())) { return; }
+                    const auto& source = options[row-1].second;
+                    const auto kind = source.type.kind();
+                    const auto name = kind == TypeKind::Int64 ? "Integer" : kind == TypeKind::String ? "String" : "Judgement";
+                    context.edit_node(flow_id,node_id,QObject::tr("订阅触发变量"),[&](Solution&,Workflow&,Node& target)->Check {
+                        auto configured = ConfigValue::enumeration(field_type,source_key<EnumMemberId>(name));
+                        if (auto* error = std::get_if<Diagnostic>(&configured)) { return *error; }
+                        set_source_value(target,"trigger_source_type",std::get<ConfigValue>(std::move(configured)));
+                        replace_binding(target,input,Binding{input,{source.source}});
+                        return std::monostate{};
+                    });
+                });
+            }
+            form.addRow(QObject::tr("订阅触发来源"),quick);
+            const auto actual = specialize_tool(descriptor, node);
+            const auto found = std::ranges::find(actual.inputs, field.id, &InputDescriptor::id);
+            if (found != actual.inputs.end()) {
+                auto typed = *found;
+                typed.display_name = field.display_name;
+                binding_row(form, form.parentWidget(), context, flow, node, typed);
+            }
+            return;
+        }
+        binding_row(form, form.parentWidget(), context, flow, node, field);
+    };
+    actions.parameter = [&](QFormLayout& form, const ParameterDescriptor& field) {
+        const auto binding = std::ranges::find(node.bindings, BindingTarget{field.id}, &Binding::target);
+        if (field.id.text() == "text") {
+            auto* row = new QHBoxLayout;
+            const auto* current = source_value(node,"text");
+            const auto initial = current && current->as_string() ? qtext(*current->as_string()) : QString{};
+            auto* content = action(form.parentWidget(), QObject::tr("编辑多行文字…"), "outputMultilineText",
+                [context,id=flow.id,selected=node.id,initial] {
+                    bool ok = false;
+                    const auto text = QInputDialog::getMultiLineText(context.owner, QObject::tr("渲染文字"),
+                        QObject::tr("内容"), initial, &ok);
+                    if (!ok) { return; }
+                    context.edit_node(id,selected,QObject::tr("设置渲染文字"),[&](Solution&,Workflow&,Node& target) -> Check {
+                        auto stored = ConfigValue::string(utf8(text));
+                        if (auto* error = std::get_if<Diagnostic>(&stored)) { return *error; }
+                        set_source_value(target,"text",std::get<ConfigValue>(std::move(stored)));
+                        return std::monostate{};
+                    });
+                });
+            content->setToolTip(initial);
+            row->addWidget(content);
+            const QString caption = binding == node.bindings.end() || binding->sources.empty() ? QObject::tr("绑定来源…")
+                : button_text(source_text(context.model.draft(), binding->sources.front()));
+            auto* bind = action(form.parentWidget(),caption,"editBinding",[context,id=flow.id,selected=node.id,field]{
+                open_binding(context,id,selected,field);
+            });
+            bind->setProperty("bindingTarget",id_text(field.id));
+            row->addWidget(bind);
+            form.addRow(qtext(field.display_name),row);
+            return;
+        }
+        if (field.id.text() == "trigger_source_type") {
+            auto* types = new QComboBox(form.parentWidget());
+            types->setObjectName("output_trigger_source_type");
+            const auto& members = field.type.enum_members();
+            for (const auto& member : members) {
+                const auto key = id_text(member.id);
+                types->addItem(key == "Integer" ? QObject::tr("整数（0＝NG，1＝OK）") : key == "String"
+                    ? QObject::tr("字符串（OK / NG）") : QObject::tr("检测判定"), key);
+            }
+            types->setCurrentIndex(types->findData(qtext(source_enum(node,"trigger_source_type","Judgement"))));
+            QObject::connect(types,&QComboBox::currentIndexChanged,types,[types,context,id=flow.id,selected=node.id,field](int row) {
+                if (row < 0) { return; }
+                context.edit_node(id,selected,QObject::tr("选择触发变量类型"),[&](Solution&,Workflow&,Node& target) -> Check {
+                    auto value = ConfigValue::enumeration(field.type,source_key<EnumMemberId>(utf8(types->itemData(row).toString())));
+                    if (auto* error = std::get_if<Diagnostic>(&value)) { return *error; }
+                    set_source_value(target,"trigger_source_type",std::get<ConfigValue>(std::move(value)));
+                    replace_binding(target, source_key<InputId>("trigger"), {});
+                    return std::monostate{};
+                });
+            });
+            form.addRow(qtext(field.display_name),types);
+            return;
+        }
+        if (field.binding.allowed_sources == std::vector{BindingSourceKind::Constant}) {
+            if (field.type.kind() == TypeKind::Bool) {
+                const std::string name(field.id.text());
+                const bool fallback = field.default_value && field.default_value->as_bool() && *field.default_value->as_bool();
+                auto* toggle = checkbox(form.parentWidget(),source_flag(node,name,fallback),name.c_str(),
+                    [context,id=flow.id,selected=node.id,name](bool value) {
+                        return context.edit_node(id,selected,QObject::tr("设置输出图像"),[&](Solution&,Workflow&,Node& target) -> Check {
+                            set_source_value(target,name,ConfigValue::boolean(value));
+                            return std::monostate{};
+                        });
+                    });
+                toggle->setObjectName(QStringLiteral("output_") + id_text(field.id));
+                toggle->setAccessibleName(qtext(field.display_name));
+                form.addRow(qtext(field.display_name),toggle);
+                return;
+            }
+            if (auto* value = constant_field(form.parentWidget(), context, flow.id, node.id, field,
+                binding == node.bindings.end() ? nullptr : &*binding)) {
+                auto* control = value->focusProxy();
+                control->setObjectName(QStringLiteral("output_") + id_text(field.id));
+                control->setAccessibleName(qtext(field.display_name));
+                if (auto* choices = qobject_cast<QComboBox*>(control); choices && field.type.kind() == TypeKind::Enum) {
+                    const auto& members = field.type.enum_members();
+                    static const QHash<QString,QString> labels{{"All","全部保存"},{"OK","OK 时保存"},{"NG","NG 时保存"},
+                        {"None","无"},{"Sequence","序号"},{"Time","时间"},{"Stop","停止存储"},{"Overwrite","覆盖存储"},
+                        {"Original","原图尺寸"},{"Display","界面尺寸"},{"Custom","自定义倍率"},
+                        {"Eight","8 连通线"},{"Four","4 连通线"},{"Antialias","抗锯齿线"}};
+                    for (int index=0; index<choices->count() && static_cast<std::size_t>(index)<members.size(); ++index) {
+                        const auto key = id_text(members[index].id);
+                        const auto label = key == "None" && field.id.text() == "save_condition" ? QObject::tr("不保存") : labels.value(key,key);
+                        if (label != key) { choices->setItemText(index,label); }
+                    }
+                }
+                form.addRow(qtext(field.display_name), value);
+                return;
+            }
+        }
+        binding_row(form, form.parentWidget(), context, flow, node, field);
+    };
+    actions.directory = [&](QFormLayout& form, const ResourceRequirement& slot, const QString& label) {
+        resource_row(form, form.parentWidget(), context, flow, node, slot, label);
+    };
+    actions.select_credential = [context,id=flow.id,selected=node.id](const std::string& key) {
+        context.edit_node(id, selected, QObject::tr("关联 FTP 凭据"), [&](Solution&, Workflow&, Node& target) -> Check {
+            auto value = ConfigValue::string(key);
+            if (auto* error = std::get_if<Diagnostic>(&value)) { return *error; }
+            set_source_value(target,"ftp_credential",std::get<ConfigValue>(std::move(value)));
+            return std::monostate{};
+        });
+    };
+    actions.toggle_item = [context,id=flow.id,selected=node.id](const InputId& input, const OutputReference& source, bool enabled) {
+        context.edit_node(id, selected, QObject::tr("选择前项显示结果"), [&](Solution&, Workflow&, Node& target) -> Check {
+            const auto old = std::ranges::find(target.bindings, BindingTarget{input}, &Binding::target);
+            Binding next = old == target.bindings.end()
+                ? Binding{input, {}, BindingCardinality::MultipleSources, ConversionKind::Exact,
+                    {{MissingReason::ConditionNotMet, MissingReason::NotSelected, MissingReason::Disabled, MissingReason::ToolDidNotProduce}}}
+                : *old;
+            const auto member = std::ranges::find(next.sources, BindingSource{source});
+            if (enabled && member == next.sources.end()) { next.sources.emplace_back(source); }
+            if (!enabled && member != next.sources.end()) { next.sources.erase(member); }
+            replace_binding(target, input, next.sources.empty() ? std::nullopt : std::optional{std::move(next)});
+            return std::monostate{};
+        });
+    };
+    actions.style = [context,id=flow.id,selected=node.id](const InputId& input,const OutputReference& source,const DisplayItemStyle& style) {
+        context.edit_node(id,selected,QObject::tr("设置前项样式"),[&](Solution&,Workflow&,Node& target) -> Check {
+            auto entry = std::ranges::find_if(target.display_styles,[&](const auto& value) { return value.item == input && value.source == source; });
+            if (entry == target.display_styles.end()) { target.display_styles.push_back({input,source,style}); }
+            else { entry->style = style; }
+            return std::monostate{};
+        });
+    };
+    image_output_settings(basic, render, layers, context.model.draft(), flow, node, context.registry, descriptor, actions);
+}
+
+void tool_settings(QVBoxLayout& panel, QVBoxLayout* source_connection, const InspectorContext& context, const Workflow& flow, const Node& node)
 {
     const auto* tool = metadata(context.registry, node);
     if (!tool) {
@@ -1907,6 +2578,7 @@ void tool_settings(QVBoxLayout& panel, const InspectorContext& context, const Wo
         panel.addWidget(status);
         return;
     }
+    if (is_image_source(&node)) { image_source_settings(panel, source_connection, context, flow, node, *tool); return; }
     if (tool->shared_target) { shared_targets(panel, context, flow, node, *tool->shared_target); }
     if (std::ranges::any_of(tool->outputs, [](const auto& output) { return output.type == class_map_type(); })) {
         auto* group = section(panel, QStringLiteral("Display"));
@@ -2432,8 +3104,9 @@ void boundary_controls(QVBoxLayout& panel, const InspectorContext& context, cons
 } // namespace
 
 EditorInspector::EditorInspector(ControlGraphModel& model, ControlScene& scene, const core::ToolRegistry& registry,
-    QWidget* parent, HashFile hash_file)
-    : QWidget(parent), model_(model), scene_(scene), registry_(registry), hash_file_(std::move(hash_file)), scroll_(new QScrollArea(this))
+    QWidget* parent, HashFile hash_file, std::function<void()> camera_manager)
+    : QWidget(parent), model_(model), scene_(scene), registry_(registry), hash_file_(std::move(hash_file)),
+      camera_manager_(std::move(camera_manager)), scroll_(new QScrollArea(this))
 {
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
@@ -2461,7 +3134,7 @@ void EditorInspector::set_preview_image(std::optional<ImageHandle> image)
 
 void EditorInspector::edit_workflow_trigger(QWidget* owner, WorkflowId flow)
 {
-    edit_trigger({model_, scene_, registry_, owner, preview_image_, hash_file_, refresh_pending_, pinned_}, flow);
+    edit_trigger({model_, scene_, registry_, owner, preview_image_, hash_file_, refresh_pending_, pinned_, camera_manager_}, flow);
 }
 
 void EditorInspector::pin(std::optional<NodeTarget> target)
@@ -2505,7 +3178,7 @@ void EditorInspector::refresh()
     displayed_node_ = node_id;
     auto content = std::make_unique<QWidget>();
     auto* layout = new QVBoxLayout(content.get());
-    const InspectorContext context{model_, scene_, registry_, this, preview_image_, hash_file_, refresh_pending_, pinned_};
+    const InspectorContext context{model_, scene_, registry_, this, preview_image_, hash_file_, refresh_pending_, pinned_,camera_manager_};
     const auto flow_id = pinned_ ? std::optional{pinned_->workflow} : model_.workflow_id();
     const auto* flow = flow_id ? find_workflow(model_.draft(), *flow_id) : nullptr;
     tabs_->setVisible(pinned_ && flow && find_node(*flow, pinned_->node));
@@ -2514,7 +3187,17 @@ void EditorInspector::refresh()
         if (node) {
             QVBoxLayout* basic = layout;
             QVBoxLayout* settings = nullptr;
-            if (pinned_) {
+            QVBoxLayout* layers = nullptr;
+            const bool source = is_image_source(node);
+            const bool output = is_image_output(node) && metadata(registry_,*node);
+            const auto source_type = source ? source_enum(*node, "source_type", "Local") : std::string_view{};
+            const bool connection_tab = source && source_type != "Local";
+            const bool show_tabs = output || connection_tab || (pinned_ && !source);
+            tabs_->setVisible(show_tabs);
+            if (show_tabs) {
+                if (!same_node) { tabs_->setCurrentIndex(0); }
+                tabs_->setTabText(1, output ? tr("渲染参数") : source ? (source_type == "Camera" ? tr("相机接入") : tr("SDK 接入")) : tr("运行设置"));
+                tabs_->setTabText(2, output ? tr("渲染设置") : tr("输出说明"));
                 auto* pages = new QStackedWidget(content.get());
                 layout->addWidget(pages);
                 const auto add_page = [pages] {
@@ -2530,9 +3213,10 @@ void EditorInspector::refresh()
                 const auto* tool = metadata(registry_, *node);
                 const auto* group = std::get_if<GroupConfiguration>(&node->configuration);
                 const auto* outputs = tool ? &tool->outputs : group ? &group->interface.outputs : nullptr;
-                const bool has_outputs = outputs && !outputs->empty();
+                const bool has_outputs = !source && outputs && !outputs->empty();
                 tabs_->setTabVisible(2, has_outputs);
-                if (has_outputs) {
+                if (output) { layers = add_page(); }
+                else if (has_outputs) {
                     auto* list = section(*add_page(), tr("声明输出"));
                     auto* form = new QFormLayout(list);
                     for (const auto& out : *outputs) {
@@ -2544,7 +3228,7 @@ void EditorInspector::refresh()
                 pages->setCurrentIndex(tabs_->currentIndex());
                 connect(tabs_, &QTabBar::currentChanged, pages, &QStackedWidget::setCurrentIndex);
             }
-            node_properties(*basic, context, *flow, *node, settings);
+            if (!source && !output) { node_properties(*basic, context, *flow, *node, settings); }
             if (const auto* configuration = std::get_if<GroupConfiguration>(&node->configuration)) {
                 if (!configuration->interface.inputs.empty()) {
                     auto* group = section(*basic, tr("输入"));
@@ -2555,7 +3239,9 @@ void EditorInspector::refresh()
                     }
                 }
                 boundary_controls(*basic, context, *flow, node->id);
-            } else { tool_settings(*basic, context, *flow, *node); }
+            } else if (output) {
+                output_settings(*basic,*settings,*layers,context,*flow,*node,*metadata(registry_,*node));
+            } else { tool_settings(*basic, source ? settings : nullptr, context, *flow, *node); }
         } else if (pinned_) {
             layout->addWidget(new QLabel(tr("此模块已从草稿中删除。"), content.get()));
         } else {
@@ -2604,6 +3290,8 @@ bool EditorInspector::focus_diagnostic_field(const DiagnosticLocation& location)
             }
             if (target) { break; }
         }
+        if (!target && parameter) { target = content->findChild<QWidget*>(QStringLiteral("source_") + field); }
+        if (!target && parameter) { target = content->findChild<QWidget*>(QStringLiteral("output_") + field); }
     }
     if (!target && location.input) {
         if (auto* ports = content->findChild<QListWidget*>(QStringLiteral("publicPorts"))) {
@@ -2617,6 +3305,11 @@ bool EditorInspector::focus_diagnostic_field(const DiagnosticLocation& location)
         }
     }
     if (!target) { return false; }
+    if (auto* pages = content->findChild<QStackedWidget*>()) {
+        for (int i = 0; i < pages->count(); ++i) {
+            if (pages->widget(i)->isAncestorOf(target)) { tabs_->setCurrentIndex(i); break; }
+        }
+    }
     scroll_->ensureWidgetVisible(target);
     target->setFocus(Qt::OtherFocusReason);
     return true;

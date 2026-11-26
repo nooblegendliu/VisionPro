@@ -22,6 +22,6 @@ struct EnteredRunInputs {
 
 [[nodiscard]] std::optional<EnteredRunInputs> choose_run_inputs(QWidget* parent, const workflow::Solution& solution,
     std::span<const core::InputDescriptor> inputs, bool isolated, std::span<const core::PixelFormat> image_formats = {},
-    bool group = false);
+    bool group = false, bool sdk_sample = false);
 
 } // namespace visionpro::ui

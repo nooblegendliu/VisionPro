@@ -6,6 +6,7 @@
 #include <visionpro/core/text.hpp>
 #include <visionpro/core/schema_id_factory.hpp>
 #include <visionpro/infrastructure/solution_file.hpp>
+#include <visionpro/infrastructure/image_archive.hpp>
 #include <visionpro/infrastructure/mvs_camera.hpp>
 
 #include <windows.h>
@@ -51,6 +52,8 @@ public:
 
 constexpr auto usage =
     "visionpro_cli cameras\n"
+    "visionpro_cli archive-list <file.dat>\n"
+    "visionpro_cli archive-extract <file.dat|directory> [--same-name-folder]\n"
     "visionpro_cli run --solution <solution.json> --workflow <uuid> [--group <uuid>] [--input <id>=<value>]... [--root <id>=<directory>]...\n"
     "visionpro_cli run-solution --solution <solution.json> [--entry-input <workflow-uuid>/<id>=<value>]... [--root <id>=<directory>]...\n"
     "visionpro_cli replay --solution <solution.json> --sequence <runs.json> [--root <id>=<directory>]...\n"
@@ -62,10 +65,12 @@ constexpr auto usage =
     "Use --group to debug one composite Group in isolation. Inputs follow the selected public interface.\n"
     "Built-in tools include simulation, list selection, integer range judgement, calculation, logic and formatting.\n"
     "Shared tools read and write global values, send and receive queued records, and join workpiece measurements.\n"
+    "The unified image input is visionpro.image.source.\n"
 #ifdef VISIONPRO_WITH_OPENCV
-    "Image tools include visionpro.image.read_file, visionpro.image.threshold and visionpro.image.blob.\n"
+    "Image processing tools include visionpro.image.threshold, visionpro.image.blob and visionpro.image.output.\n"
 #endif
-    "Explicit inputs support Bool, Int64, Float64, String and Binary (two hex digits per byte).\n";
+    "Explicit inputs support Bool, Int64, Float64, String, Binary (hex), and Image.\n"
+    "For Image, pass a JSON object with width, height, stride, format (Mono8/RGB24/BGR8), coordinates and hex pixels.\n";
 
 std::string utf8(std::wstring_view text)
 {
@@ -200,7 +205,28 @@ DataValue input_value(const InputDescriptor& input, std::string_view text)
         if (!bytes) { throw UsageError("A Binary input requires two hex digits per byte."); }
         return DataValue::binary(*bytes);
     }
-    default: throw UsageError("Explicit CLI inputs support Bool, Int64, Float64, String and Binary.");
+    case TypeKind::Image: {
+        const auto value = json::parse(text, nullptr, false);
+        if (!value.is_object()) { throw UsageError("An Image input requires a JSON object."); }
+        const auto dimension = [&](const char* key) -> std::size_t {
+            if (!value.contains(key) || !value.at(key).is_number_unsigned()) { throw UsageError(std::string("Invalid Image dimension ") + key); }
+            return value.at(key).get<std::size_t>();
+        };
+        const auto field = [&](const char* key) {
+            if (!value.contains(key) || !value.at(key).is_string()) { throw UsageError(std::string("Missing Image string ") + key); }
+            return value.at(key).get<std::string>();
+        };
+        const auto format = field("format");
+        if (format != "Mono8" && format != "RGB24" && format != "BGR8") { throw UsageError("Image format must be Mono8, RGB24 or BGR8."); }
+        const auto order = format == "Mono8" ? ChannelOrder::Mono : (format == "RGB24" ? ChannelOrder::RGB : ChannelOrder::BGR);
+        const auto bytes = decode_hex(field("pixels"));
+        if (!bytes) { throw UsageError("Image pixels require two hex digits per byte."); }
+        const ImageLayout layout{dimension("width"), dimension("height"), dimension("stride"), {PixelDepth::UInt8, order}};
+        const auto coordinates = argument_value(SchemaIdFactory::parse<CoordinateSystemId>(field("coordinates")));
+        auto image = argument_value(ImageHandle::copy(layout, std::as_bytes(std::span{*bytes}), coordinates));
+        return argument_value(DataValue::image({std::move(image), {}, {}}));
+    }
+    default: throw UsageError("Unsupported explicit CLI input type.");
     }
 }
 
@@ -396,6 +422,31 @@ int run_solution(const Arguments& args, const SolutionDocument& document, const 
     return 1;
 }
 
+int archive_command(std::span<wchar_t*> args)
+{
+    const bool list = std::wstring_view(args.front()) == L"archive-list";
+    const bool folder = args.size() == 3 && std::wstring_view(args[2]) == L"--same-name-folder";
+    if (args.size() != 2 && (list || !folder)) { throw UsageError("Invalid archive arguments. See --help."); }
+    const fs::path path{args[1]};
+    if (path.empty()) { throw UsageError("Specify an archive path."); }
+    if (list) {
+        auto entries = list_image_package(path);
+        if (const auto* failure = std::get_if<Diagnostic>(&entries)) { return report_failure("archive", *failure); }
+        json report = json::array();
+        for (const auto& entry : std::get<std::vector<ImagePackageEntry>>(entries)) {
+            report.push_back({{"name", entry.name}, {"origin", entry.origin}, {"bytes", entry.size}});
+        }
+        std::cout << report.dump(2) << '\n';
+    } else {
+        auto extracted = extract_image_packages(path, folder);
+        if (const auto* failure = std::get_if<Diagnostic>(&extracted)) { return report_failure("archive", *failure); }
+        json files = json::array();
+        for (const auto& file : std::get<std::vector<fs::path>>(extracted)) { files.push_back(utf8(file.native())); }
+        std::cout << files.dump(2) << '\n';
+    }
+    return finish_output();
+}
+
 int execute(std::span<wchar_t*> args)
 {
     if (args.size() == 1 && std::wstring_view(args.front()) == L"--help") {
@@ -403,6 +454,8 @@ int execute(std::span<wchar_t*> args)
         return finish_output();
     }
     try {
+        if (!args.empty() && (std::wstring_view(args.front()) == L"archive-list"
+            || std::wstring_view(args.front()) == L"archive-extract")) { return archive_command(args); }
         if (!args.empty() && std::wstring_view(args.front()) == L"cameras") {
             if (args.size() != 1) { throw UsageError("cameras takes no arguments."); }
             auto inventory = query_mvs_cameras();
@@ -427,18 +480,23 @@ int execute(std::span<wchar_t*> args)
         auto loaded = load_solution(options.manifest.parent_path(), registry, options.roots);
         if (const auto* failure = std::get_if<Diagnostic>(&loaded)) { return report_failure("load", *failure); }
         const auto& document = std::get<SolutionDocument>(loaded);
-        if (options.command == Command::RunSolution) { return run_solution(options, document, registry); }
+        const auto finish_run = [&](int status) {
+            const auto flushed = document.flush_image_archive();
+            if (const auto* failure = std::get_if<Diagnostic>(&flushed)) { return report_failure("image_archive", *failure); }
+            return status;
+        };
+        if (options.command == Command::RunSolution) { return finish_run(run_solution(options, document, registry)); }
         if (options.command == Command::Trigger) {
             auto result = replay_triggers(document, registry, *options.workflow, options.sequence);
             if (const auto* failure = std::get_if<Diagnostic>(&result)) { return report_failure("trigger", *failure); }
             const auto& replay = std::get<TriggerReplay>(result);
             std::cout << replay.report.dump(2) << '\n';
             if (const auto output_error = finish_output(); output_error != 0) { return output_error; }
-            if (replay.failures.empty()) { return 0; }
+            if (replay.failures.empty()) { return finish_run(0); }
             std::cerr << json{{"stage", "trigger"}, {"diagnostics", diagnostics_json(replay.failures)}}.dump(2) << '\n';
-            return 1;
+            return finish_run(1);
         }
-        return options.command == Command::Save ? save(document) : run(options, document, registry);
+        return options.command == Command::Save ? save(document) : finish_run(run(options, document, registry));
     } catch (const UsageError& error) {
         return report_failure("arguments", {ErrorCode::InvalidRunRequest, Severity::Error, {}, error.what()}, 2);
     } catch (const fs::filesystem_error&) {

@@ -1,4 +1,5 @@
 #include "vision/inspection.hpp"
+#include "image_source_pixels.hpp"
 
 #include <visionpro/core/id_factory.hpp>
 #include <visionpro/core/schema_id_factory.hpp>
@@ -78,6 +79,9 @@ void located_color()
     const auto image = take(ImageHandle::copy({7,3,23,bgr}, std::as_bytes(std::span{scene}), camera));
     const auto evaluated = take(evaluate_roi(image, region, binding, {}, {}, shift));
     require(take(mean_bgr(image, evaluated.mask)) == std::array{40.5,68.0,156.0}, "BGR means preserve fractional data and channel order");
+    const auto rgb = take(visionpro::tools::image_source::convert(image, ChannelOrder::RGB));
+    require(take(mean_bgr(rgb, evaluated.mask)) == std::array{40.5,68.0,156.0},
+        "RGB acquisition returns the same named blue, green and red measurements");
     const auto effective = take(evaluated.effective_region);
     require(effective.coordinate_frame == camera && take(evaluate_roi(image, effective, binding)).member_count == 2,
         "Located ROI is reusable in the captured image frame");

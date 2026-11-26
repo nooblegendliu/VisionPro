@@ -24,6 +24,7 @@ public:
     std::optional<Diagnostic> failure;
     std::map<NodeId, WorkflowId> node_owners;
     std::set<RegionId> region_ids;
+    std::set<VariableId> variable_ids;
 
     template <PersistentId Id>
     void assign(const Id& old, std::map<Id, Id>& mapping, std::set<Id>& reserved)
@@ -52,6 +53,16 @@ public:
             for (const auto& value : input.constraints.allowed_values) { collect(value); }
         }
     }
+    void collect(std::span<const GlobalVariableDefinition> variables)
+    {
+        for (const auto& variable : variables) {
+            if (!variable_ids.insert(variable.id).second) {
+                failure = error(ErrorCode::DuplicateIdentity, "Copy source repeats a variable identity.");
+                return;
+            }
+            collect(variable.initial_value);
+        }
+    }
     void collect(const Node& node)
     {
         for (const auto& binding : node.bindings) {
@@ -61,15 +72,16 @@ public:
         }
         if (const auto* group = std::get_if<GroupConfiguration>(&node.configuration)) {
             collect(group->interface);
+            collect(group->local_variables);
             if (group->loop) {
                 for (const auto& item : group->loop->exports) { if (item.initial) { collect(*item.initial); } }
             }
         }
     }
-    void allocate_regions()
+    template<PersistentId Id>
+    void allocate(const std::set<Id>& owned, std::map<Id, Id>& remap, std::set<Id> reserved)
     {
-        const auto originals = region_ids;
-        for (const auto& id : originals) { assign(id, identities.regions, region_ids); }
+        for (const auto& id : owned) { assign(id, remap, reserved); }
     }
 
     template <class Reference>
@@ -204,6 +216,13 @@ public:
         }
         return interface;
     }
+    void remap_variables(std::vector<GlobalVariableDefinition>& variables)
+    {
+        for (auto& variable : variables) {
+            variable.id = identities.variables.at(variable.id);
+            variable.initial_value = value(variable.initial_value);
+        }
+    }
     BindingSource source(const BindingSource& source)
     {
         return std::visit([&](const auto& item) -> BindingSource {
@@ -224,6 +243,10 @@ public:
             for (auto& item : binding.sources) { item = source(item); }
         }
         for (auto& binding : result.resources) { binding.resource = resource(binding.resource); }
+        for (auto& style : result.display_styles) { style.source = output(style.source); }
+        for (auto& mapping : result.result_variables) {
+            mapping.variable = global({mapping.variable, {}, {}}).variable;
+        }
         if (auto* tool = std::get_if<ToolConfiguration>(&result.configuration)) {
             for (auto& target : tool->shared_targets) {
                 if (auto* variable = std::get_if<VariableId>(&target)) {
@@ -238,6 +261,7 @@ public:
         }
         if (auto* group = std::get_if<GroupConfiguration>(&result.configuration)) {
             group->interface = public_interface(group->interface);
+            remap_variables(group->local_variables);
             for (auto& entry : group->entries) {
                 if (const auto found = identities.nodes.find(entry); found != identities.nodes.end()) { entry = found->second; }
                 else { failure = error(ErrorCode::InvalidContainment, "A copied Group entry is not contained in its copied subtree."); }
@@ -280,6 +304,7 @@ Result<SubgraphCopy> clone_subgraph(const Workflow& workflow, std::span<const No
     std::set<NodeId> reserved_nodes;
     std::set<ControlLinkId> reserved_links;
     copier.collect(workflow.interface);
+    copier.collect(workflow.local_variables);
     for (const auto& node : workflow.nodes) {
         if (!collect_unique(node.id, reserved_nodes)) { return error(ErrorCode::DuplicateIdentity, "Copy source repeats a node identity."); }
         copier.node_owners.emplace(node.id, workflow.id);
@@ -302,13 +327,12 @@ Result<SubgraphCopy> clone_subgraph(const Workflow& workflow, std::span<const No
         }
     }
     for (const auto& id : selection) { copier.assign(id, copier.identities.nodes, reserved_nodes); }
-    // Allocate only copied region identities while retaining all source IDs as a collision guard.
-    const auto reserved_regions = copier.region_ids;
-    copier.region_ids.clear();
+    // Unselected definitions remain in the original workflow. Reserve their IDs without rebasing references to them.
+    auto reserved_regions = std::exchange(copier.region_ids, {});
+    auto reserved_variables = std::exchange(copier.variable_ids, {});
     for (const auto& node : workflow.nodes) { if (selection.contains(node.id)) { copier.collect(node); } }
-    const auto copied_regions = copier.region_ids;
-    copier.region_ids = reserved_regions;
-    for (const auto& id : copied_regions) { copier.assign(id, copier.identities.regions, copier.region_ids); }
+    copier.allocate(copier.region_ids, copier.identities.regions, std::move(reserved_regions));
+    copier.allocate(copier.variable_ids, copier.identities.variables, std::move(reserved_variables));
     if (copier.failure) { return *copier.failure; }
     SubgraphCopy result{workflow.id, {}, {}, {}, {}, {}};
     for (const auto& node : workflow.nodes) { if (selection.contains(node.id)) { result.nodes.push_back(copier.node(node)); } }
@@ -350,11 +374,11 @@ Result<SolutionCopy> clone_solution(const Solution& solution, ExternalReferenceP
     std::set<NodeId> node_ids;
     std::set<ControlLinkId> link_ids;
     std::set<ResourceId> resource_ids;
-    std::set<VariableId> variable_ids;
     std::set<QueueId> queue_ids;
     for (const auto& workflow : solution.workflows) {
         workflow_ids.insert(workflow.id);
         copier.collect(workflow.interface);
+        copier.collect(workflow.local_variables);
         for (const auto& node : workflow.nodes) {
             node_ids.insert(node.id);
             copier.node_owners.emplace(node.id, workflow.id);
@@ -374,7 +398,7 @@ Result<SolutionCopy> clone_solution(const Solution& solution, ExternalReferenceP
         resource_ids.insert(resource.id);
         if (const auto* device = std::get_if<DeviceResource>(&resource.location)) { copier.collect(device->configuration); }
     }
-    for (const auto& variable : solution.variables) { variable_ids.insert(variable.id); copier.collect(variable.initial_value); }
+    copier.collect(solution.variables);
     for (const auto& queue : solution.queues) { queue_ids.insert(queue.id); }
     copier.assign(solution.id, copier.identities.solutions, solution_ids);
     for (const auto& workflow : solution.workflows) {
@@ -384,9 +408,9 @@ Result<SolutionCopy> clone_solution(const Solution& solution, ExternalReferenceP
         for (const auto& link : workflow.control_links) { copier.assign(link.id, copier.identities.control_links, link_ids); }
     }
     for (const auto& resource : solution.resources) { copier.assign(resource.id, copier.identities.resources, resource_ids); }
-    for (const auto& variable : solution.variables) { copier.assign(variable.id, copier.identities.variables, variable_ids); }
+    copier.allocate(copier.variable_ids, copier.identities.variables, copier.variable_ids);
     for (const auto& queue : solution.queues) { copier.assign(queue.id, copier.identities.queues, queue_ids); }
-    copier.allocate_regions();
+    copier.allocate(copier.region_ids, copier.identities.regions, copier.region_ids);
     if (copier.failure) { return *copier.failure; }
     auto result = solution;
     result.id = copier.identities.solutions.at(solution.id);
@@ -406,6 +430,7 @@ Result<SolutionCopy> clone_solution(const Solution& solution, ExternalReferenceP
         const auto original_workflow = workflow.id;
         workflow.id = copier.identities.workflows.at(workflow.id);
         workflow.interface = copier.public_interface(workflow.interface);
+        copier.remap_variables(workflow.local_variables);
         if (workflow.trigger && workflow.trigger->camera) {
             auto& device = workflow.trigger->camera->device;
             device = copier.resource({device, ResourceKind::Device, {}}).id;
@@ -428,10 +453,7 @@ Result<SolutionCopy> clone_solution(const Solution& solution, ExternalReferenceP
         resource.id = copier.identities.resources.at(resource.id);
         if (auto* device = std::get_if<DeviceResource>(&resource.location)) { device->configuration = copier.value(device->configuration); }
     }
-    for (auto& variable : result.variables) {
-        variable.id = copier.identities.variables.at(variable.id);
-        variable.initial_value = copier.value(variable.initial_value);
-    }
+    copier.remap_variables(result.variables);
     for (auto& queue : result.queues) { queue.id = copier.identities.queues.at(queue.id); }
     for (auto& layout : result.layouts) {
         layout.workflow = copier.identities.workflows.at(layout.workflow);

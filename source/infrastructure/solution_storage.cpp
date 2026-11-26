@@ -130,10 +130,12 @@ void PackageWriteLock::release() noexcept
     handle_ = nullptr;
 }
 
-Result<PackageWriteLock> PackageWriteLock::acquire(const fs::path& directory)
+Result<PackageWriteLock> PackageWriteLock::acquire(const fs::path& directory, bool require_local_ntfs, bool wait)
 {
-    auto checked = check_local_ntfs(directory);
-    if (auto* failure = std::get_if<Diagnostic>(&checked)) { return std::move(*failure); }
+    if (require_local_ntfs) {
+        auto checked = check_local_ntfs(directory);
+        if (auto* failure = std::get_if<Diagnostic>(&checked)) { return std::move(*failure); }
+    }
     const auto sidecar = directory / package_lock_name;
     NativeFile file(CreateFileW(detail::windows_access_path(sidecar).c_str(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
         nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
@@ -146,7 +148,8 @@ Result<PackageWriteLock> PackageWriteLock::acquire(const fs::path& directory)
         return error(ErrorCode::InvalidPath, "The package save lock must be a regular file.");
     }
     OVERLAPPED range{};
-    if (!LockFileEx(file.get(), LOCKFILE_EXCLUSIVE_LOCK, 0, 1, 0, &range)) {
+    const DWORD flags = LOCKFILE_EXCLUSIVE_LOCK | (wait ? 0 : LOCKFILE_FAIL_IMMEDIATELY);
+    if (!LockFileEx(file.get(), flags, 0, 1, 0, &range)) {
         return io_error("Could not acquire the package save lock", GetLastError());
     }
     return PackageWriteLock{file.release()};

@@ -2,9 +2,12 @@ add_library(visionpro_communication_tools STATIC communication_tools.cpp communi
 target_include_directories(visionpro_communication_tools PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>")
 target_link_libraries(visionpro_communication_tools PUBLIC visionpro_core PRIVATE visionpro_infrastructure visionpro_build_options Threads::Threads)
 
-add_library(visionpro_camera_tools STATIC camera_tools.cpp camera_tools.hpp)
+add_library(visionpro_image_pixels STATIC image_source_pixels.cpp image_source_pixels.hpp)
+target_link_libraries(visionpro_image_pixels PUBLIC visionpro_core PRIVATE visionpro_build_options)
+add_library(visionpro_camera_tools STATIC camera_tools.cpp camera_tools.hpp image_source.cpp image_source.hpp
+    image_source_model.cpp image_source_model.hpp)
 target_include_directories(visionpro_camera_tools PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>")
-target_link_libraries(visionpro_camera_tools PUBLIC visionpro_core PRIVATE visionpro_infrastructure visionpro_build_options Threads::Threads)
+target_link_libraries(visionpro_camera_tools PUBLIC visionpro_core PRIVATE visionpro_image_pixels visionpro_infrastructure visionpro_build_options Threads::Threads)
 
 add_library(visionpro_shared_tools STATIC shared_tools.cpp shared_tools.hpp)
 target_include_directories(visionpro_shared_tools PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>")
@@ -28,6 +31,7 @@ target_link_libraries(visionpro_simulation_tools
 if(VISIONPRO_WITH_OPENCV)
     add_library(visionpro_vision_tools STATIC
         vision/vision_tools.cpp vision/vision_tools.hpp
+        vision/image_output.cpp vision/image_output.hpp vision/image_output_model.cpp vision/image_output_render.cpp
         vision/calibration.cpp vision/calibration.hpp vision/calibration_tools.cpp
         vision/inspection.cpp vision/inspection.hpp vision/class_map_tool.cpp vision/class_map_tool.hpp
         vision/opencv_image.cpp vision/opencv_image.hpp
@@ -41,6 +45,11 @@ if(VISIONPRO_WITH_OPENCV)
     target_include_directories(visionpro_vision_tools SYSTEM PRIVATE "${PROJECT_SOURCE_DIR}/third_party/nlohmann_json/include")
     target_link_libraries(visionpro_vision_tools
         PUBLIC visionpro_core
-        PRIVATE visionpro_logic_tools opencv_core opencv_imgproc opencv_imgcodecs visionpro_infrastructure visionpro_build_options
+        PRIVATE visionpro_logic_tools visionpro_image_pixels opencv_core opencv_imgproc opencv_imgcodecs visionpro_infrastructure visionpro_build_options
     )
+    target_compile_definitions(visionpro_camera_tools PRIVATE VISIONPRO_WITH_OPENCV)
+    if(WIN32)
+        target_link_libraries(visionpro_vision_tools PRIVATE gdi32 user32)
+    endif()
+    target_link_libraries(visionpro_camera_tools PRIVATE visionpro_vision_tools)
 endif()

@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <memory>
 #include <span>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -74,10 +75,26 @@ private:
     std::shared_ptr<const View> view_;
 };
 
+// Optional acquisition facts delivered with the pixels. Strobe channel order is
+// declared by the adapter. Channel handles share their immutable pixel storage.
+struct ImageAcquisitionInfo {
+    std::string serial;
+    std::string timestamp_source;
+    std::optional<std::uint64_t> device_frame_number;
+    std::optional<std::uint64_t> device_ticks;
+    std::optional<std::uint64_t> tick_frequency_hz;
+    std::optional<std::uint64_t> lost_frames;
+    std::optional<std::uint64_t> lost_packets;
+    std::optional<std::uint64_t> acquire_failures;
+    std::vector<ImageHandle> strobe_channels;
+    bool operator==(const ImageAcquisitionInfo&) const = default;
+};
+
 struct ImageFrame {
     ImageHandle image;
     std::optional<FrameId> frame;
     std::optional<std::chrono::sys_time<std::chrono::nanoseconds>> captured_at;
+    std::optional<ImageAcquisitionInfo> acquisition{};
     bool operator==(const ImageFrame&) const = default;
 };
 

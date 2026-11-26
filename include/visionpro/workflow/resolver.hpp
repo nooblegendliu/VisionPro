@@ -37,6 +37,7 @@ struct ResultTrace {
     core::ExecutionScopeId scope;
     std::optional<core::InvocationId> invocation;
     std::optional<core::AttemptId> attempt;
+    Judgement judgement{Judgement::NotEvaluated};
 };
 struct PublicInputTrace {
     ScopedInputReference reference;

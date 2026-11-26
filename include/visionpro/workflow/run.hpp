@@ -21,9 +21,14 @@ struct NodeTarget {
     bool operator==(const NodeTarget&) const = default;
 };
 using RunTarget = std::variant<WorkflowTarget, NodeTarget>;
-enum class TriggerKind { Manual, Continuous, External, Debug };
-struct RunTrigger { TriggerKind kind; core::SchemaId source; };
-enum class DebugStatePolicy { Isolated, Active };
+enum class TriggerKind { Manual, Continuous, External, Debug, Sdk, ImageDirectory, ImageSequence };
+[[nodiscard]] std::string_view trigger_kind_name(TriggerKind kind) noexcept;
+struct DirectoryChange {
+    core::NodeId node;
+    std::vector<std::string> changed_files;
+};
+struct RunTrigger { TriggerKind kind; core::SchemaId source; std::vector<DirectoryChange> directories{}; };
+enum class DebugStatePolicy { Isolated, Active, IsolatedSession };
 struct RunInput { core::InputId id; core::DataValue value; };
 struct WorkflowRunInputs { core::WorkflowId workflow; std::vector<RunInput> inputs; };
 enum class InputOrigin { Provided, Default };
@@ -83,12 +88,24 @@ struct OutputAddress {
 [[nodiscard]] OutputAddress output_address(const ResultIdentity& identity, core::OutputId output);
 
 enum class ExecutionStatus { Pending, Running, Succeeded, Failed, Skipped, Cancelled, TimedOut };
+// Numeric module status is execution metadata, independent of the inspected product's judgement.
+[[nodiscard]] constexpr std::optional<std::int64_t> module_completion_code(ExecutionStatus status) noexcept
+{
+    if (status == ExecutionStatus::Succeeded) { return 1; }
+    if (status == ExecutionStatus::Failed || status == ExecutionStatus::TimedOut) { return 0; }
+    return std::nullopt;
+}
 enum class Judgement { NotEvaluated, OK, NG };
 using core::OutputAbsenceReason;
 using core::NotProduced;
 using core::InvalidOutput;
 using core::OutputContent;
-struct OutputSlot { core::OutputId id; core::DataType type; OutputContent content; };
+struct OutputSlot {
+    core::OutputId id;
+    core::DataType type;
+    OutputContent content;
+    bool module_completion{}; // Derived from this call's terminal state by the result store.
+};
 struct NodeResultData {
     ResultIdentity identity;
     ExecutionStatus status;
@@ -98,6 +115,8 @@ struct NodeResultData {
     std::optional<std::chrono::nanoseconds> elapsed{};
     std::vector<core::ControlOutputId> selected_control_outputs{};
     std::vector<core::TimingMeasurement> timings{};
+    core::InvocationFlow flow{core::InvocationFlow::Continue};
+    std::chrono::system_clock::time_point recorded_at{std::chrono::system_clock::now()};
 };
 
 // A detached terminal-call record. The result store checks declared output

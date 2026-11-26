@@ -1,27 +1,34 @@
 #include "workspace_results.hpp"
+#include "image_source_fields.hpp"
 
 #include "coordinate_text.hpp"
 #include "data_type_text.hpp"
 #include "image_panel.hpp"
+#include "image_comparison.hpp"
 #include "module_history_panel.hpp"
 #include "run_image.hpp"
 #include "run_panel.hpp"
 #include "toolbox_catalog.hpp"
+#include "workspace_icons.hpp"
 
 #include <visionpro/core/schema_id_factory.hpp>
 #include <QAction>
 #include <QApplication>
 #include <QClipboard>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QDialog>
 #include <QDockWidget>
 #include <QHeaderView>
 #include <QLabel>
+#include <QMenu>
 #include <QMessageBox>
 #include <QSignalBlocker>
+#include <QPushButton>
 #include <QStackedWidget>
 #include <QTabBar>
 #include <QTreeWidget>
+#include <QTreeWidgetItemIterator>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -143,6 +150,21 @@ void configure_combo(QComboBox& combo, const char* name, const QString& prompt)
     combo.setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
     combo.setMinimumContentsLength(8);
 }
+
+struct SourceResultField {
+    std::string_view id;
+    const char* name;
+    std::string_view source{};
+};
+
+// The result tree follows the handbook. Port IDs are shared with saved bindings and the run API.
+constexpr SourceResultField source_result_fields[] = {
+    {"elapsed_ms", "耗时（ms）"}, {"image", "图像"}, {"image_1", "图像 1", "Camera"},
+    {"image_2", "图像 2", "Camera"}, {"image_3", "图像 3", "Camera"}, {"gray_image", "灰度图像"},
+    {"file_path", "当前图像路径", "Local"}, {"file_name", "当前图像名称", "Local"},
+    {"camera_frame_number", "帧号", "Camera"}, {"lost_frames", "丢帧数", "Camera"},
+    {"lost_packets", "丢包数", "Camera"}, {"acquire_failures", "相机获取失败次数", "Camera"}, {"sn", "SN 码"}
+};
 } // namespace
 
 WorkspaceResults::WorkspaceResults(QDockWidget& upper, QDockWidget& lower, ImagePanel& image, ModuleHistoryPanel& history)
@@ -163,7 +185,24 @@ WorkspaceResults::WorkspaceResults(QDockWidget& upper, QDockWidget& lower, Image
     call_->hide();
     selectors->addWidget(source_, 1);
     selectors->addWidget(call_);
+    compare_mode_ = new QCheckBox(tr("双画面对照（1×2）"),flow);
+    compare_mode_->setObjectName("flowImageComparison");
+    selectors->addWidget(compare_mode_);
     flow_layout->addLayout(selectors);
+    connect(compare_mode_,&QCheckBox::toggled,this,[this,flow_layout,flow](bool on) {
+        if (on && !comparison_) {
+            comparison_ = new ImageComparison(flow);
+            flow_layout->addWidget(comparison_,1);
+        }
+        if (comparison_) {
+            comparison_->setVisible(on);
+            if (!on) { comparison_->suspend(); }
+        }
+        source_->setVisible(!on);
+        if (on) { call_->hide(); }
+        if (flow_image_) { flow_image_->setVisible(!on); }
+        emit view_changed();
+    });
     top->addWidget(flow);
 
     auto* output_page = new QWidget(top);
@@ -190,10 +229,14 @@ WorkspaceResults::WorkspaceResults(QDockWidget& upper, QDockWidget& lower, Image
             QApplication::clipboard()->setText(id.isEmpty() ? item->text(0) : id);
         }
     });
+    camera_variable_menu_ = new QMenu(tr("设备诊断变量"), outputs_);
+    outputs_->addAction(camera_variable_menu_->menuAction());
+    camera_variable_menu_->menuAction()->setVisible(false);
     connect(outputs_, &QTreeWidget::itemExpanded, this, [](QTreeWidgetItem* row) {
         if (auto* value = dynamic_cast<ValueItem*>(row); value && !value->loaded) { value->fetch(); }
     });
     connect(outputs_, &QTreeWidget::itemActivated, this, [this](QTreeWidgetItem* row) {
+        if (source_page_ && row->data(0, Qt::UserRole + 2).toBool()) { row = row->parent(); }
         if (row->data(0, Qt::UserRole + 1).toBool()) {
             static_cast<ValueItem*>(row->parent())->fetch();
             return;
@@ -209,7 +252,7 @@ WorkspaceResults::WorkspaceResults(QDockWidget& upper, QDockWidget& lower, Image
             return;
         }
         const auto* value = dynamic_cast<ValueItem*>(row);
-        if (!value || row->parent() || !image_type(value->value.type()) || !output_run_ || !output_call_) { return; }
+        if (!value || (!source_page_ && row->parent()) || !image_type(value->value.type()) || !output_run_ || !output_call_) { return; }
         const auto id = row->data(0, Qt::UserRole).toString();
         const auto record = output_run_->lookup(*output_call_);
         const auto* found = std::get_if<std::optional<NodeResult>>(&record);
@@ -217,6 +260,11 @@ WorkspaceResults::WorkspaceResults(QDockWidget& upper, QDockWidget& lower, Image
         const auto& ports = (*found)->data().outputs;
         const auto slot = std::ranges::find_if(ports, [&](const auto& entry) { return QString::fromUtf8(entry.id.text()) == id; });
         if (slot == ports.end()) { return; }
+        if (source_page_) {
+            image_tabs_->setCurrentIndex(0);
+            emit source_preview_requested(slot->id);
+            return;
+        }
         if (output_detail_) { output_detail_->close(); }
         auto* dialog = new QDialog(outputs_);
         output_detail_ = dialog;
@@ -232,6 +280,27 @@ WorkspaceResults::WorkspaceResults(QDockWidget& upper, QDockWidget& lower, Image
         dialog->show();
     });
     output_layout->addWidget(outputs_, 1);
+    auto* ref = new QHBoxLayout;
+    reference_ = text_page(output_page);
+    reference_->setText(tr("选择输出查看 C++ 取值表达式"));
+    reference_->setToolTip(tr("run 是所选轮次的 RunHandle，call 是该轮对应节点和作用域的 InvocationKey。"));
+    reference_->setMargin(1);
+    reference_->setObjectName(QStringLiteral("sourceOutputReference"));
+    auto* copy_ref = new QPushButton(tr("复制表达式"), output_page);
+    copy_ref->setObjectName(QStringLiteral("copySourceReference"));
+    copy_ref->setEnabled(false);
+    ref->addWidget(reference_, 1); ref->addWidget(copy_ref);
+    output_layout->addLayout(ref);
+    connect(copy_ref, &QPushButton::clicked, this, [this] { QApplication::clipboard()->setText(reference_->text()); });
+    connect(outputs_, &QTreeWidget::currentItemChanged, this, [this, copy_ref](QTreeWidgetItem* row) {
+        while (row && row->parent() && row->data(0,Qt::UserRole).toString().isEmpty()) { row = row->parent(); }
+        const auto id = row ? row->data(0,Qt::UserRole).toString() : QString{};
+        const bool has_output = source_node_ && !id.isEmpty();
+        reference_->setText(has_output
+            ? QStringLiteral("run.lookup_output(call, \"%1\", \"%2\")").arg(QString::fromStdString(source_node_->node.to_string()), id)
+            : tr("选择输出查看 C++ 取值表达式"));
+        copy_ref->setEnabled(has_output);
+    });
     top->addWidget(output_page);
     upper.setWidget(top);
     connect(image_tabs_, &QTabBar::currentChanged, top, &QStackedWidget::setCurrentIndex);
@@ -240,6 +309,7 @@ WorkspaceResults::WorkspaceResults(QDockWidget& upper, QDockWidget& lower, Image
             flow_image_ = new ImagePanel(flow);
             flow_image_->setObjectName(QStringLiteral("flowImagePanel"));
             flow_layout->addWidget(flow_image_, 1);
+            flow_image_->setVisible(!compare_mode_->isChecked());
         }
     });
     connect(image_tabs_, &QTabBar::currentChanged, this, &WorkspaceResults::view_changed);
@@ -282,6 +352,12 @@ WorkspaceResults::WorkspaceResults(QDockWidget& upper, QDockWidget& lower, Image
 
 void WorkspaceResults::reset_document()
 {
+    if (comparison_) { comparison_->reset_document(); }
+    const QSignalBlocker block(compare_mode_);
+    compare_mode_->setChecked(false);
+    if (comparison_) { comparison_->hide(); }
+    if (flow_image_) { flow_image_->show(); }
+    source_->show();
     if (output_detail_) { output_detail_->close(); }
     chosen_.clear();
     workflow_.reset();
@@ -294,11 +370,12 @@ void WorkspaceResults::reset_document()
     output_run_.reset();
     output_call_.reset();
     rendered_outputs_.reset();
+    rendered_source_.reset();
     outputs_->clear();
 }
 
-void WorkspaceResults::update(const Workflow* draft_flow, const Node* draft_node, const ToolRegistry& registry,
-    std::uint64_t edit_generation, const QString& context)
+void WorkspaceResults::update(const Solution& draft, const Workflow* draft_flow, const Node* draft_node,
+    const ToolRegistry& registry, std::uint64_t edit_generation, const QString& context, bool editable)
 {
     const auto run = history_.selected_run();
     context_->setText(context);
@@ -308,22 +385,55 @@ void WorkspaceResults::update(const Workflow* draft_flow, const Node* draft_node
     const auto* flow = run ? find_workflow(run->request().snapshot().solution(), run->identity().workflow) : draft_flow;
     const auto* node = draft_node && flow ? find_node(*flow, draft_node->id) : nullptr;
     const auto* tool_config = node ? std::get_if<ToolConfiguration>(&node->configuration) : nullptr;
-    const auto* tool = tool_config ? (run ? run->request().snapshot().find_tool(tool_config->type)
+    const auto* tool = tool_config ? (run ? run->request().snapshot().find_tool(*node)
                                          : registry.find_descriptor(tool_config->type)) : nullptr;
+    const bool image_source = is_image_source(node);
+    const bool image_output = is_image_output(node);
+    const bool image_results = image_source || image_output;
+    std::optional<ToolDescriptor> projected;
+    if (!run && image_source && tool) { projected = specialize_tool(*tool, *node); tool = &*projected; }
+    source_node_ = image_results ? std::optional{NodeTarget{flow->id,node->id}} : std::nullopt;
+    if (source_page_ != image_results || reference_->property("imageSource").toBool() != image_source
+        || !reference_->property("initialized").toBool()) {
+        source_page_ = image_results;
+        reference_->setProperty("imageSource", image_source);
+        reference_->setProperty("initialized", true);
+        image_tabs_->setTabText(0, image_source ? tr("图像") : tr("模块图像"));
+        image_tabs_->setTabText(2, image_results ? tr("模块结果") : tr("模块输出数据"));
+        image_tabs_->setTabVisible(1, !image_source);
+        result_tabs_->setTabVisible(0, !image_source);
+        if (image_source && result_tabs_->currentIndex() == 0) { result_tabs_->setCurrentIndex(1); }
+        reference_->setVisible(image_results);
+        reference_->parentWidget()->findChild<QPushButton*>("copySourceReference")->setVisible(image_results);
+        outputs_->setHeaderLabels({image_results ? tr("结果名称") : tr("输出"), tr("类型"),
+            image_results ? tr("当前值") : tr("值 / 状态"), tr("单位"), tr("变量管理")});
+        outputs_->setColumnHidden(1,image_results); outputs_->setColumnHidden(3,image_results); outputs_->setColumnHidden(4,!image_results);
+        output_origin_->setVisible(!image_source);
+        outputs_->header()->resizeSection(0,image_results ? 185 : 100);
+        if (image_results) { outputs_->header()->resizeSection(4,120); }
+    }
     if (result_tabs_->currentIndex() == 2) {
-        help_->setText(tool ? tr("%1\n输入 %2 项　参数 %3 项　输出 %4 项\n双击模块可查看其输入绑定、参数和输出定义。")
+        help_->setText(image_source ? tr("图像源为流程提供本轮图像。双击节点编辑来源和触发设置，在图像页导入本地图片。模块结果列出当前调用的输出，选择历史记录可回看该轮。")
+            : image_output ? tr("输出图像订阅底图和前序检测结果，生成本次调用的结果图。存图按配置独立执行，历史结果可查看当时的图像及归档路径。")
+            : tool ? tr("%1\n输入 %2 项　参数 %3 项　输出 %4 项\n双击模块可查看其输入绑定、参数和输出定义。")
             .arg(toolbox_entry(tool->id.text(), QString::fromStdString(tool->display_name)).name)
             .arg(tool->inputs.size()).arg(tool->parameters.size()).arg(tool->outputs.size())
             : tool_config ? tr("缺少该工具的描述。") : node ? tr("工具组的输入和输出由其公开接口定义。") : tr("选中模块后可查看工具说明。"));
     }
-    if (image_tabs_->currentIndex() == 1) { update_flow_image(flow, registry, run, edit_generation); }
+    const bool comparing = image_tabs_->currentIndex() == 1 && compare_mode_->isChecked() && comparison_;
+    if (comparing) { comparison_->update_run(flow,registry,run,history_.selected_scope()); }
+    else if (comparison_) { comparison_->suspend(); }
+    if (image_tabs_->currentIndex() == 1 && !comparing) { update_flow_image(flow, registry, run, edit_generation); }
     else if (rendered_image_) { flow_image_->clear_frame(true); rendered_image_.reset(); }
-    if (image_tabs_->currentIndex() == 2) { update_outputs(node, tool, run, history_.selection_message()); }
+    if (image_tabs_->currentIndex() == 2) {
+        update_outputs(node, tool, run, history_.selection_message(), draft, edit_generation, editable);
+    }
     else if (output_run_) { output_run_.reset(); rendered_outputs_.reset(); outputs_->clear(); }
 }
 
 void WorkspaceResults::update_outputs(const Node* node, const ToolDescriptor* tool,
-    const std::optional<RunHandle>& run, const QString& message)
+    const std::optional<RunHandle>& run, const QString& message,
+    const Solution& draft, std::uint64_t edit_generation, bool editable)
 {
     output_run_ = run;
     output_call_ = history_.selected_invocation();
@@ -337,26 +447,113 @@ void WorkspaceResults::update_outputs(const Node* node, const ToolDescriptor* to
             missing = error.code == ErrorCode::ResultRetired ? tr("结果已淘汰 · %1").arg(run_diagnostic_text(error)) : run_diagnostic_text(error);
         }
     }
-    if (result && rendered_outputs_ == result->data().identity) { return; }
+    const bool same_source = source_node_ && rendered_source_ == source_node_;
+    const bool same_values = result ? rendered_outputs_ == result->data().identity
+        : same_source && !rendered_outputs_ && output_message_ == missing && outputs_->topLevelItemCount() > 0;
+    if (same_values && output_generation_ == edit_generation && mappings_editable_ == editable) { return; }
+    QString selected;
+    QStringList expanded;
+    bool root_expanded = true;
+    bool selected_image_data = false;
+    if (same_source) {
+        if (auto* row = outputs_->currentItem()) {
+            selected = row->data(0, Qt::UserRole).toString();
+            selected_image_data = row->data(0, Qt::UserRole + 2).toBool();
+        }
+        if (const auto* root = outputs_->topLevelItem(0)) {
+            root_expanded = root->isExpanded();
+            for (int i = 0; i < root->childCount(); ++i) {
+                const auto* row = root->child(i);
+                if (row->isExpanded()) { expanded << row->data(0, Qt::UserRole).toString(); }
+            }
+        }
+    }
+    rendered_source_ = source_node_;
+    output_message_ = missing;
+    output_generation_ = edit_generation;
+    mappings_editable_ = editable;
     outputs_->clear();
     rendered_outputs_.reset();
     QString title = node ? QString::fromStdString(node->name) : tr("请选择模块");
     if (result) {
         const auto& id = result->data().identity;
         rendered_outputs_ = id;
-        title += tr(" · 第 %1 轮 · 作用域 %2 · 调用 %3 · 尝试 %4").arg(id.run.run.value())
-            .arg(id.invocation.scope.value()).arg(id.invocation.invocation.value()).arg(id.attempt.value());
+        title += tr(" · 第 %1 轮").arg(id.run.run.value());
+        if (!source_page_ || is_image_output(node)) {
+            title += tr(" · 作用域 %1 · 调用 %2 · 尝试 %3").arg(id.invocation.scope.value())
+                .arg(id.invocation.invocation.value()).arg(id.attempt.value());
+        }
     } else if (!missing.isEmpty()) { title += QStringLiteral(" · ") + missing; }
     const auto ports = declarations(node, tool);
     if (node && ports.empty()) { title += tr(" · 没有声明数据输出"); }
     output_origin_->setText(title);
-    for (const auto& port : ports) {
+    QTreeWidgetItem* root = nullptr;
+    if (source_page_) {
+        const auto status = result ? tr("第 %1 轮").arg(result->data().identity.run.run.value()) : missing;
+        root = new QTreeWidgetItem(outputs_, {QString::fromStdString(node->name), {}, status});
+    }
+    const auto* editable_flow = source_node_ ? find_workflow(draft, source_node_->workflow) : nullptr;
+    const auto* editable_node = editable_flow ? find_node(*editable_flow, source_node_->node) : nullptr;
+    const auto variable_caption = [&](const OutputId& port) -> QString {
+        if (editable_node) {
+            const auto binding = std::ranges::find(editable_node->result_variables, port, &ResultVariableBinding::output);
+            if (binding != editable_node->result_variables.end()) {
+                const bool global = binding->scope == VariableScope::Global;
+                const auto& variables = global ? draft.variables : local_variable_definitions(*editable_flow, editable_node->id);
+                const auto variable = std::ranges::find(variables, binding->variable, &GlobalVariableDefinition::id);
+                const auto variable_name = variable == variables.end() ? tr("变量缺失") : QString::fromStdString(variable->name);
+                return (global ? tr("全局 · %1") : tr("局部 · %1")).arg(variable_name);
+            }
+        }
+        return {};
+    };
+    const auto map_variable = [&](QTreeWidgetItem* row, const OutputId& port, const QString& name) {
+        const QString caption = variable_caption(port);
+        auto* map = new QPushButton(workspace_icon(WorkspaceIcon::Link), caption, outputs_);
+        map->setFlat(true);
+        map->setObjectName(QStringLiteral("mapResultVariable.") + QString::fromUtf8(port.text()));
+        map->setEnabled(editable && editable_node);
+        const auto field_name = row->parent() != root ? tr("%1 · %2").arg(row->parent()->text(0), name) : name;
+        const auto label = caption.isEmpty() ? tr("绑定全局或局部变量") : caption;
+        map->setAccessibleName(tr("%1 · %2").arg(field_name, label));
+        map->setToolTip(map->accessibleName());
+        connect(map, &QPushButton::clicked, this, [this,target=*source_node_,port,field_name] {
+            emit source_variable_requested(target.workflow,target.node,port,field_name);
+        });
+        outputs_->setItemWidget(row, 4, map);
+    };
+    camera_variable_menu_->clear();
+    const auto source = source_page_ ? source_enum(*node, "source_type", "Local") : std::string_view{};
+    camera_variable_menu_->menuAction()->setVisible(source == "Camera");
+    camera_variable_menu_->setEnabled(editable && editable_node);
+    if (source == "Camera") {
+        for (const auto key : camera_diagnostic_outputs) {
+            const auto port = source_key<OutputId>(key);
+            const auto name = camera_diagnostic_name(key);
+            const auto caption = variable_caption(port);
+            auto* action = camera_variable_menu_->addAction(caption.isEmpty() ? name : tr("%1 · %2").arg(name, caption));
+            connect(action, &QAction::triggered, this, [this, target=*source_node_,port,name] {
+                emit source_variable_requested(target.workflow, target.node, port, name);
+            });
+        }
+    }
+    const auto add_port = [&](const OutputDescriptor& port, const QString& name) {
+        const auto key = port.id.text();
         const auto* slot = result ? result->output(port.id) : nullptr;
-        const QString name = display_field(QString::fromStdString(port.display_name));
         auto* value = slot ? std::get_if<DataValue>(&slot->content) : nullptr;
         QTreeWidgetItem* row;
         if (value) {
             row = new ValueItem(name, *value);
+            if (source_page_ && key == "elapsed_ms" && value->as_float64()) {
+                row->setText(2, tr("%1 ms").arg(*value->as_float64(), 0, 'f', 3));
+                row->setToolTip(2, tr("%1 ms").arg(*value->as_float64(), 0, 'g', 16));
+            }
+            if (is_image_output(node) && key == "module_status" && result) {
+                const auto state = result->data().status;
+                if (const auto code = module_completion_code(state)) {
+                    row->setText(2, tr("%1（%2）").arg(*code).arg(execution_status_text(state)));
+                }
+            }
             if (image_type(port.type)) { row->setToolTip(2, tr("双击或按 Enter 预览此输出")); }
         } else {
             QString reason = missing.isEmpty() ? tr("未产出") : missing;
@@ -365,7 +562,23 @@ void WorkspaceResults::update_outputs(const Node* node, const ToolDescriptor* to
                 if (auto* invalid = std::get_if<InvalidOutput>(&slot->content)) {
                     diagnostic = run_diagnostic_text(invalid->diagnostic);
                     reason = tr("无效 · %1").arg(QString::fromStdString(invalid->diagnostic.message));
-                } else { reason = absence(std::get<NotProduced>(slot->content).reason); }
+                } else {
+                    const auto absent = std::get<NotProduced>(slot->content).reason;
+                    const bool device_metric = key == "lost_frames" || key == "lost_packets"
+                        || key == "acquire_failures" || key == "camera_frame_number";
+                    reason = source_page_ && device_metric && absent == OutputAbsenceReason::ToolDidNotProduce
+                        ? tr("设备未提供") : absence(absent);
+                }
+            }
+            if (result && is_image_output(node)) {
+                const auto& record = result->data();
+                if (key == "module_status") {
+                    if (const auto code = module_completion_code(record.status)) {
+                        reason = tr("%1（%2）").arg(*code).arg(execution_status_text(record.status));
+                    } else { reason = execution_status_text(record.status); }
+                } else if (key == "elapsed_ms" && record.elapsed) {
+                    reason = tr("%1 ms").arg(std::chrono::duration<double,std::milli>(*record.elapsed).count(), 0, 'f', 3);
+                }
             }
             if (diagnostic.isEmpty() && result && !result->data().diagnostics.empty()) {
                 diagnostic = run_diagnostic_text(result->data().diagnostics.front());
@@ -378,7 +591,60 @@ void WorkspaceResults::update_outputs(const Node* node, const ToolDescriptor* to
         row->setData(0, Qt::UserRole, id);
         row->setToolTip(0, id);
         if (port.semantics.unit != MeasurementUnit::Unspecified) { row->setText(3, unit_symbol(port.semantics.unit)); }
-        outputs_->addTopLevelItem(row);
+        if (root) {
+            root->addChild(row);
+            map_variable(row, port.id, name);
+            if (port.type == DataType::image()) {
+                const auto* img = value && value->as_image() ? &value->as_image()->image : nullptr;
+                auto* entry = new QTreeWidgetItem(row, {tr("图像数据"), {}, img ? tr("双击预览") : row->text(2)});
+                entry->setData(0, Qt::UserRole, id);
+                entry->setData(0, Qt::UserRole + 2, true);
+                const auto child = [&](const QString& name, const QString& output, const QString& format = {}) {
+                    const auto key = source_key<OutputId>(output.toStdString());
+                    if (std::ranges::find(ports, key, &OutputDescriptor::id) == ports.end()) { return; }
+                    auto* item = new QTreeWidgetItem(row, {name,{},row->text(2)});
+                    item->setData(0,Qt::UserRole,output);
+                    if (const auto* slot = result ? result->output(key) : nullptr) {
+                        if (const auto* datum = std::get_if<DataValue>(&slot->content)) {
+                            const auto current = shared_value_text(*datum);
+                            item->setText(2, format.isEmpty() ? current : tr("%1（%2）").arg(current, format));
+                        }
+                    }
+                    map_variable(item, key, name);
+                };
+                child(tr("宽度"), id + "_width");
+                child(tr("高度"), id + "_height");
+                const auto format = !img ? QString{} : img->format().order == ChannelOrder::Mono ? tr("Mono8")
+                    : img->format().order == ChannelOrder::RGB ? tr("RGB24") : tr("BGR8");
+                child(tr("像素格式"), id == "image" ? QStringLiteral("pixel_format") : id + "_pixel_format", format);
+            }
+            if (expanded.contains(id)) { row->setExpanded(true); }
+        } else { outputs_->addTopLevelItem(row); }
+    };
+    if (root && is_image_output(node)) {
+        for (const auto& port : ports) {
+            const auto key = port.id.text();
+            if (key == "image_width" || key == "image_height" || key == "pixel_format") { continue; }
+            add_port(port, key == "image" ? tr("输出图像") : display_field(QString::fromUtf8(port.id.text())));
+        }
+        root->setExpanded(root_expanded);
+    } else if (root) {
+        for (const auto& field : source_result_fields) {
+            if (!field.source.empty() && field.source != source) { continue; }
+            const auto port = std::ranges::find(ports, field.id, [](const auto& p) { return p.id.text(); });
+            if (port != ports.end()) { add_port(*port, tr(field.name)); }
+        }
+        root->setExpanded(root_expanded);
+    } else {
+        for (const auto& port : ports) { add_port(port, display_field(QString::fromStdString(port.display_name))); }
+    }
+    if (!selected.isEmpty()) {
+        for (QTreeWidgetItemIterator it(outputs_); *it; ++it) {
+            if ((*it)->data(0, Qt::UserRole).toString() == selected && (*it)->data(0, Qt::UserRole + 2).toBool() == selected_image_data) {
+                outputs_->setCurrentItem(*it);
+                break;
+            }
+        }
     }
 }
 

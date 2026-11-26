@@ -13,6 +13,10 @@ add_library(visionpro_ui STATIC
     toolbox_catalog.cpp toolbox_catalog.hpp
     editor_inspector.cpp editor_inspector.hpp
     image_panel.cpp image_panel.hpp
+    image_comparison.cpp image_comparison.hpp
+    image_archive_dialogs.cpp image_archive_dialogs.hpp
+    image_output_settings.cpp image_output_settings.hpp
+    image_source_fields.hpp image_source_strip.cpp image_source_strip.hpp
     image_view.cpp image_view.hpp
     module_history_panel.cpp module_history_panel.hpp
     workspace_results.cpp workspace_results.hpp data_type_text.hpp

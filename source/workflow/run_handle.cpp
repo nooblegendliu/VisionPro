@@ -1,5 +1,7 @@
 #include <visionpro/workflow/run_handle.hpp>
 #include <visionpro/workflow/result_store.hpp>
+#include <visionpro/core/id_factory.hpp>
+#include <visionpro/core/schema_id_factory.hpp>
 
 #include <algorithm>
 #include <set>
@@ -168,6 +170,28 @@ Result<std::optional<NodeResult>> RunHandle::lookup(const core::InvocationKey& i
         if (const auto* error = std::get_if<Diagnostic>(&valid)) { return *error; }
         return result;
     });
+}
+
+Result<std::optional<OutputSlot>> RunHandle::lookup_output(const core::InvocationKey& call,
+    std::string_view node_uuid, std::string_view output_id) const
+{
+    auto node = core::IdFactory::parse<core::NodeId>(node_uuid);
+    if (const auto* error = std::get_if<Diagnostic>(&node)) { return *error; }
+    if (call.node != std::get<core::NodeId>(node)) {
+        return failure(request(), ErrorCode::ResultIdentityMismatch, "The output reference and invocation belong to different nodes.");
+    }
+    auto output = core::SchemaIdFactory::parse<core::OutputId>(output_id);
+    if (const auto* error = std::get_if<Diagnostic>(&output)) { return *error; }
+    auto query = lookup(call);
+    if (const auto* error = std::get_if<Diagnostic>(&query)) { return *error; }
+    const auto& record = std::get<std::optional<NodeResult>>(query);
+    if (!record) { return std::optional<OutputSlot>{}; }
+    const auto& id = std::get<core::OutputId>(output);
+    if (const auto* slot = record->output(id)) { return std::optional{*slot}; }
+    auto error = failure(request(), ErrorCode::UnknownTarget, "The selected call has no output with this ID.");
+    error.location.invocation = call;
+    error.location.output = id;
+    return error;
 }
 
 } // namespace visionpro::workflow

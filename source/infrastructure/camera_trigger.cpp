@@ -79,7 +79,7 @@ Result<TriggerReceipt> CameraTriggerStream::next(std::stop_token stop)
     const auto duration = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started);
     if (auto* failure = std::get_if<Diagnostic>(&capture)) { request_stop(); return *failure; }
     const auto& frame = std::get<CameraFrame>(capture);
-    if (!frame.image.frame || frame.image.frame->sequence > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())
+    if (!frame.image.frame || !frame.image.acquisition || frame.image.frame->sequence > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())
         || frame.image.frame->source != binding.device || frame.image.image.coordinate_frame() != binding.coordinate_frame) {
         request_stop();
         return error(ErrorCode::ResultIdentityMismatch, "Camera returned a frame inconsistent with its resource or coordinates.");
@@ -104,8 +104,10 @@ Result<TriggerReceipt> CameraTriggerStream::next(std::stop_token stop)
         ? TriggerReceipt{{TriggerKind::External, s.entry.source}, s.entry.frame_input, sequence, correlation,
             RunRejected{error(ErrorCode::ResultIdentityMismatch, "Repeated or out-of-order device frame in the same camera stream.")}}
         : s.control->camera_frame(sequence, frame.image, correlation);
-    receipt.camera = CameraEventInfo{frame.device_frame_number, frame.device_ticks, frame.tick_frequency_hz,
-        frame.timestamp_source, duration, frame.device_duration, frame.device_duration_unit};
+    // The receipt and workflow input use the same capture metadata, including on queued admissions.
+    const auto& metadata = *frame.image.acquisition;
+    receipt.camera = CameraEventInfo{metadata.device_frame_number, metadata.device_ticks, metadata.tick_frequency_hz,
+        metadata.timestamp_source, duration, frame.device_duration, frame.device_duration_unit};
     {
         const std::lock_guard count(s.counts);
         if (std::holds_alternative<RunHandle>(receipt.submission)) { ++s.statistics.accepted; }

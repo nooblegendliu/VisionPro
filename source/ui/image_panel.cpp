@@ -12,6 +12,7 @@
 #include <visionpro/workflow/run.hpp>
 
 #include <QHBoxLayout>
+#include <QDialog>
 #include <QLabel>
 #include <QPainter>
 #include <QPushButton>
@@ -61,9 +62,9 @@ const DataValue* output_value(const NodeResult& result, const OutputId& output)
     return slot ? std::get_if<DataValue>(&slot->content) : nullptr;
 }
 
-Result<std::vector<BlobAnnotation>> read_blobs(const NodeResult& result)
+Result<std::vector<BlobAnnotation>> read_blobs(const NodeResult& result, const OutputId& port = key<OutputId>("components"))
 {
-    const auto* value = output_value(result, key<OutputId>("components"));
+    const auto* value = output_value(result, port);
     const auto* components = value ? value->elements() : nullptr;
     if (!components) { return issue(ErrorCode::InvalidValue, "The selected result has no Blob component list."); }
     const auto bounds_id = key<FieldId>("bounds");
@@ -255,6 +256,27 @@ ImagePanel::ImagePanel(QWidget* parent)
     button("imageZoomOut", QStringLiteral("−"), tr("缩小图像 (−)"), [this] { view_->zoom_by(1 / 1.2); });
     button("imageZoomIn", QStringLiteral("+"), tr("放大图像 (+)"), [this] { view_->zoom_by(1.2); });
     button("imageActualSize", QStringLiteral("1:1"), tr("原始像素大小 (1)"), [this] { view_->actual_size(); });
+    button("imageFullscreen",tr("全屏"),tr("全屏查看图像"),[this,layout] {
+        if (auto* open = findChild<QDialog*>("fullScreenImage"); open && open->isVisible()) { open->raise(); return; }
+        auto* full = new QDialog(this);
+        full->setObjectName("fullScreenImage");
+        full->setAttribute(Qt::WA_DeleteOnClose);
+        full->setWindowTitle(tr("全屏图像"));
+        auto* content = new QVBoxLayout(full);
+        auto* close = new QPushButton(tr("退出全屏（Esc）"),full);
+        const int position = layout->indexOf(view_);
+        content->addWidget(view_,1);
+        content->addWidget(close,0,Qt::AlignRight);
+        connect(close,&QPushButton::clicked,full,&QDialog::accept);
+        connect(full,&QDialog::finished,this,[this,layout,position] {
+            layout->insertWidget(position,view_,1);
+            view_->show();
+            view_->fit_image();
+        });
+        full->showFullScreen();
+        view_->show();
+        view_->fit_image();
+    });
     layout->addLayout(inspection);
     connect(view_, &ImageView::pixel_changed, this, [this](const QString& sample) {
         pixel_info_->setText(sample);
@@ -287,7 +309,8 @@ void ImagePanel::describe_frame(const ImageHandle& image)
     frame_ = image;
     const auto frame = image.coordinate_frame().text();
     image_info_->setText(QStringLiteral("%1 × %2 · %3").arg(image.width()).arg(image.height())
-        .arg(image.format().order == ChannelOrder::Mono ? QStringLiteral("Mono8") : QStringLiteral("BGR8")));
+        .arg(image.format().order == ChannelOrder::Mono ? QStringLiteral("Mono8")
+            : image.format().order == ChannelOrder::RGB ? QStringLiteral("RGB24") : QStringLiteral("BGR8")));
     image_info_->setToolTip(image_info_->text() + QStringLiteral(" · ") + QString::fromUtf8(frame));
     set_provenance({});
     emit frame_changed();
@@ -385,6 +408,21 @@ void ImagePanel::set_provenance(const QString& text)
     provenance_->setVisible(!text.isEmpty());
 }
 
+Result<std::monostate> ImagePanel::append_graphic(const NodeResult& source,OutputId port,SchemaId item)
+{
+    const auto* value = output_value(source,port);
+    if (!value) { return issue(ErrorCode::InputUnavailable,"The selected graphic was not produced."); }
+    if (item.text() == "bounds" || item.text() == "centroids") {
+        auto blobs = read_blobs(source,port);
+        if (auto* error = std::get_if<Diagnostic>(&blobs)) { return *error; }
+        return view_->set_overlays({},{},std::get<std::vector<BlobAnnotation>>(blobs),true,
+            item.text() == "bounds",item.text() == "centroids");
+    }
+    if (const auto* mask = value->as_raster_mask()) { return view_->set_overlays({},*mask,{},true); }
+    if (const auto* region = value->as_region2d()) { return view_->set_overlays(*region,{},{},true); }
+    return view_->append_geometry(*value);
+}
+
 void ImagePanel::set_sources(const QStringList& labels, int selected, ThumbnailProvider thumbnail)
 {
     const QSignalBlocker block(sources_);
@@ -401,6 +439,7 @@ void ImagePanel::set_sources(const QStringList& labels, int selected, ThumbnailP
 }
 
 int ImagePanel::selected_source() const { return sources_->currentIndex(); }
+void ImagePanel::select_source(int index) { sources_->setCurrentIndex(index); }
 
 void ImagePanel::set_manual_view(bool manual)
 {

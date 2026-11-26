@@ -9,6 +9,26 @@
 #include <type_traits>
 
 namespace visionpro::workflow {
+core::ToolDescriptor specialize_tool(const core::ToolDescriptor& descriptor, const Node& node)
+{
+    auto selected = descriptor;
+    if (!descriptor.specialize) { return selected; }
+    std::vector<core::FixedToolParameter> parameters;
+    for (const auto& binding : node.bindings) {
+        const auto* id = std::get_if<core::ParameterId>(&binding.target);
+        if (!id || binding.sources.size() != 1) { continue; }
+        const auto* constant = std::get_if<core::ConfigValue>(&binding.sources.front());
+        if (!constant) { continue; }
+        const auto declared = std::ranges::find(descriptor.parameters, *id, &core::ParameterDescriptor::id);
+        if (declared != descriptor.parameters.end() && declared->binding.time == core::BindingTime::SnapshotBuild) {
+            parameters.push_back({*id, *constant});
+        }
+    }
+    std::vector<core::ToolResourceBinding> resources;
+    for (const auto& binding : node.resources) { resources.push_back({binding.slot, binding.resource}); }
+    descriptor.specialize(selected, parameters, resources);
+    return selected;
+}
 namespace {
 using Check = core::Result<std::monostate>;
 using detail::Parents;
@@ -404,6 +424,21 @@ Check validate_workflow_trigger(const Workflow& workflow)
     return std::monostate{};
 }
 
+bool result_variable_compatible(const core::DataType& output, const core::DataType& variable) noexcept
+{
+    return variable == output || (variable.kind() == core::TypeKind::Optional && *variable.element_type() == output);
+}
+
+const std::vector<core::GlobalVariableDefinition>& local_variable_definitions(const Workflow& flow, core::NodeId node) noexcept
+{
+    const auto parent = std::ranges::find(flow.containment, node, &Containment::child);
+    if (parent == flow.containment.end()) { return flow.local_variables; }
+    const auto* owner = find_node(flow, parent->parent);
+    if (const auto* group = owner ? std::get_if<GroupConfiguration>(&owner->configuration) : nullptr) { return group->local_variables; }
+    static const std::vector<core::GlobalVariableDefinition> empty;
+    return empty;
+}
+
 Check validate_global_invariants(const Solution& solution)
 {
     const auto contextualize = [&](Check checked) {
@@ -419,13 +454,29 @@ Check validate_global_invariants(const Solution& solution)
     std::set<core::WorkflowId> workflows;
     std::set<core::NodeId> nodes;
     std::set<core::ControlLinkId> links;
+    std::set<core::VariableId> variables;
+    for (const auto& variable : solution.variables) { variables.insert(variable.id); }
     for (const auto& workflow : solution.workflows) {
         const auto with_workflow = [&](Check checked) {
             if (auto* failure = std::get_if<core::Diagnostic>(&checked)) { failure->location.workflow = workflow.id; }
             return contextualize(std::move(checked));
         };
         if (!workflows.insert(workflow.id).second) { return with_workflow(error(core::ErrorCode::DuplicateIdentity, "Workflow identity is duplicated.")); }
+        const auto locals = [&](const auto& definitions) -> Check {
+            if (auto checked = core::validate_global_variable_definitions(definitions); failed(checked)) { return checked; }
+            for (const auto& local : definitions) {
+                if (!variables.insert(local.id).second) {
+                    auto invalid = error(core::ErrorCode::DuplicateIdentity, "Variable identities must be unique across global, workflow and Group scopes.");
+                    invalid.location.variable = local.id; return invalid;
+                }
+            }
+            return std::monostate{};
+        };
+        if (auto checked = locals(workflow.local_variables); failed(checked)) { return with_workflow(std::move(checked)); }
         for (const auto& node : workflow.nodes) {
+            if (const auto* group = std::get_if<GroupConfiguration>(&node.configuration)) {
+                if (auto checked = locals(group->local_variables); failed(checked)) { return with_workflow(std::move(checked)); }
+            }
             if (!nodes.insert(node.id).second) {
                 auto result = error(core::ErrorCode::DuplicateIdentity, "Node identities must be unique across the solution.");
                 result.location.node = node.id; return with_workflow(std::move(result));
@@ -436,6 +487,15 @@ Check validate_global_invariants(const Solution& solution)
                 auto result = error(core::ErrorCode::DuplicateIdentity, "Control link identities must be unique across the solution.");
                 result.location.control_link = link.id; return with_workflow(std::move(result));
             }
+        }
+    }
+    if (solution.image_archive) {
+        if (solution.image_archive->images_per_file == 0
+            || solution.image_archive->images_per_file > ImageArchivePolicy::max_images_per_file) {
+            return contextualize(error(core::ErrorCode::InvalidValue, "Image package size must be between 1 and 65536 images."));
+        }
+        if (auto checked = core::validate_resource_path(solution.image_archive->directory); failed(checked)) {
+            return contextualize(std::move(checked));
         }
     }
     for (auto checked : {core::validate_resource_catalog(solution.resources),

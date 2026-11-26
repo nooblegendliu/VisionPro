@@ -162,24 +162,31 @@ Check validate_runtime_value(const core::DataType& type, const core::ValueConstr
 }
 
 Check validate_global_read_snapshot(const Solution& solution, const core::SolutionSessionId& session,
-    std::span<const core::GlobalVariableEntry> globals)
+    std::span<const core::GlobalVariableEntry> globals, std::span<const core::GlobalVariableDefinition> locals, const core::InvocationKey* consumer)
 {
     std::set<core::VariableId> variables;
     for (const auto& entry : globals) {
         const auto definition = std::ranges::find(solution.variables, entry.variable, &core::GlobalVariableDefinition::id);
+        const auto local = std::ranges::find(locals, entry.variable, &core::GlobalVariableDefinition::id);
         const auto reject = [&](ErrorCode code, std::string message) {
             auto diagnostic = error(code, std::move(message));
             diagnostic.location.variable = entry.variable;
             return diagnostic;
         };
-        if (definition == solution.variables.end() || !variables.insert(entry.variable).second) {
+        if ((definition == solution.variables.end() && local == locals.end()) || !variables.insert(entry.variable).second) {
             return reject(ErrorCode::InvalidResolutionContext, "Global read snapshot contains an unknown or duplicate variable.");
         }
         const auto origin_session = std::visit([](const auto& origin) { return origin.session; }, entry.update_origin);
         if (origin_session != session) {
             return reject(ErrorCode::ResultIdentityMismatch, "Global read snapshot belongs to another solution session.");
         }
-        if (auto checked = core::validate_global_variable_entry(*definition, entry); failed(checked)) { return checked; }
+        if (local != locals.end() && entry.revision != 0) {
+            const auto* writer = std::get_if<core::SessionInvocationKey>(&entry.update_origin);
+            if (!consumer || !writer || writer->key.workflow_run != consumer->workflow_run || writer->key.scope != consumer->scope) {
+                return reject(ErrorCode::ScopeViolation, "A local variable must come from the current run and container invocation.");
+            }
+        }
+        if (auto checked = core::validate_global_variable_entry(local != locals.end() ? *local : *definition, entry); failed(checked)) { return checked; }
     }
     return std::monostate{};
 }

@@ -43,6 +43,7 @@ public:
         QString elapsed;
         workflow::ExecutionStatus status{workflow::ExecutionStatus::Pending};
         workflow::Judgement judgement{workflow::Judgement::NotEvaluated};
+        std::optional<std::int64_t> completion;
         bool operator==(const NodeBadge&) const = default;
     };
     NodeBadge node_badge(QtNodes::NodeId id) const;

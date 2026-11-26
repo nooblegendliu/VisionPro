@@ -1,4 +1,5 @@
 #include "solution_codec.hpp"
+#include "solution_image_source.hpp"
 #include <visionpro/infrastructure/solution_file.hpp>
 #include "resource_codec.hpp"
 #include "value_codec.hpp"
@@ -36,6 +37,9 @@ template<> struct EnumNames<workflow::MissingReason> {
 };
 template<> struct EnumNames<workflow::JoinPolicy> {
     static constexpr auto values = std::to_array<std::string_view>({"all_activated"});
+};
+template<> struct EnumNames<workflow::VariableScope> {
+    static constexpr auto values = std::to_array<std::string_view>({"global", "local"});
 };
 template<> struct EnumNames<workflow::AdmissionOverflow> {
     static constexpr auto values = std::to_array<std::string_view>({"busy", "reject"});
@@ -300,17 +304,21 @@ InputDescriptor decode_input(const Reader& reader)
 
 Json encode_output(const OutputDescriptor& output)
 {
-    return {{"id", write_id(output.id)}, {"display_name", output.display_name}, {"type", encode_type(output.type)},
+    Json encoded{{"id", write_id(output.id)}, {"display_name", output.display_name}, {"type", encode_type(output.type)},
         {"semantics", encode_semantics(output.semantics)}, {"required", output.required},
         {"allowed_absence", write_array(output.allowed_absence, write_enum<OutputAbsenceReason>)}};
+    if (!output.display_items.empty()) { encoded["display_items"] = write_array(output.display_items, write_id<SchemaId>); }
+    return encoded;
 }
 
 OutputDescriptor decode_output(const Reader& reader)
 {
-    reader.object({"id", "display_name", "type", "semantics", "required", "allowed_absence"});
+    reader.object({"id", "display_name", "type", "semantics", "required", "allowed_absence", "display_items"});
     return {read_id<OutputId>(reader.field("id")), std::string{reader.field("display_name").text()},
         decode_type(reader.field("type")), decode_semantics(reader.field("semantics")), reader.field("required").boolean(),
-        read_array<OutputAbsenceReason>(reader.field("allowed_absence"), read_enum<OutputAbsenceReason>)};
+        read_array<OutputAbsenceReason>(reader.field("allowed_absence"), read_enum<OutputAbsenceReason>),
+        reader.contains("display_items") ? read_array<SchemaId>(reader.field("display_items"), read_id<SchemaId>)
+                                         : std::vector<SchemaId>{}};
 }
 
 Json encode_control_output(const ControlOutputDescriptor& output)
@@ -392,6 +400,15 @@ LoopConfiguration decode_loop(const Reader& reader)
         read_optional<NodeId>(reader.field("break_source"), read_id<NodeId>)};
 }
 
+Json encode_variable(const GlobalVariableDefinition& variable);
+GlobalVariableDefinition decode_variable(const Reader& reader);
+
+std::vector<GlobalVariableDefinition> read_locals(const Reader& reader)
+{
+    return reader.contains("local_variables") ? read_array<GlobalVariableDefinition>(reader.field("local_variables"), decode_variable)
+                                              : std::vector<GlobalVariableDefinition>{};
+}
+
 Json encode_configuration(const std::variant<ToolConfiguration, GroupConfiguration>& configuration)
 {
     if (const auto* tool = std::get_if<ToolConfiguration>(&configuration)) {
@@ -410,6 +427,7 @@ Json encode_configuration(const std::variant<ToolConfiguration, GroupConfigurati
         {"outputs", write_array(group.outputs, encode_output_mapping)},
         {"control_exports", write_array(group.control_exports, encode_control_mapping)}};
     if (group.loop) { result["loop"] = encode_loop(*group.loop); }
+    if (!group.local_variables.empty()) { result["local_variables"] = write_array(group.local_variables, encode_variable); }
     return result;
 }
 
@@ -433,15 +451,15 @@ std::variant<ToolConfiguration, GroupConfiguration> decode_configuration(const R
     if (kind.text() == "group" || kind.text() == "loop") {
         std::optional<LoopConfiguration> loop;
         if (kind.text() == "loop") {
-            reader.object({"kind", "interface", "entries", "outputs", "control_exports", "loop"});
+            reader.object({"kind", "interface", "entries", "outputs", "control_exports", "loop", "local_variables"});
             loop = decode_loop(reader.field("loop"));
         } else {
-            reader.object({"kind", "interface", "entries", "outputs", "control_exports"});
+            reader.object({"kind", "interface", "entries", "outputs", "control_exports", "local_variables"});
         }
         return GroupConfiguration{decode_interface(reader.field("interface")),
             read_array<NodeId>(reader.field("entries"), read_id<NodeId>),
             read_array<OutputMapping>(reader.field("outputs"), decode_output_mapping),
-            read_array<ControlOutputMapping>(reader.field("control_exports"), decode_control_mapping), std::move(loop)};
+            read_array<ControlOutputMapping>(reader.field("control_exports"), decode_control_mapping), std::move(loop), read_locals(reader)};
     }
     kind.fail(ErrorCode::UnsupportedSolutionContent, "Unknown node configuration kind.");
 }
@@ -457,8 +475,14 @@ NodeResourceBinding decode_node_resource(const Reader& reader)
     return {read_id<SchemaId>(reader.field("slot")), decode_resource_reference(reader.field("resource"))};
 }
 
-Json encode_node(const Node& node)
+Json encode_node(const Node& original)
 {
+    std::optional<Node> migrated;
+    if (const auto kind = legacy_image_source(original)) {
+        migrated = original;
+        migrate_image_source(*migrated, *kind);
+    }
+    const auto& node = migrated ? *migrated : original;
     Json result{{"id", write_id(node.id)}, {"name", node.name}, {"configuration", encode_configuration(node.configuration)},
         {"bindings", write_array(node.bindings, encode_binding)}, {"resources", write_array(node.resources, encode_node_resource)},
         {"enabled", node.enabled}, {"join", write_enum(node.join)}};
@@ -467,12 +491,45 @@ Json encode_node(const Node& node)
         result["execution_policy"] = {{"timeout_ms", policy.timeout_ms}, {"max_retries", policy.max_retries},
             {"error_output", write_optional(policy.error_output, write_id<ControlOutputId>)}};
     }
+    if (!node.result_variables.empty()) {
+        result["result_variables"] = write_array(node.result_variables, [](const ResultVariableBinding& mapping) {
+            return Json{{"output", write_id(mapping.output)}, {"scope", write_enum(mapping.scope)}, {"variable", write_id(mapping.variable)}};
+        });
+    }
+    if (!node.display_styles.empty()) {
+        result["display_styles"] = write_array(node.display_styles, [](const ResultDisplayStyle& value) {
+            return Json{{"item", write_id(value.item)}, {"source", encode_output_reference(value.source)},
+                {"color", value.style.color}, {"ok_color", value.style.ok_color}, {"ng_color", value.style.ng_color},
+                {"opacity", value.style.opacity}, {"thickness", value.style.thickness}};
+        });
+    }
     return result;
 }
 
 Node decode_node(const Reader& reader)
 {
-    reader.object({"id", "name", "configuration", "bindings", "resources", "enabled", "join", "execution_policy"});
+    reader.object({"id", "name", "configuration", "bindings", "resources", "enabled", "join", "execution_policy", "result_variables", "display_styles"});
+    std::vector<ResultDisplayStyle> styles;
+    if (reader.contains("display_styles")) {
+        styles = read_array<ResultDisplayStyle>(reader.field("display_styles"), [](const Reader& row) {
+            row.object({"item", "source", "color", "ok_color", "ng_color", "opacity", "thickness"});
+            const auto opacity = row.field("opacity").u32();
+            const auto thickness = row.field("thickness").u32();
+            if (opacity > 100 || thickness < 1 || thickness > 64) {
+                row.fail(ErrorCode::ConstraintViolation, "Display opacity must be 0..100 and thickness must be 1..64.");
+            }
+            return ResultDisplayStyle{read_id<InputId>(row.field("item")), decode_output_reference(row.field("source")),
+                {std::string(row.field("ok_color").text()), std::string(row.field("ng_color").text()),
+                 static_cast<int>(opacity), static_cast<int>(thickness), std::string(row.field("color").text())}};
+        });
+    }
+    std::vector<ResultVariableBinding> mappings;
+    if (reader.contains("result_variables")) {
+        mappings = read_array<ResultVariableBinding>(reader.field("result_variables"), [](const Reader& item) {
+            item.object({"output","scope","variable"});
+            return ResultVariableBinding{read_id<OutputId>(item.field("output")),read_enum<VariableScope>(item.field("scope")),read_id<VariableId>(item.field("variable"))};
+        });
+    }
     NodeExecutionPolicy policy;
     if (reader.contains("execution_policy")) {
         const auto object = reader.field("execution_policy");
@@ -482,7 +539,7 @@ Node decode_node(const Reader& reader)
     }
     return {read_id<NodeId>(reader.field("id")), std::string{reader.field("name").text()}, decode_configuration(reader.field("configuration")),
         read_array<Binding>(reader.field("bindings"), decode_binding), read_array<NodeResourceBinding>(reader.field("resources"), decode_node_resource),
-        reader.field("enabled").boolean(), read_enum<JoinPolicy>(reader.field("join")), std::move(policy)};
+        reader.field("enabled").boolean(), read_enum<JoinPolicy>(reader.field("join")), std::move(policy), std::move(mappings), std::move(styles)};
 }
 
 Json encode_control_link(const ControlLink& link)
@@ -520,6 +577,7 @@ Json encode_workflow(const Workflow& flow)
         result["admission"] = {{"max_in_flight", flow.admission.max_in_flight}, {"queue_capacity", flow.admission.queue_capacity},
             {"overflow", write_enum(flow.admission.overflow)}};
     }
+    if (!flow.local_variables.empty()) { result["local_variables"] = write_array(flow.local_variables, encode_variable); }
     if (flow.trigger) {
         const auto& trigger = *flow.trigger;
         result["trigger"] = {{"mode", write_enum(trigger.mode)}, {"source", write_id(trigger.source)},
@@ -534,7 +592,7 @@ Json encode_workflow(const Workflow& flow)
 
 Workflow decode_workflow(const Reader& reader)
 {
-    reader.object({"id", "name", "interface", "nodes", "control_links", "containment", "entries", "outputs", "enabled", "control_exports", "admission", "trigger"});
+    reader.object({"id", "name", "interface", "nodes", "control_links", "containment", "entries", "outputs", "enabled", "control_exports", "admission", "trigger", "local_variables"});
     WorkflowAdmission admission;
     if (reader.contains("admission")) {
         const auto policy = reader.field("admission");
@@ -559,7 +617,7 @@ Workflow decode_workflow(const Reader& reader)
         read_array<Node>(reader.field("nodes"), decode_node), read_array<ControlLink>(reader.field("control_links"), decode_control_link),
         read_array<Containment>(reader.field("containment"), decode_containment), read_array<NodeId>(reader.field("entries"), read_id<NodeId>),
         read_array<OutputMapping>(reader.field("outputs"), decode_output_mapping), reader.field("enabled").boolean(),
-        read_array<ControlOutputMapping>(reader.field("control_exports"), decode_control_mapping), admission, trigger};
+        read_array<ControlOutputMapping>(reader.field("control_exports"), decode_control_mapping), admission, trigger, read_locals(reader)};
 }
 
 Json encode_variable(const GlobalVariableDefinition& variable)
@@ -682,12 +740,16 @@ Json encode_solution(const workflow::Solution& solution)
         {"variables", write_array(solution.variables, encode_variable)}, {"queues", write_array(solution.queues, encode_queue)},
         {"coordinates", write_array(solution.coordinates, encode_coordinate)}, {"layouts", write_array(solution.layouts, encode_layout)}};
     if (solution.graph) { result["graph"] = encode_graph(*solution.graph); }
+    if (solution.image_archive) {
+        result["image_archive"] = {{"directory", encode_path(solution.image_archive->directory)},
+            {"images_per_file", solution.image_archive->images_per_file}};
+    }
     return result;
 }
 
 workflow::Solution decode_solution(const Reader& reader)
 {
-    reader.object({"format", "format_version", "id", "name", "revision", "workflows", "resources", "variables", "queues", "coordinates", "layouts", "graph"});
+    reader.object({"format", "format_version", "id", "name", "revision", "workflows", "resources", "variables", "queues", "coordinates", "layouts", "graph", "image_archive"});
     const auto format = reader.field("format");
     if (format.text() != solution_format) {
         format.fail(core::ErrorCode::UnsupportedSolutionFormat, "Unknown solution manifest format.");
@@ -710,6 +772,11 @@ workflow::Solution decode_solution(const Reader& reader)
             graph.fail(core::ErrorCode::UnsupportedSolutionFormat, "A solution graph requires manifest version 2.");
         }
         solution.graph = decode_graph(graph);
+    }
+    if (reader.contains("image_archive")) {
+        const auto archive = reader.field("image_archive");
+        archive.object({"directory", "images_per_file"});
+        solution.image_archive = ImageArchivePolicy{decode_path(archive.field("directory")), archive.field("images_per_file").u32()};
     }
     return solution;
 }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <visionpro/core/geometry.hpp>
+#include <visionpro/core/value.hpp>
 
 #include <QGraphicsView>
 #include <QImage>
@@ -46,7 +47,9 @@ public:
     [[nodiscard]] core::Result<std::monostate> set_overlays(
         const std::optional<core::RegionDefinition>& effective_region,
         const std::optional<core::RasterMask>& member_mask,
-        std::span<const BlobAnnotation> blobs = {});
+        std::span<const BlobAnnotation> blobs = {}, bool append = false,
+        bool bounds = true, bool centers = true);
+    [[nodiscard]] core::Result<std::monostate> append_geometry(const core::DataValue& value);
     void clear_image(bool retain_view = false);
     void fit_image();
     void zoom_by(double factor);
@@ -97,6 +100,7 @@ private:
     QImage labels_;
     QGraphicsPixmapItem* image_item_;
     QGraphicsPixmapItem* mask_item_;
+    std::vector<QGraphicsPixmapItem*> extra_masks_;
     QGraphicsPathItem* inclusion_item_;
     QGraphicsPathItem* exclusions_item_;
     QGraphicsPathItem* blob_bounds_item_;

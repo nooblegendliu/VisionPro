@@ -7,11 +7,19 @@
 
 namespace visionpro::infrastructure {
 
+struct CameraCaptureControls {
+    std::optional<double> exposure_us{};
+    std::optional<double> gain{};
+    bool operator==(const CameraCaptureControls&) const = default;
+};
+
 struct CameraCaptureRequest {
     core::ResourceId source;
     core::CoordinateSystemId coordinates;
     core::CameraMode mode;
     std::chrono::milliseconds timeout;
+    CameraCaptureControls controls{};
+    unsigned strobe_channels{};
 };
 
 struct CameraFrame {
@@ -22,6 +30,11 @@ struct CameraFrame {
     std::optional<double> device_duration{};
     core::TimingUnit device_duration_unit{core::TimingUnit::Unknown};
     std::optional<std::uint64_t> device_frame_number{};
+    std::optional<std::uint64_t> lost_packets{};
+    std::optional<std::uint64_t> lost_frames{};
+    std::optional<std::uint64_t> acquire_failures{};
+    // Only a backend with a verified strobe mapping supplies these in light-channel order.
+    std::vector<core::ImageFrame> strobe_images{};
 };
 
 class CameraDevice {
@@ -57,8 +70,16 @@ private:
 
 // Returns the same SIM-001 endpoint used by the device resource provider.
 [[nodiscard]] std::shared_ptr<SimulatedCamera> simulated_camera();
-[[nodiscard]] core::Result<core::ConfigValue> camera_device_config(std::string_view serial);
+struct CameraAcquisitionSettings {
+    core::CameraMode mode{core::CameraMode::Single};
+    std::chrono::milliseconds timeout{1000};
+    bool operator==(const CameraAcquisitionSettings&) const = default;
+};
+[[nodiscard]] core::Result<core::ConfigValue> camera_device_config(std::string_view serial, unsigned strobe_channels = 0,
+    std::optional<CameraAcquisitionSettings> acquisition = {});
 [[nodiscard]] core::Result<std::string> camera_serial(const core::ResourceDefinition& device);
+[[nodiscard]] core::Result<unsigned> camera_strobe_channels(const core::ResourceDefinition& device);
+[[nodiscard]] core::Result<std::optional<CameraAcquisitionSettings>> camera_acquisition_settings(const core::ResourceDefinition& device);
 
 class CameraLease final : public core::ResourceLease {
 public:
@@ -66,11 +87,13 @@ public:
     CameraLease(const CameraLease&) = delete;
     CameraLease& operator=(const CameraLease&) = delete;
     [[nodiscard]] const std::string& serial() const noexcept;
+    [[nodiscard]] const std::optional<CameraAcquisitionSettings>& acquisition_settings() const noexcept;
     // Idempotent, including a previously reported failure. The physical endpoint
     // stays reserved while this lease is owned; its backend can no longer capture.
     [[nodiscard]] core::Result<std::monostate> finish() const;
     [[nodiscard]] core::Result<CameraFrame> capture(const core::CoordinateSystemId& coordinates,
-        core::CameraMode mode, std::chrono::milliseconds timeout, std::stop_token stop = {}) const;
+        core::CameraMode mode, std::chrono::milliseconds timeout, std::stop_token stop = {},
+        CameraCaptureControls controls = {}) const;
 private:
     friend core::Result<std::shared_ptr<CameraLease>> open_camera(const core::ResourceDefinition&);
     struct Connection;

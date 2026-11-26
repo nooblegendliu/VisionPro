@@ -19,6 +19,16 @@ enum class BindingCardinality { SingleSource, MultipleSources, CollectionSource 
 enum class BindingTime { SnapshotBuild, BeforeInvocation };
 enum class ConversionKind { Exact, WrapOptional, Int64ToFloat64Explicit };
 
+struct DisplayItemStyle {
+    std::string ok_color;
+    std::string ng_color;
+    int opacity{100};
+    int thickness{1};
+    std::string color{};
+    [[nodiscard]] bool valid() const noexcept;
+    bool operator==(const DisplayItemStyle&) const = default;
+};
+
 struct BindingPolicy {
     std::vector<BindingSourceKind> allowed_sources{BindingSourceKind::Constant};
     BindingCardinality cardinality{BindingCardinality::SingleSource};
@@ -72,6 +82,8 @@ struct OutputDescriptor {
     bool required{true};
     // A successful non-required output still reports its declared omission explicitly.
     std::vector<OutputAbsenceReason> allowed_absence{};
+    // Stable display item identifiers supported by this output's producer.
+    std::vector<SchemaId> display_items{};
 };
 
 struct ControlOutputDescriptor { ControlOutputId id; std::string display_name; };
@@ -90,7 +102,7 @@ enum class ToolEffects { None, State, External };
 enum class ToolCancellation { Unsupported, Cooperative };
 // Idempotent is for pure computation. ProtocolDeduplicated requires an external
 // endpoint that deduplicates by logical operation across delivery attempts.
-enum class ToolRetry { Never, Idempotent, ProtocolDeduplicated };
+enum class ToolRetry { Never, Idempotent, ProtocolDeduplicated, StagedState };
 struct ToolExecutionPolicy {
     ToolExecutionMode mode{ToolExecutionMode::Synchronous};
     ToolInstanceLifetime lifetime{ToolInstanceLifetime::Invocation};
@@ -129,6 +141,13 @@ struct SharedTargetRequirement {
     bool operator==(const SharedTargetRequirement&) const = default;
 };
 
+struct FixedToolParameter { ParameterId id; ConfigValue value; };
+struct ToolResourceBinding { SchemaId slot; ResourceReference resource; };
+struct ToolMessageFilter {
+    ParameterId input;
+    ParameterId expected;
+    bool operator==(const ToolMessageFilter&) const = default;
+};
 struct ToolDescriptor {
     ToolTypeId id;
     std::string display_name;
@@ -146,6 +165,15 @@ struct ToolDescriptor {
     StateParameterProjection state_parameters;
     std::optional<SharedTargetRequirement> shared_target{};
     bool requires_correlation_join{false};
+    // Selects the node's active ports and execution policy from its fixed configuration.
+    void (*specialize)(ToolDescriptor&, std::span<const FixedToolParameter>, std::span<const ToolResourceBinding>){};
+    bool may_end_continuous{};
+    std::optional<ToolMessageFilter> message_filter{};
+    // Runs reaching this shared state must advance it in admission order.
+    bool state_in_admission_order{};
+    // An optional integer output exposes module completion to bindings on an error route.
+    std::optional<OutputId> module_status_output{};
+    bool uses_display_item_styles{};
 };
 
 struct SchemaSupport {
